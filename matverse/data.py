@@ -266,6 +266,9 @@ def from_iterable(source, chunk_size: int = 5000, max_n: int | None = None,
         md.X = md.X.tocsr() if hasattr(md.X, "tocsr") else md.X
         _restore_uns(md, blocks[0])
 
+    # Each block recorded its own construction. The caller made one call, so
+    # the history should show one, whether it took one block or fifty.
+    md.uns["provenance"] = []
     record(md, "data.from_iterable", chunk_size=chunk_size, n=int(md.n_obs),
            n_blocks=len(blocks))
     return md
@@ -277,10 +280,15 @@ def _block(structures_: list, meta: list) -> AnnData:
 
 
 def _restore_uns(md: AnnData, template: AnnData) -> None:
-    """Concat keeps only the first block's uns; the conventions must survive."""
+    """Concat keeps only the first block's uns; the conventions must survive.
+
+    Provenance is cleared rather than seeded: each block recorded its own
+    construction, and the caller wants one entry for the stream, which
+    :func:`from_iterable` appends after this returns.
+    """
     md.uns.setdefault("features", {})
     md.uns.setdefault("levels", {})
-    md.uns["provenance"] = ["data.from_iterable"]
+    md.uns["provenance"] = []
     md.uns["X_is"] = template.uns.get("X_is", "composition_atoms_reduced")
 
 
