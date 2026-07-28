@@ -1,8 +1,12 @@
 # Tutorials
 
-Each tutorial is a working pipeline rather than a feature tour. The first three
-run on a small library and a calculator that ships with matverse, so you can
-execute them before deciding whether to install a machine-learned potential.
+Each tutorial is a working pipeline rather than a feature tour, and the first
+five are **executed notebooks** — every number and figure on those pages is the
+real output of the code above it, produced when the documentation was built.
+They run on a small library and a calculator that ships with matverse, so you
+can execute them before deciding whether to install a machine-learned potential.
+
+Download any of them with the {octicon}`download;1em;` button and run it.
 
 ::::{grid} 1 2 2 2
 :gutter: 2
@@ -58,16 +62,19 @@ the survivors to VASP or Quantum ESPRESSO.
 
 ## Suggested order
 
-**Getting started** is the notebook, and the only page that runs on real
-published structures rather than cells built in code. Start there.
+**Getting started** is the shortest complete pass through the library. Start
+there.
 
-The next three build on each other and are worth reading in sequence — the
-screening tutorial produces the object the other two pick up.
+**Screening**, **Chemical space** and **Beyond one number** build on each other
+and are worth reading in sequence — screening produces the object the other two
+pick up, and each rebuilds it in one cell so you can also read them alone.
 
-The last two are independent of each other and of the first three. Read **Models
-and campaigns** when a screen has more candidates than you can afford to compute,
-and **Scale and first principles** when it has more candidates than fit in
-memory, or when the shortlist needs real DFT.
+The last two are independent. Read **Models and campaigns** when a screen has
+more candidates than you can afford to compute, and **Scale and first
+principles** when it has more candidates than fit in memory, or when the
+shortlist needs real DFT. That last page stays prose rather than a notebook: it
+is about corpora larger than memory and jobs handed to VASP, and a notebook of
+it would be a page of code nobody could execute.
 
 ```{toctree}
 :hidden: true

@@ -61,7 +61,7 @@ What changed, and which claims were deleted because they failed their probe.
 :::
 
 :::{grid-item-card} GitHub {octicon}`mark-github;1em;`
-:link: https://github.com/matverse/matverse
+:link: https://github.com/omicverse/matverse
 
 Find a bug? Interested in contributing? Check out the repository.
 :::
@@ -121,5 +121,5 @@ api/index
 Design
 Release_notes
 Developer_guide
-GitHub <https://github.com/matverse/matverse>
+GitHub <https://github.com/omicverse/matverse>
 ```

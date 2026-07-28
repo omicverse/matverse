@@ -1,0 +1,276 @@
+"""Cells for tutorials/screening.ipynb.
+
+See _nbbuild.py for how these are turned into an executed notebook.
+"""
+
+from __future__ import annotations
+
+CELLS: list[tuple[str, str]] = [
+    ("markdown", """\
+# Screening, end to end
+
+The pipeline matverse exists for: take a list of candidate structures, remove
+the ones that are broken, relax what remains, work out which are
+thermodynamically plausible, and shortlist — keeping the reasoning attached to
+the object rather than in your head.
+
+Everything here runs on `emt`, ASE's effective-medium theory, which ships with
+ASE and needs no download. The library is the Al–Ni–Cu system: three elemental
+metals from published lattice parameters, plus hypothetical ordered
+intermetallics built on the L1₂ prototype — the [Cu₃Au
+structure](https://doi.org/10.1103/PhysRev.49.122) that most fcc-based ordered
+alloys adopt.
+
+The elementals are real; the intermetallics are candidates. That is what a
+screen looks like."""),
+
+    ("code", """\
+import matverse as mv
+import numpy as np
+
+mv.pl.set_style()"""),
+
+    ("markdown", """\
+## Build a dataset
+
+`mv.datasets.metals` gives the elemental fcc metals at their measured
+room-temperature lattice parameters."""),
+
+    ("code", """\
+elemental = mv.datasets.metals(["Al", "Cu", "Ni"])
+elemental.obs[["name", "lattice_parameter"]]"""),
+
+    ("markdown", """\
+The candidates are L1₂ orderings of the same three elements, plus a B2 AlNi.
+Both prototypes are built by hand, because that is what a candidate is — a
+structure nobody has computed yet."""),
+
+    ("code", """\
+from pymatgen.core import Lattice, Structure
+
+
+def l12(host, guest, a):
+    \"\"\"Cu3Au prototype: guest on the corner, host on the faces.\"\"\"
+    return Structure(Lattice.cubic(a),
+                     [guest, host, host, host],
+                     [[0, 0, 0], [0, .5, .5], [.5, 0, .5], [.5, .5, 0]])
+
+
+def b2(a_symbol, b_symbol, a):
+    \"\"\"CsCl prototype.\"\"\"
+    return Structure(Lattice.cubic(a), [a_symbol, b_symbol],
+                     [[0, 0, 0], [.5, .5, .5]])
+
+
+candidates = [
+    l12("Al", "Cu", 3.90),      # Al3Cu
+    l12("Cu", "Al", 3.70),      # AlCu3
+    l12("Al", "Ni", 3.78),      # Al3Ni
+    b2("Al", "Ni", 2.89),       # AlNi
+]"""),
+
+    ("markdown", """\
+Put the published elementals and the candidates into one object. Building it in
+a single call keeps the row names sequential, which matters more than it sounds
+— every later table is indexed by them."""),
+
+    ("code", """\
+md = mv.data.from_structures(mv.structures(elemental) + candidates)
+md"""),
+
+    ("markdown", """\
+Seven materials, three elements. `X` is already the composition matrix and `var`
+is already the periodic table restricted to Al, Ni and Cu — you did not ask for
+either, because composition is intrinsic to a material rather than derived from
+it.
+
+In practice you would load from disk or from a database instead:
+
+```python
+md = mv.data.from_cif('candidates/')
+md = mv.data.from_mp({'elements': ['Al', 'Ni'], 'num_elements': (2, 2)})
+```
+
+## Standardise and describe"""),
+
+    ("code", """\
+mv.pp.standardize(md)      # primitive + conventional + spacegroup
+mv.pp.describe(md)         # formula, nsites, volume, density, n_elements
+
+md.obs[["formula", "spacegroup", "n_elements"]]"""),
+
+    ("markdown", """\
+`standardize` deposits two new structure variants rather than replacing the
+input. Every later call names which one it wants."""),
+
+    ("code", """\
+mv.variants(md)"""),
+
+    ("markdown", """\
+## Throw out what is broken
+
+`qc` is the analogue of `scanpy.pp.calculate_qc_metrics`, and it exists for the
+same reason: a generated or database structure with atoms 0.1 Å apart is a
+broken cell, not an exotic one. Relaxing it wastes the calculator's time and
+pollutes the hull."""),
+
+    ("code", """\
+mv.pp.qc(md)
+md.obs[["formula", "min_distance", "is_ordered", "is_valid", "qc_reason"]]"""),
+
+    ("code", """\
+md = mv.pp.filter_materials(md)
+mv.provenance(md)[-1]"""),
+
+    ("markdown", """\
+This is one of the few calls that returns instead of depositing, because AnnData
+cannot drop rows in place — and it records how many it dropped.
+
+Duplicates are worth removing before you spend compute on them twice:"""),
+
+    ("code", """\
+mv.pp.dedup(md)
+md.uns["dedup"]"""),
+
+    ("markdown", """\
+`dedup` blocks on `(reduced formula, space group)` before running pymatgen's
+`StructureMatcher` inside each block. An all-pairs comparison is quadratic and
+unusable past a few thousand candidates; blocking makes the expensive part
+local.
+
+## Relax"""),
+
+    ("code", """\
+mv.calc.relax(md, level="emt", fmax=0.05)
+
+md.obs[["formula", "energy_emt", "energy_per_atom_emt",
+        "relax_converged_emt"]].round(4)"""),
+
+    ("markdown", """\
+The relaxed geometry becomes its own variant, `relaxed_emt`, rather than
+overwriting the input — so "which structure was this energy computed on" stays
+answerable from the object alone.
+
+The level records what produced it:"""),
+
+    ("code", """\
+mv.level_info(md, "emt")"""),
+
+    ("markdown", """\
+`surrogate: True` and `license: 'LGPL-2.1'` are not decoration. The first is
+what `mv.thermo.hull` checks before it agrees to mix two levels; the second is
+what `mv.calc.check_licenses` reads when you need to know whether a result can
+go in a commercial report.
+
+## Build a hull"""),
+
+    ("code", """\
+mv.thermo.hull(md, level="emt", source="relaxed_emt")
+
+md.obs[["formula", "e_above_hull_emt", "is_stable_emt",
+        "decomposes_to_emt"]].round(4)"""),
+
+    ("markdown", """\
+```{warning}
+That call emitted a warning, and you should read it. With no `references=`, the
+hull is built over **this dataset's own compositions**, which makes
+`e_above_hull` a statement about which of your candidates is lowest — not about
+whether any of them is stable. Screening 40 generated oxides against each other
+will happily report several as "on the hull" when all 40 decompose.
+```
+
+Two things about this particular table are worth saying plainly rather than
+leaving for a reader to trip over.
+
+EMT's energy zero is the pure element at its equilibrium lattice constant, so
+the elemental energies come out at essentially zero and every intermetallic is
+positive by construction. **This hull cannot find a stable alloy.** It is
+demonstrating the pipeline, not the Al–Ni–Cu phase diagram.
+
+And Al₃Ni is a real, stable phase — it just is not the L1₂ polymorph built
+above; the observed one is orthorhombic. A number attached to a prototype says
+nothing about a compound that adopts a different structure. Both of those are
+ordinary screening mistakes, and both are visible here because the level of
+theory and the structure variant are recorded rather than assumed."""),
+
+    ("code", """\
+md.uns["phase_diagram"]["closed_system"]"""),
+
+    ("markdown", """\
+The object records which kind of number you have, so a later reader does not
+have to guess.
+
+To make it absolute, pass the known competing phases:
+
+```python
+refs = mv.thermo.references_from_mp(['Al', 'Ni', 'Cu'])   # needs mp-api
+mv.thermo.hull(md, level='pbe', references=refs)
+```
+
+Note the level changed. Materials Project entries are PBE+U with fitted
+corrections; putting them on a hull with EMT energies is not a hull of anything,
+and `mv.thermo.hull` raises `LevelMismatch` rather than letting you.
+
+## Shortlist"""),
+
+    ("markdown", """\
+Ask for something light and not too far above the hull — two criteria that pull
+in different directions, which is what makes it a screen rather than a sort."""),
+
+    ("code", """\
+mv.screen.filter(md, e_above_hull_emt__lt=0.12, density__lt=8.0)
+
+md.uns["screens"]["passes"]"""),
+
+    ("code", """\
+md.obs[["formula", "e_above_hull_emt", "density", "passes"]].round(4)"""),
+
+    ("markdown", """\
+The screen deposits a boolean column and the criteria that produced it. It does
+**not** return a shorter list, because which criterion a candidate failed is a
+result. Subset when you actually want the short list:
+
+```python
+shortlist = md[md.obs['passes']]
+```
+
+When more than one objective matters and no single column decides:"""),
+
+    ("code", """\
+mv.screen.pareto(md, {"e_above_hull_emt": "min", "density": "min"})
+md.obs[["formula", "e_above_hull_emt", "density", "pareto",
+        "pareto_rank"]].round(4)"""),
+
+    ("markdown", """\
+`pareto_rank` keeps the second-best trade-offs reachable instead of discarding
+everything that is not optimal."""),
+
+    ("code", """\
+ax = mv.pl.pareto(md, "e_above_hull_emt", "density")
+ax.set_title("stability against density")"""),
+
+    ("markdown", """\
+## What the object remembers"""),
+
+    ("code", """\
+for step in mv.provenance(md):
+    print(step)"""),
+
+    ("markdown", """\
+Parameters are recorded with each call, so the history replays as code rather
+than reading as a list of verbs.
+
+## Save it
+
+```python
+md.write_h5ad('screen.h5ad')
+```
+
+Structures, descriptors, level records and provenance all survive, and the file
+is an ordinary `h5ad` that anndata can read without matverse installed.
+
+```{seealso}
+[Chemical space](chemical_space.ipynb) picks up from this object and asks what
+distinguishes the candidates that passed.
+```"""),
+]

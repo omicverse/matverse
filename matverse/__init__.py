@@ -63,11 +63,11 @@ from . import (calc, data, datasets, dft, elements, exp, feat,  # noqa: F401
                gen, mag, md, model, multi, neb, opt, pl, pp, prop,
                screen, struct, surf, thermo, tl, utils)
 from ._core import (check_commercial_use, compare_levels, grid_of,  # noqa: F401
-                    level_info, levels_used, new, provenance, structures,
-                    variants)
+                    level_info, levels_used, new, provenance, set_level,
+                    structures, variants)
 from ._registry import get_registry
 
-__version__ = "0.1.11"
+__version__ = "0.1.12"
 
 #: The process-global function registry.
 registry = get_registry()
@@ -94,6 +94,7 @@ __all__ = [
     "md", "neb", "surf", "mag", "datasets",
     "elements", "struct",
     "new", "structures", "variants", "provenance", "compare_levels",
-    "levels_used", "level_info", "check_commercial_use", "grid_of",
+    "levels_used", "level_info", "set_level", "check_commercial_use",
+    "grid_of",
     "registry", "describe", "find", "__version__",
 ]

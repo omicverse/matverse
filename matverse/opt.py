@@ -142,9 +142,21 @@ def _predictions(md: AnnData, campaign: dict, predicted: str | None,
         raise ValueError(
             f"no prediction to act on. Pass predicted= naming an obs column, or "
             f"fit one with mv.model.fit(md, target={objective!r}).")
+    # A column named explicitly and not present is a typo, and a bare KeyError
+    # from the lookup below says only the name back. Say what it was for.
+    if mu_key not in md.obs:
+        raise ValueError(
+            f"predicted={mu_key!r} is not an obs column. Available "
+            f"predictions: {sorted(k for k in md.obs if k.endswith('_pred'))}")
     mu = md.obs[mu_key].to_numpy(dtype=float)
 
     sigma_key = uncertainty or _first_present(md, [f"{mu_key}_std"])
+    if sigma_key is not None and sigma_key not in md.obs:
+        raise ValueError(
+            f"uncertainty={sigma_key!r} is not an obs column. Available: "
+            f"{sorted(k for k in md.obs if k.endswith('_std'))}. An "
+            f"acquisition that needs sigma refuses rather than treating it "
+            f"as zero, because that would be a greedy run under another name.")
     if sigma_key is None:
         if method in ("uncertainty", "ucb", "ei"):
             raise ValueError(

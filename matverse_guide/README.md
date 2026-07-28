@@ -34,8 +34,8 @@ docs/
 │   └── user.md              GENERATED — do not edit
 ├── tutorials/
 │   ├── index.md
-│   ├── screening.md
-│   └── chemical_space.md
+│   ├── screening.ipynb
+│   └── chemical_space.ipynb
 ├── _scripts/generate_api.py
 ├── _templates/autosummary/
 └── _static/css/custom.css

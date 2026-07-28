@@ -1,26 +1,9 @@
-"""Build and execute the getting-started notebook.
+"""Cells for tutorials/getting_started.ipynb.
 
-The notebook is generated from this script rather than edited by hand, and then
-**executed**, so the outputs in the documentation are real. myst-nb is configured
-with ``nb_execution_mode = "off"`` — it renders stored outputs rather than
-running anything at build time — which means a notebook committed without
-outputs renders as a page of code and no results.
-
-Regenerate after changing the library:
-
-    python _scripts/build_notebook.py
+See _nbbuild.py for how these are turned into an executed notebook.
 """
 
 from __future__ import annotations
-
-import sys
-from pathlib import Path
-
-import nbformat as nbf
-
-HERE = Path(__file__).resolve().parent
-DOCS = HERE.parent
-REPO = DOCS.parent.parent
 
 CELLS: list[tuple[str, str]] = [
     ("markdown", """\
@@ -309,55 +292,10 @@ Structures, descriptors, level records and provenance all survive, and the file
 is an ordinary `h5ad` that anndata reads without matverse installed.
 
 ```{seealso}
-[Screening, end to end](screening.md) covers the same pipeline in more detail;
-[Chemical space](chemical_space.md) picks up where `rank_elements_groups` left
-off; [Beyond one number](beyond_one_number.md) covers curves, per-atom results
+[Screening, end to end](screening.ipynb) covers the same pipeline in more detail;
+[Chemical space](chemical_space.ipynb) picks up where `rank_elements_groups` left
+off; [Beyond one number](beyond_one_number.ipynb) covers curves, per-atom results
 and measured data.
 ```"""),
 ]
 
-
-def build() -> nbf.NotebookNode:
-    nb = nbf.v4.new_notebook()
-    nb.cells = [nbf.v4.new_markdown_cell(body) if kind == "markdown"
-                else nbf.v4.new_code_cell(body) for kind, body in CELLS]
-    nb.metadata.update({
-        "kernelspec": {"display_name": "Python 3", "language": "python",
-                       "name": "python3"},
-        "language_info": {"name": "python"},
-        "mystnb": {"execution_mode": "off"},
-    })
-    return nb
-
-
-def main() -> int:
-    import matplotlib
-    matplotlib.use("Agg")
-
-    target = DOCS / "tutorials" / "getting_started.ipynb"
-    nb = build()
-
-    from nbclient import NotebookClient
-
-    client = NotebookClient(nb, timeout=900, kernel_name="python3",
-                            resources={"metadata": {"path": str(REPO)}})
-    client.execute()
-
-    nbf.write(nb, str(target))
-    failed = [i for i, c in enumerate(nb.cells)
-              if any(o.get("output_type") == "error"
-                     for o in c.get("outputs", []))]
-    print(f"[matverse docs] wrote {target.relative_to(DOCS)} "
-          f"({len(nb.cells)} cells)")
-    if failed:
-        print(f"[matverse docs] ERROR: cells {failed} raised")
-        for i in failed:
-            for o in nb.cells[i].get("outputs", []):
-                if o.get("output_type") == "error":
-                    print(f"  cell {i}: {o.get('ename')}: {o.get('evalue')}")
-        return 1
-    return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())

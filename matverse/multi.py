@@ -87,18 +87,22 @@ def sites(md: AnnData, source: str = "input") -> AnnData:
                     np.arange(n + 1, dtype=np.int32)),
                    shape=(n, len(elements)))
 
+    # Name the rows before handing the frame to AnnData rather than after, so
+    # the construction does not warn about coercing an integer index. See the
+    # same note in _core.new.
+    names = pd.Index([f"{m}:{j}" for m, j in zip(material, site_index)],
+                     dtype=object)
     obs = pd.DataFrame({
         "material": pd.Categorical(material),
         "material_index": material_index,
         "site_index": site_index,
         "element": pd.Categorical(symbols),
-    })
+    }, index=names)
     for key, values in properties.items():
         if len(values) == n:
             obs[f"site_{key}"] = values
 
     out = AnnData(X=X, obs=obs, var=element_frame(elements))
-    out.obs_names = [f"{m}:{j}" for m, j in zip(material, site_index)]
     out.obsm["X_frac"] = np.vstack(frac) if n else np.zeros((0, 3))
     out.obsm["X_cart"] = np.vstack(cart) if n else np.zeros((0, 3))
     out.uns[AXIS_KEY] = "sites"
