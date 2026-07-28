@@ -126,7 +126,7 @@ not the same as clearing, so check the terms before you rely on a result.
 ## Development install
 
 ```bash
-git clone https://github.com/matverse/matverse
+git clone https://github.com/omicverse/matverse
 cd matverse
 pip install -e ".[dev,analysis]"
 pytest -q

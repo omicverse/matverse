@@ -133,7 +133,13 @@ def new(structures: list, obs: pd.DataFrame | None = None,
     datasets whose rows are not single compositions.
     """
     n = len(structures)
-    obs = pd.DataFrame(index=range(n)) if obs is None else obs.reset_index(drop=True)
+    # Name the rows before handing the frame to AnnData rather than after.
+    # AnnData coerces an integer index to strings and warns while doing it, and
+    # that warning then lands in the output of every notebook cell that builds
+    # a dataset — a library's own construction path should not be noisy.
+    names = pd.Index([str(i) for i in range(n)], dtype=object)
+    obs = (pd.DataFrame(index=names) if obs is None
+           else obs.reset_index(drop=True).set_axis(names))
 
     if build_X and n:
         X, elements = composition_matrix(structures)
@@ -142,7 +148,6 @@ def new(structures: list, obs: pd.DataFrame | None = None,
     else:
         md = AnnData(X=np.zeros((n, 0), dtype=np.float32), obs=obs)
 
-    md.obs_names = [str(i) for i in range(n)]
     md.uns["features"] = {}
     md.uns["levels"] = {}
     md.uns["provenance"] = []

@@ -34,7 +34,7 @@ author = "matverse contributors"
 copyright = f"{datetime.now():%Y}, matverse contributors"
 release = "0.1.10"
 version = release
-repository_url = "https://github.com/matverse/matverse"
+repository_url = "https://github.com/omicverse/matverse"
 default_github_ref = "main"
 
 
@@ -56,7 +56,7 @@ except Exception:
 
 html_context = {
     "display_github": True,
-    "github_user": "matverse",
+    "github_user": "omicverse",
     "github_repo": project,
     "github_version": _fallback_github_ref(),
     "conf_py_path": "/matverse_guide/docs/",

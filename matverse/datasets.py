@@ -87,16 +87,39 @@ FCC_METALS = {
 
 
 def _pymatgen_structures_dir() -> Path:
-    """Where pymatgen keeps the structures it ships."""
-    import pymatgen.util.testing as testing
+    """Where pymatgen keeps the structures it ships.
 
-    directory = getattr(testing, "STRUCTURES_DIR", None)
-    if directory is None or not Path(directory).is_dir():
-        raise FileNotFoundError(
-            "cannot find pymatgen's bundled structures; matverse reads them "
-            "from there rather than shipping its own copy. Use "
-            "mv.datasets.metals() or mv.datasets.fetch() instead.")
-    return Path(directory)
+    Located from the package directory rather than by reading
+    ``pymatgen.util.testing.STRUCTURES_DIR``. That module imports pytest at
+    module scope, so asking it for a path made ``mv.datasets.load`` fail with
+    ``No module named 'pytest'`` on any installation that does not happen to
+    have the test tooling — which is most of them. The constant is only a
+    ``Path`` join; there is nothing to gain by importing a test helper to get
+    it.
+    """
+    import pymatgen
+
+    roots = [Path(p) for p in getattr(pymatgen, "__path__", [])]
+    for root in roots:
+        for candidate in (root / "util" / "structures",
+                          root / "util" / "testing" / "structures"):
+            if candidate.is_dir():
+                return candidate
+
+    # Fall back on the constant for a layout we do not know about, accepting
+    # the pytest dependency rather than failing outright.
+    try:
+        import pymatgen.util.testing as testing
+        directory = getattr(testing, "STRUCTURES_DIR", None)
+        if directory is not None and Path(directory).is_dir():
+            return Path(directory)
+    except ImportError:
+        pass
+
+    raise FileNotFoundError(
+        "cannot find pymatgen's bundled structures; matverse reads them "
+        "from there rather than shipping its own copy. Use "
+        "mv.datasets.metals() or mv.datasets.fetch() instead.")
 
 
 @register_function(

@@ -15,10 +15,12 @@ sphinxext-opengraph
 sphinx-hoverxref<1.5
 linkify-it-py
 
-# Notebook execution support (nb_execution_mode is "off", but myst-nb still
-# imports these to parse notebook cells).
+# Notebook support. nb_execution_mode is "off" — myst-nb renders the stored
+# outputs — so these are what _scripts/build_notebooks.py needs to produce
+# those outputs in the first place, and what myst-nb needs to parse the cells.
 ipykernel
 nbformat
+nbclient
 
 # matverse's own core, so autodoc can import the package and the API generator
 # can read the registry. Optional backends are mocked in conf.py.

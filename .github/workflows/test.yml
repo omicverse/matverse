@@ -69,6 +69,16 @@ jobs:
           pip install -e .
           pip install -r matverse_guide/requirements.txt
 
+      - name: Execute the tutorial notebooks
+        # myst-nb runs with nb_execution_mode = "off" and renders stored
+        # outputs, so nothing here would catch a tutorial whose code stopped
+        # working. Running them is what makes the tutorials tested rather than
+        # merely written; the script exits non-zero if any cell raised.
+        working-directory: matverse_guide/docs
+        run: |
+          pip install matplotlib scikit-learn
+          python _scripts/build_notebooks.py
+
       - name: Build the guide
         # api/user.md is regenerated from the registry by conf.py, so this also
         # checks that a newly decorated function reaches the documentation.

@@ -1,5 +1,88 @@
 # Release notes
 
+## v0.1.12
+
+### The tutorials are executed notebooks
+
+Four more tutorials — screening, chemical space, beyond one number, models and
+campaigns — were prose with unexecuted code fences. They are now notebooks that
+run when the documentation is built, which means the code in them is **tested**
+rather than merely written. A tutorial whose examples only ever lived in a
+markdown fence rots silently; this one fails the build.
+
+`_scripts/build_notebooks.py` builds all five and exits non-zero if any cell
+raised. Between them the tutorials now carry **27 figures**, up from 11 — a
+number in a table and the same number in a plot are not interchangeable, and
+several of the corrections below were only obvious once the result was drawn. `scale_and_dft` stays prose deliberately: it is about corpora larger
+than memory and jobs handed to VASP, and a notebook of it would be a page of
+code nobody could execute.
+
+Executing them found five things the prose had asserted and the code did not do.
+
+**Forces on a perfect cubic cell are zero.** The per-atom section computed
+forces on unrelaxed fcc, L1₂ and B2 cells and presented the result as ragged
+per-atom data. Every value was exactly zero — by symmetry, not by accident. The
+notebook now rattles the structures first, which is both what makes the example
+work and what force-training sets for machine-learned potentials actually are.
+
+**`harmonize` had nothing to fit on.** The database-reconciliation example split
+one library into two halves by alternating rows, so the two "databases" shared
+no composition and the fit was silently skipped. It now duplicates every
+material into both databases, and the fitted offsets recover the ones put in to
+within 4e-17.
+
+**`compare_grids` reports a count, not a fraction.** The text called the
+`overlap` column a fraction of the grid. It is the number of grid points both
+curves cover.
+
+**The leakage diagnostic did not say what the tutorial claimed.** The prose
+asserted that holding out a structure type roughly doubles the error against a
+random split. On a 28-material library it does the opposite, and the reason is
+in the table: the `prototype` spread is exactly zero across three seeds, because
+the library has two structure types and only one way to partition it. The
+notebook now reads the table honestly — "too small and too homogeneous to run
+this diagnostic" — rather than quoting numbers from a library that no longer
+exists.
+
+**EMT cannot find a stable alloy.** Its energy zero is the pure element at
+equilibrium, so every intermetallic is above the hull by construction. The
+screening notebook now says so, along with the reminder that L1₂ Al₃Ni being
+unstable says nothing about Al₃Ni, which is a real phase in a different
+structure.
+
+### `mv.set_level`
+
+Now exported. Every operation that computes at a level records one, but a user
+who computes a column themselves had no supported way to type it — which made
+the level system a thing the library did to you rather than a thing you could
+use. `mv.compare_levels` works on the result like any other level.
+
+### `mv.datasets.load` no longer needs pytest
+
+It located pymatgen's bundled structures by reading
+`pymatgen.util.testing.STRUCTURES_DIR`. That module imports pytest at module
+scope, so `mv.datasets.load('battery_cathodes')` — the first call in the
+getting-started tutorial — raised `ModuleNotFoundError: No module named
+'pytest'` on any installation without the test tooling, which is most of them.
+Every local environment here happened to have pytest, so nothing caught it.
+
+The new docs CI job did, on its first run, which is the argument for the job.
+The path is now found from the pymatgen package directory; the constant was
+only a `Path` join, and there was never anything to gain by importing a test
+helper to get it. There is a test that blocks the pytest import and pins this.
+
+### Fixes surfaced by executing the tutorials
+
+- `mv.data.from_structures` and `mv.multi.sites` named their rows *after*
+  handing the frame to AnnData, so every dataset construction emitted an
+  `ImplicitModificationWarning` about coercing an integer index — and that
+  warning landed in the output of the first cell of every notebook.
+- `mv.opt.suggest` raised a bare `KeyError` naming the column when
+  `predicted=` or `uncertainty=` named one that did not exist. It now says what
+  the column was for and lists the available ones.
+- The documentation pointed at `github.com/matverse/matverse`, which does not
+  exist. Every "edit this page" and "download" button was dead.
+
 ## v0.1.11
 
 ### `mv.pl.set_style`
