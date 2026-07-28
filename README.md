@@ -87,6 +87,7 @@ not single compositions.
 | `mv.prop` | derived properties — elastic moduli, phonons, and curves on a shared grid |
 | `mv.md` | molecular dynamics — diffusivity, thermal expansion, amorphous structures |
 | `mv.neb` | migration barriers by nudged elastic band |
+| `mv.mag` | magnetic orderings, and which one the hull should use |
 | `mv.surf` | slabs, surface energies, Wulff shapes, adsorption |
 | `mv.thermo` | convex hull, reactions, chemical potential windows |
 | `mv.dft` | first-principles inputs out, results back in |
@@ -274,7 +275,7 @@ exactly `obs` versus `obsm`.
 
 ## Status
 
-v0.1.8. **107 functions across 19 namespaces**, every one carrying a registry
+v0.1.9. **115 functions across 20 namespaces**, every one carrying a registry
 entry whose claims are verified by execution — currently **142/142**. See
 [DESIGN.md](DESIGN.md) for the full plan and
 [Release notes](matverse_guide/docs/Release_notes.md) for what changed.
@@ -304,6 +305,9 @@ Landed:
   Dulong-Petit limit rather than against a stored number
 - streaming construction and chunked compute, so a corpus larger than memory is
   a loop rather than a wall
+- molecular dynamics, migration barriers, surfaces and adsorption
+- magnetic ordering enumeration, lattice thermal conductivity, electronic
+  structure ingestion and charged-defect thermodynamics
 - the registry and the probe harness that verifies it: **142/142 claims**
 
 Still open:

@@ -41,6 +41,8 @@ SECTIONS = [
      "Derived properties, including curves stored on a shared grid."),
     ("md", "Molecular dynamics",
      "Motion, and the properties only motion gives you."),
+    ("mag", "Magnetism",
+     "Magnetic orderings, and picking the ground state before the hull."),
     ("neb", "Migration barriers",
      "Nudged elastic band, and building the endpoints for it."),
     ("surf", "Surfaces",

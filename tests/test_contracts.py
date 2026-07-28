@@ -133,6 +133,17 @@ def _probe_everything(make_md) -> ProbeReport:
                        supercell=(1, 1, 1))
         return md
 
+    def magnetic():
+        md = make_md()
+        return mv.mag.orderings(md, max_orderings=3)
+
+    def phononed_full():
+        md = make_md()
+        mv.calc.relax(md, level="emt", fmax=0.2, steps=20)
+        mv.prop.phonon(md, level="emt", source="relaxed_emt",
+                       supercell=(1, 1, 1))
+        return md
+
     def suggested():
         md = campaigning()
         mv.opt.suggest(md, n=2, method="greedy", predicted="volume")
@@ -207,6 +218,8 @@ def _probe_everything(make_md) -> ProbeReport:
                                          "supercell": (1, 1, 1)}),
         (mv.prop.free_energy, phononed, (), {"level": "emt"}),
         (mv.thermo.chempot_limits, energised, (), {"level": "emt"}),
+        (mv.prop.thermal_conductivity, phononed_full, (), {"level": "emt"}),
+        (mv.mag.describe, magnetic, (), {}),
         (mv.multi.aggregate, None, (), {}),          # placeholder, see below
     ]
     cases = [case for case in cases if case[1] is not None]

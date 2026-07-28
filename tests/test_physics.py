@@ -256,6 +256,98 @@ class TestReactions:
         assert len(limits["limits"]) >= 1
 
 
+class TestDefectThermodynamics:
+    @pytest.fixture
+    def defective(self):
+        from pymatgen.core import Lattice, Structure
+        fcc = Structure(Lattice.cubic(3.61), ["Cu"] * 4,
+                        [[0, 0, 0], [0, .5, .5], [.5, 0, .5], [.5, .5, 0]])
+        host = mv.data.from_structures([fcc])
+        mv.calc.energy(host, level="emt")
+        defects = mv.pp.defects(host, supercell=(2, 2, 2))
+        mv.calc.energy(defects, level="emt")
+        return defects, host
+
+    def test_formation_energy_is_a_line_not_a_number(self, defective):
+        """It depends on where the Fermi level sits, so it goes on the grid
+        axis rather than into a single column."""
+        defects, host = defective
+        mv.thermo.defect_formation(defects, host=host, level="emt",
+                                   chempot={"Cu": -3.5}, band_gap=1.5)
+        curve = defects.obsm["formation_vs_fermi_emt"]
+        assert curve.shape == (defects.n_obs, 200)
+        grid = mv.grid_of(defects, "formation_vs_fermi")
+        assert grid[0] == 0.0 and grid[-1] == pytest.approx(1.5)
+
+    def test_the_stable_charge_is_recorded(self, defective):
+        defects, host = defective
+        mv.thermo.defect_formation(defects, host=host, level="emt",
+                                   chempot={"Cu": -3.5}, band_gap=1.5)
+        assert defects.obs["stable_charge_emt"].iloc[0] != ""
+
+    def test_a_missing_chemical_potential_is_refused_loudly(self, defective):
+        """A defect creates or destroys atoms, and what they cost is not
+        derivable from the defective cell alone."""
+        defects, host = defective
+        with pytest.warns(UserWarning, match="chemical potential"):
+            mv.thermo.defect_formation(defects, host=host, level="emt",
+                                       chempot={}, band_gap=1.5)
+        assert np.isnan(
+            defects.obs["defect_formation_energy_emt"].to_numpy(
+                dtype=float)).all()
+
+    def test_the_missing_correction_is_declared(self, defective):
+        """A charged defect in a periodic cell interacts with its own images.
+        Not correcting is defensible; not saying so is not."""
+        defects, host = defective
+        mv.thermo.defect_formation(defects, host=host, level="emt",
+                                   chempot={"Cu": -3.5})
+        recorded = defects.uns["defect_thermodynamics"]
+        assert recorded["image_charge_correction"] is False
+        assert "pydefect" in recorded["note"]
+
+    def test_it_needs_energies_on_both_objects(self, defective):
+        defects, host = defective
+        bare = mv.data.from_structures(mv.structures(host))
+        with pytest.raises(ValueError, match="mv.calc.relax"):
+            mv.thermo.defect_formation(defects, host=bare, level="emt")
+
+    def test_it_refuses_a_dataset_that_is_not_defects(self, defective):
+        defects, host = defective
+        with pytest.raises(ValueError, match="mv.pp.defects"):
+            mv.thermo.defect_formation(host, host=host, level="emt")
+
+
+class TestElectronicStructure:
+    def test_missing_runs_give_nan_not_zero(self, md, tmp_path):
+        """A material with no output has no band gap. Reporting zero would
+        make every unfinished run look like a metal."""
+        (tmp_path / "runs").mkdir()
+        mv.dft.read_dos(md, tmp_path / "runs", level="pbe")
+        assert np.isnan(md.obs["band_gap_pbe"].to_numpy(dtype=float)).all()
+        assert not md.obs["is_metal_pbe"].any()
+
+    def test_the_dos_lands_on_a_fermi_referenced_grid(self, md, tmp_path):
+        (tmp_path / "runs").mkdir()
+        mv.dft.read_dos(md, tmp_path / "runs", level="pbe",
+                        energy_range=(-5.0, 5.0), n_points=100)
+        grid = mv.grid_of(md, "dos")
+        assert md.obsm["dos_pbe"].shape == (md.n_obs, 100)
+        assert grid[0] == -5.0 and grid[-1] == 5.0
+        assert "Fermi" in md.uns["grids"]["dos"]["unit"]
+
+    def test_the_functional_caveat_is_recorded(self, md, tmp_path):
+        """A PBE gap is roughly half the experimental one, which is why
+        is_metal is trustworthy and a small gap is not."""
+        (tmp_path / "runs").mkdir()
+        mv.dft.read_dos(md, tmp_path / "runs", level="pbe")
+        assert "half the experimental" in mv.level_info(md, "pbe")["note"]
+
+    def test_a_missing_root_is_an_error(self, md, tmp_path):
+        with pytest.raises(FileNotFoundError):
+            mv.dft.read_dos(md, tmp_path / "nowhere", level="pbe")
+
+
 class TestPhonons:
     @pytest.fixture(scope="class")
     def vibrating(self, metals):
@@ -311,6 +403,84 @@ class TestPhonons:
         # The failure is recorded rather than raised, one row at a time.
         assert md.obs["n_imaginary_modes_emt"].iloc[0] == -1
         assert mv.level_info(md, "emt")["n_failed"] == 1
+
+
+class TestThermalConductivity:
+    @pytest.fixture(scope="class")
+    def metals4(self):
+        """Four fcc metals whose Debye temperatures span a factor of two."""
+        from pymatgen.core import Lattice, Structure
+
+        def fcc(symbol, a):
+            return Structure(Lattice.cubic(a), [symbol] * 4,
+                             [[0, 0, 0], [0, .5, .5], [.5, 0, .5], [.5, .5, 0]])
+
+        md = mv.data.from_structures([fcc("Cu", 3.61), fcc("Al", 4.05),
+                                      fcc("Au", 4.08), fcc("Ag", 4.09)])
+        mv.pp.describe(md)
+        mv.calc.relax(md, level="emt", fmax=0.01)
+        mv.prop.elastic(md, level="emt", source="relaxed_emt")
+        mv.prop.phonon(md, level="emt", source="relaxed_emt",
+                       supercell=(1, 1, 1))
+        mv.prop.thermal_conductivity(md, level="emt", temperature=300.0)
+        return md
+
+    def test_debye_temperatures_land_near_the_literature(self, metals4):
+        """Literature: Cu 343, Al 428, Au 165, Ag 225 K."""
+        theta = dict(zip(metals4.obs["formula"],
+                         metals4.obs["debye_temperature_emt"]))
+        assert theta["Au"] == pytest.approx(165.0, rel=0.35)
+        assert theta["Ag"] == pytest.approx(225.0, rel=0.35)
+        assert theta["Cu"] == pytest.approx(343.0, rel=0.35)
+
+    def test_the_heavy_soft_metals_come_out_lowest(self, metals4):
+        theta = dict(zip(metals4.obs["formula"],
+                         metals4.obs["debye_temperature_emt"]))
+        assert theta["Au"] < theta["Ag"] < theta["Cu"]
+
+    def test_conductivity_is_positive_and_ordered(self, metals4):
+        """Gold conducts heat through its lattice least of the four, which is
+        what a Debye temperature of 165 K buys."""
+        kappa = dict(zip(metals4.obs["formula"],
+                         metals4.obs["thermal_conductivity_emt"]))
+        assert all(v > 0 for v in kappa.values())
+        assert kappa["Au"] < kappa["Ag"] < kappa["Cu"]
+
+    def test_conductivity_falls_with_temperature(self, metals4):
+        """Slack's expression is inversely proportional to T, which is the
+        expected behaviour above the Debye temperature."""
+        hot = metals4.copy()
+        mv.prop.thermal_conductivity(hot, level="emt", temperature=900.0)
+        assert (hot.obs["thermal_conductivity_emt"].to_numpy(dtype=float) <
+                metals4.obs["thermal_conductivity_emt"].to_numpy(
+                    dtype=float)).all()
+
+    def test_the_gruneisen_source_is_recorded(self, metals4):
+        """It comes from the Poisson ratio when mv.prop.elastic has run and
+        from a default otherwise, and which one matters to the answer."""
+        assert metals4.uns["thermal_conductivity"]["emt"]["gruneisen_source"] \
+            == "Poisson ratio"
+
+    def test_an_explicit_gruneisen_overrides_everything(self, metals4):
+        forced = metals4.copy()
+        mv.prop.thermal_conductivity(forced, level="emt", gruneisen=2.0)
+        assert (forced.obs["gruneisen_emt"] == 2.0).all()
+        assert forced.uns["thermal_conductivity"]["emt"]["gruneisen_source"] \
+            == "explicit"
+
+    def test_sound_velocities_are_physical(self, metals4):
+        """A few thousand metres per second for a metal."""
+        v = metals4.obs["sound_velocity_emt"].to_numpy(dtype=float)
+        assert ((v > 500) & (v < 10000)).all()
+
+    def test_it_needs_phonons_first(self, md):
+        with pytest.raises(ValueError, match="mv.prop.phonon"):
+            mv.prop.thermal_conductivity(md, level="emt")
+
+    def test_the_model_names_itself_as_approximate(self, metals4):
+        recorded = metals4.uns["thermal_conductivity"]["emt"]
+        assert recorded["model"] == "Slack"
+        assert "phono3py" in recorded["note"]
 
 
 class TestVibrationalThermodynamics:

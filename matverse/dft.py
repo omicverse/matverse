@@ -334,6 +334,131 @@ def _band_gap(run) -> float:
 
 
 @register_function(
+    aliases=["read dos", "electronic structure", "density of states",
+             "band gap", "parse dos", "electronic descriptors",
+             "band structure"],
+    category="dft",
+    description="Parse the electronic density of states from completed runs "
+                "onto a shared energy grid, and derive the scalars a screen "
+                "filters on — gap, whether it is direct, band edges and the "
+                "density of states at the Fermi level.",
+    produces={"obsm": ["dos_{level}"],
+              "obs": ["band_gap_{level}", "is_direct_gap_{level}",
+                      "vbm_{level}", "cbm_{level}", "fermi_level_{level}",
+                      "dos_at_fermi_{level}", "is_metal_{level}"],
+              "uns": ["grids"], "levels": ["{level}"]},
+    prerequisites=["mv.dft.write_inputs"],
+    examples=["mv.dft.read_dos(md, 'runs/', level='pbe')"],
+    related=["mv.dft.read_outputs", "mv.screen.filter", "mv.pl.spectra"],
+    notes="The density of states goes on the grid axis, aligned to a shared "
+          "energy scale referenced to the Fermi level — so two materials' "
+          "spectra are comparable and a measured photoemission spectrum can sit "
+          "beside them as another level.\n\n"
+          "A PBE gap is roughly half the experimental one. That is a property "
+          "of the functional rather than of this parser, and it is why "
+          "is_metal from a PBE run is trustworthy while a small gap is not: "
+          "PBE turns narrow-gap semiconductors into metals, so the false "
+          "negatives all point the same way.",
+)
+def read_dos(md: AnnData, root, level: str = "pbe",
+             filename: str = "vasprun.xml",
+             energy_range: tuple = (-10.0, 10.0),
+             n_points: int = 400) -> None:
+    """Density of states on a shared grid, plus the scalars a screen uses."""
+    try:
+        from pymatgen.io.vasp.outputs import Vasprun
+    except ImportError as exc:                            # pragma: no cover
+        raise ImportError("mv.dft.read_dos needs pymatgen's VASP "
+                          "parsers") from exc
+    from ._core import deposit_grid
+
+    root = Path(root)
+    if not root.exists():
+        raise FileNotFoundError(f"{root} does not exist")
+
+    grid = np.linspace(energy_range[0], energy_range[1], n_points)
+    spectra, gaps, direct, vbm, cbm = [], [], [], [], []
+    fermi, at_fermi, metal, n_read = [], [], [], 0
+
+    for name in md.obs_names:
+        path = _find_output(root, str(name), filename)
+        parsed = None
+        if path is not None:
+            try:
+                parsed = Vasprun(str(path), parse_dos=True, parse_eigen=True)
+            except Exception:
+                parsed = None
+        if parsed is None:
+            spectra.append(np.full(len(grid), np.nan))
+            for holder in (gaps, vbm, cbm, fermi, at_fermi):
+                holder.append(np.nan)
+            direct.append(False)
+            metal.append(False)
+            continue
+
+        spectra.append(_dos_on_grid(parsed, grid))
+        gap, is_direct, valence, conduction = _gap(parsed)
+        gaps.append(gap)
+        direct.append(is_direct)
+        vbm.append(valence)
+        cbm.append(conduction)
+        level_energy = float(getattr(parsed, "efermi", np.nan) or np.nan)
+        fermi.append(level_energy)
+        at_fermi.append(_dos_at_zero(spectra[-1], grid))
+        metal.append(bool(np.isfinite(gap) and gap <= 1e-3))
+        n_read += 1
+
+    deposit_grid(md, "dos", level, np.vstack(spectra), grid,
+                 unit="eV relative to the Fermi level")
+    md.obs[f"band_gap_{level}"] = gaps
+    md.obs[f"is_direct_gap_{level}"] = direct
+    md.obs[f"vbm_{level}"] = vbm
+    md.obs[f"cbm_{level}"] = cbm
+    md.obs[f"fermi_level_{level}"] = fermi
+    md.obs[f"dos_at_fermi_{level}"] = at_fermi
+    md.obs[f"is_metal_{level}"] = metal
+
+    declared = md.uns.get("dft", {})
+    set_level(md, level, kind="dft", method=declared.get("preset", "VASP"),
+              reference=declared.get("reference"), surrogate=False,
+              license=None, uncertainty=None, code="VASP", root=str(root),
+              n_read=n_read, n_missing=int(md.n_obs - n_read),
+              note="A PBE gap is roughly half the experimental one, so "
+                   "is_metal is reliable and a small gap is not.")
+    record(md, "dft.read_dos", level=level, root=str(root), n_read=n_read)
+
+
+def _dos_on_grid(run, grid: np.ndarray) -> np.ndarray:
+    """Total density of states, interpolated onto a Fermi-referenced grid."""
+    try:
+        dos = run.complete_dos or run.tdos
+        energies = np.asarray(dos.energies, dtype=float) - float(dos.efermi)
+        total = np.zeros_like(energies)
+        for spin_channel in dos.densities.values():
+            total = total + np.asarray(spin_channel, dtype=float)
+        return np.interp(grid, energies, total, left=0.0, right=0.0)
+    except Exception:
+        return np.full(len(grid), np.nan)
+
+
+def _gap(run):
+    """Band gap, whether it is direct, and the band edges."""
+    try:
+        gap, cbm, vbm, is_direct = run.eigenvalue_band_properties
+        return (float(gap), bool(is_direct), float(vbm), float(cbm))
+    except Exception:
+        return (float("nan"), False, float("nan"), float("nan"))
+
+
+def _dos_at_zero(spectrum: np.ndarray, grid: np.ndarray) -> float:
+    """Density of states at the Fermi level — zero for an insulator, the
+    quantity that decides carrier concentration for a metal."""
+    if not np.isfinite(spectrum).any():
+        return float("nan")
+    return float(np.interp(0.0, grid, np.nan_to_num(spectrum)))
+
+
+@register_function(
     aliases=["presets", "dft presets", "which input sets", "list presets"],
     category="dft",
     description="List the first-principles input presets, what each is for, and "
@@ -376,5 +501,5 @@ def status(md: AnnData, root, filename: str = "vasprun.xml") -> dict:
             "truncated": len(missing) > 50}
 
 
-__all__ = ["write_inputs", "read_outputs", "presets", "status",
+__all__ = ["write_inputs", "read_outputs", "read_dos", "presets", "status",
            "VASP_PRESETS", "PRESET_REFERENCE"]

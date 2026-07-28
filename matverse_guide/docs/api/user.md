@@ -12,7 +12,7 @@ agent. Every entry names the state it reads and the state it writes, and each of
 those claims is verified by execution in `tests/test_contracts.py` rather than
 asserted.
 
-Public registry entries listed here: 109
+Public registry entries listed here: 115
 
 Look a function up by intent rather than by name:
 
@@ -144,6 +144,7 @@ Derived properties, including curves stored on a shared grid.
    prop.free_energy
    prop.phonon
    prop.rdf
+   prop.thermal_conductivity
    prop.xrd
 ```
 
@@ -163,6 +164,21 @@ Motion, and the properties only motion gives you.
    md.register_batched
    md.run
    md.sweep
+```
+
+
+## Magnetism
+
+Magnetic orderings, and picking the ground state before the hull.
+
+```{eval-rst}
+.. autosummary::
+   :toctree: reference/
+   :nosignatures:
+
+   mag.describe
+   mag.ground_state
+   mag.orderings
 ```
 
 
@@ -207,6 +223,7 @@ Convex hull, reactions, chemical potentials.
    :nosignatures:
 
    thermo.chempot_limits
+   thermo.defect_formation
    thermo.hull
    thermo.pourbaix
    thermo.reaction
@@ -224,6 +241,7 @@ Input generation and result harvesting. Submission stays delegated.
    :nosignatures:
 
    dft.presets
+   dft.read_dos
    dft.read_outputs
    dft.status
    dft.write_inputs
@@ -410,20 +428,25 @@ arguments — `obs['energy_{level}']` becomes `obs['energy_emt']` when you pass
 | `mv.prop.free_energy` | `obs['vibrational_free_energy_{level}']`, `obs['vibrational_entropy_{level}']`, `obs['heat_capacity_{level}']` |
 | `mv.prop.phonon` | `obsm['phonon_dos_{level}']`, `obs['n_imaginary_modes_{level}']`, `obs['dynamically_stable_{level}']`, `obs['zero_point_energy_{level}']`, `uns['grids']`, `uns['levels']['{level}']` |
 | `mv.prop.rdf` | `obsm['rdf_{level}']`, `uns['grids']`, `uns['levels']['{level}']` |
+| `mv.prop.thermal_conductivity` | `obs['debye_temperature_{level}']`, `obs['gruneisen_{level}']`, `obs['sound_velocity_{level}']`, `obs['thermal_conductivity_{level}']` |
 | `mv.prop.xrd` | `obsm['xrd_{level}']`, `uns['grids']`, `uns['levels']['{level}']` |
 | `mv.md.conductivity` | `obs['conductivity_{species}_{level}']` |
 | `mv.md.melt_quench` | `obsm['structures']['amorphous_{level}']`, `obs['amorphous_density_{level}']`, `obs['amorphous_density_ratio_{level}']`, `uns['levels']['{level}']` |
 | `mv.md.run` | `obs['md_energy_{level}']`, `obs['md_temperature_{level}']`, `obs['msd_{level}']`, `obs['diffusivity_{level}']`, `obs['md_volume_{level}']`, `layers['diffusivity_{level}']`, `obsm['structures']['md_{level}']`, `uns['levels']['{level}']` |
 | `mv.md.sweep` | `obsm['md_volume_{level}']`, `obsm['md_energy_{level}']`, `obsm['md_diffusivity_{level}']`, `obs['thermal_expansion_{level}']`, `obs['activation_energy_{level}']`, `uns['grids']`, `uns['levels']['{level}']` |
+| `mv.mag.describe` | `obs['total_magmom']`, `obs['absolute_magmom']`, `obs['magnetic_order']`, `obs['n_magnetic_species']` |
+| `mv.mag.ground_state` | `obs['magnetic_ordering_{level}']`, `obs['magnetic_spread_{level}']`, `obs['energy_per_atom_{level}']`, `obs['total_magmom_{level}']`, `obs['is_ground_state_{level}']` |
 | `mv.neb.barrier` | `obs['barrier_{level}']`, `obs['barrier_reverse_{level}']`, `obs['reaction_energy_{level}']`, `obs['neb_converged_{level}']`, `obsm['neb_profile_{level}']`, `uns['grids']`, `uns['levels']['{level}']` |
 | `mv.neb.hop_endpoints` | `obsm['structures']['{key_added}_initial']`, `obsm['structures']['{key_added}_final']`, `obs['hop_distance']`, `obs['hop_species']` |
 | `mv.surf.adsorption_energy` | `obs['adsorption_energy_{level}']`, `obs['is_best_site_{level}']` |
 | `mv.surf.surface_energy` | `obs['surface_energy_{level}']` |
 | `mv.surf.wulff` | `obs['wulff_area_fraction_{level}']`, `obs['wulff_effective_radius_{level}']`, `obs['wulff_shape_factor_{level}']`, `uns['wulff']` |
 | `mv.thermo.chempot_limits` | `uns['chempot_limits']` |
+| `mv.thermo.defect_formation` | `obs['defect_formation_energy_{level}']`, `obs['stable_charge_{level}']`, `obsm['formation_vs_fermi_{level}']`, `uns['grids']`, `uns['defect_thermodynamics']` |
 | `mv.thermo.hull` | `obs['e_above_hull_{level}']`, `obs['is_stable_{level}']`, `obs['formation_energy_{level}']`, `obs['decomposes_to_{level}']`, `uns['phase_diagram']` |
 | `mv.thermo.pourbaix` | `obs['pourbaix_decomposition']`, `uns['pourbaix']` |
 | `mv.thermo.reaction` | `uns['reactions']` |
+| `mv.dft.read_dos` | `obsm['dos_{level}']`, `obs['band_gap_{level}']`, `obs['is_direct_gap_{level}']`, `obs['vbm_{level}']`, `obs['cbm_{level}']`, `obs['fermi_level_{level}']`, `obs['dos_at_fermi_{level}']`, `obs['is_metal_{level}']`, `uns['grids']`, `uns['levels']['{level}']` |
 | `mv.dft.read_outputs` | `obs['energy_{level}']`, `obs['energy_per_atom_{level}']`, `obs['band_gap_{level}']`, `obs['converged_{level}']`, `obsm['structures']['relaxed_{level}']`, `uns['levels']['{level}']`, `uns['dft']` |
 | `mv.dft.write_inputs` | `obs['dft_directory']`, `written to disk`, `uns['dft']` |
 | `mv.multi.aggregate` | `obs['{key_added}']` |

@@ -500,6 +500,162 @@ def _integrate(density: np.ndarray, weight: np.ndarray,
 
 
 @register_function(
+    aliases=["thermal conductivity", "lattice thermal conductivity", "kappa",
+             "heat transport", "thermoelectric", "slack model"],
+    category="prop",
+    description="Estimate the lattice thermal conductivity from the phonon and "
+                "elastic data already computed, using the Slack model, together "
+                "with the Debye temperature and Gruneisen parameter it needs.",
+    requires={"obsm": ["phonon_dos_{level}"], "uns": ["grids"]},
+    produces={"obs": ["debye_temperature_{level}", "gruneisen_{level}",
+                      "sound_velocity_{level}",
+                      "thermal_conductivity_{level}"]},
+    prerequisites=["mv.prop.phonon"],
+    examples=["mv.prop.thermal_conductivity(md, level='emt')",
+              "mv.prop.thermal_conductivity(md, level='emt', "
+              "temperature=300.0)"],
+    related=["mv.prop.phonon", "mv.prop.elastic", "mv.screen.rank"],
+    notes="An order-of-magnitude model, not a solution of the Boltzmann "
+          "transport equation. Slack's expression captures the right scaling — "
+          "kappa falls with mass, with anharmonicity and with temperature — and "
+          "is routinely a factor of two off in absolute terms. It is the right "
+          "tool for ranking a thousand candidates and the wrong one for quoting "
+          "a number.\n\n"
+          "The honest alternative is phono3py: third-order force constants and "
+          "a real phonon-phonon scattering calculation, at perhaps a thousand "
+          "times the cost. Matbench Discovery weights thermal conductivity at "
+          "40% of its combined score precisely because it is the property "
+          "cheap methods get wrong, so treat a screen ranked on this as a "
+          "shortlist for phono3py rather than an answer.\n\n"
+          "The Gruneisen parameter is taken from the Poisson ratio when "
+          "mv.prop.elastic has run, and defaults to 1.5 — a typical value for "
+          "a simple solid — when it has not. Which was used is recorded.",
+)
+def thermal_conductivity(md: AnnData, level: str = "emt",
+                         temperature: float = 300.0,
+                         gruneisen: float | None = None) -> None:
+    """Lattice thermal conductivity in W/m/K, by the Slack model."""
+    key = f"phonon_dos_{level}"
+    if key not in md.obsm:
+        raise ValueError(f"obsm[{key!r}] absent; run mv.prop.phonon(md, "
+                         f"level={level!r}) first")
+    from ._core import grid_of
+
+    grid = grid_of(md, "phonon_dos")
+    dos = np.asarray(md.obsm[key], dtype=float)
+    structures_ = structures(md, "input")
+
+    debye = np.full(md.n_obs, np.nan)
+    gamma = np.full(md.n_obs, np.nan)
+    velocity = np.full(md.n_obs, np.nan)
+    kappa = np.full(md.n_obs, np.nan)
+
+    poisson = (md.obs[f"poisson_ratio_{level}"].to_numpy(dtype=float)
+               if f"poisson_ratio_{level}" in md.obs else None)
+    source = "explicit" if gruneisen is not None else (
+        "Poisson ratio" if poisson is not None else "default 1.5")
+
+    for i, structure in enumerate(structures_):
+        row = dos[i]
+        if not np.isfinite(row).all() or not row.any():
+            continue
+        theta = _debye_temperature(row, grid)
+        debye[i] = theta
+
+        if gruneisen is not None:
+            g = float(gruneisen)
+        elif poisson is not None and np.isfinite(poisson[i]):
+            g = _gruneisen_from_poisson(float(poisson[i]))
+        else:
+            g = 1.5
+        gamma[i] = g
+
+        n = len(structure)
+        volume_per_atom = float(structure.volume) / n
+        mean_mass = float(structure.composition.weight) / n     # amu
+
+        # Debye velocity from the Debye temperature and the atom density.
+        velocity[i] = _sound_velocity(theta, volume_per_atom)
+        kappa[i] = _slack(theta, mean_mass, volume_per_atom, g, n, temperature)
+
+    md.obs[f"debye_temperature_{level}"] = debye
+    md.obs[f"gruneisen_{level}"] = gamma
+    md.obs[f"sound_velocity_{level}"] = velocity
+    md.obs[f"thermal_conductivity_{level}"] = kappa
+    md.uns.setdefault("thermal_conductivity", {})[level] = {
+        "temperature": float(temperature),
+        "model": "Slack",
+        "gruneisen_source": source,
+        "unit": "W/m/K",
+        "note": "order-of-magnitude; phono3py is the honest calculation",
+    }
+    record(md, "prop.thermal_conductivity", level=level,
+           temperature=temperature)
+
+
+#: THz -> K, for a phonon frequency expressed as a temperature.
+_THZ_TO_K = 47.9924341590788
+
+#: Slack's prefactor, in SI, for kappa in W/m/K with mass in amu, volume per
+#: atom in angstrom^3 and temperatures in kelvin.
+_SLACK_A = 3.1e-6
+
+
+def _debye_temperature(dos: np.ndarray, grid: np.ndarray) -> float:
+    """Debye temperature from the second moment of the phonon spectrum.
+
+    The moment-based definition rather than the cutoff frequency: a real
+    spectrum has a tail, and reading the highest frequency off it makes the
+    answer depend on where the smearing was truncated.
+    """
+    weight = np.maximum(dos, 0.0)
+    total = np.trapezoid(weight, grid) if hasattr(np, "trapezoid") \
+        else np.trapz(weight, grid)
+    if total <= 0:
+        return float("nan")
+    second = (np.trapezoid(weight * grid ** 2, grid) if hasattr(np, "trapezoid")
+              else np.trapz(weight * grid ** 2, grid)) / total
+    return float(np.sqrt(5.0 / 3.0 * second) * _THZ_TO_K)
+
+
+def _gruneisen_from_poisson(nu: float) -> float:
+    """Gruneisen parameter from the Poisson ratio, after Belomestnykh-Tesleva.
+
+    An elastic proxy for anharmonicity: a material that resists shear relative
+    to compression is the one whose phonons scatter least.
+    """
+    nu = float(np.clip(nu, -0.4, 0.49))
+    return float(1.5 * (1.0 + nu) / (2.0 - 3.0 * nu))
+
+
+def _sound_velocity(theta: float, volume_per_atom: float) -> float:
+    """Debye sound velocity in m/s from the Debye temperature."""
+    if not np.isfinite(theta) or volume_per_atom <= 0:
+        return float("nan")
+    # v = (k_B theta / hbar) * (V_atom / (6 pi^2))^(1/3), in SI.
+    k_b, hbar = 1.380649e-23, 1.054571817e-34
+    volume = volume_per_atom * 1e-30                      # m^3
+    return float(k_b * theta / hbar * (volume / (6.0 * np.pi ** 2)) ** (1 / 3))
+
+
+def _slack(theta: float, mean_mass: float, volume_per_atom: float,
+           gamma: float, n_atoms: int, temperature: float) -> float:
+    """Slack's expression for the lattice thermal conductivity.
+
+        kappa = A * M_avg * theta^3 * delta / (gamma^2 * n^(2/3) * T)
+
+    with ``delta`` the cube root of the volume per atom. Every dependence in it
+    is the physically expected one, which is why it ranks well even where the
+    magnitude is off.
+    """
+    if not np.isfinite(theta) or theta <= 0 or temperature <= 0 or gamma <= 0:
+        return float("nan")
+    delta = volume_per_atom ** (1 / 3)                    # angstrom
+    return float(_SLACK_A * mean_mass * theta ** 3 * delta
+                 / (gamma ** 2 * n_atoms ** (2 / 3) * temperature))
+
+
+@register_function(
     aliases=["compare grids", "compare spectra", "spectrum difference",
              "computed versus measured"],
     category="prop",
@@ -548,4 +704,5 @@ def compare_grids(md: AnnData, quantity: str, a: str, b: str) -> None:
     record(md, "prop.compare_grids", quantity=quantity, a=a, b=b)
 
 
-__all__ = ["xrd", "rdf", "elastic", "phonon", "free_energy", "compare_grids"]
+__all__ = ["xrd", "rdf", "elastic", "phonon", "free_energy",
+           "thermal_conductivity", "compare_grids"]

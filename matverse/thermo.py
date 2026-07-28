@@ -26,6 +26,7 @@ from __future__ import annotations
 import warnings
 
 import numpy as np
+import pandas as pd
 from anndata import AnnData
 
 from ._core import record, structures
@@ -349,6 +350,119 @@ def chempot_limits(md: AnnData, level: str = "emt", source: str = "input",
 
 
 @register_function(
+    aliases=["defect formation energy", "defect thermodynamics", "charge "
+             "transition level", "does the defect form", "formation energy "
+             "diagram", "charged defect"],
+    category="thermo",
+    description="Compute defect formation energies as a function of Fermi "
+                "level and charge state, and find the charge transition levels "
+                "where the stable charge changes.",
+    requires={"obs": ["energy_{level}", "parent", "defect"]},
+    produces={"obs": ["defect_formation_energy_{level}",
+                      "stable_charge_{level}"],
+              "obsm": ["formation_vs_fermi_{level}"],
+              "uns": ["grids", "defect_thermodynamics"]},
+    prerequisites=["mv.pp.defects", "mv.calc.relax"],
+    examples=["mv.thermo.defect_formation(defective, host=md, level='pbe', "
+              "chempot={'Al': -3.7}, band_gap=1.2)"],
+    related=["mv.pp.defects", "mv.dft.read_dos"],
+    notes="Enumerating a defect and knowing whether it forms are different "
+          "questions, and this is the second one. The formation energy depends "
+          "on where the Fermi level sits and on the chemical potential of "
+          "whatever was added or removed, so it is a line rather than a number "
+          "— stored on the grid axis against the Fermi level, with the lowest "
+          "charge state at each point giving the stable charge.\n\n"
+          "No finite-size correction is applied. A charged defect in a periodic "
+          "cell interacts with its own images, and the image charge shifts "
+          "formation energies by tenths of an eV for a small supercell. doped "
+          "and pydefect implement the Freysoldt and Kumagai corrections "
+          "properly; this is the uncorrected quantity and says so, so use it "
+          "to rank rather than to quote.",
+)
+def defect_formation(defective: AnnData, host: AnnData, level: str = "emt",
+                     chempot: dict | None = None, band_gap: float = 2.0,
+                     charges=(-2, -1, 0, 1, 2), n_points: int = 200) -> None:
+    """Defect formation energy against the Fermi level, per charge state."""
+    from ._core import deposit_grid
+
+    energy_key = f"energy_{level}"
+    for obj, label in ((defective, "defects"), (host, "host")):
+        if energy_key not in obj.obs:
+            raise ValueError(f"obs[{energy_key!r}] absent on the {label}; run "
+                             f"mv.calc.relax(..., level={level!r}) on both")
+    for column in ("parent", "defect"):
+        if column not in defective.obs:
+            raise ValueError(f"obs[{column!r}] absent; these did not come from "
+                             f"mv.pp.defects")
+
+    chempot = dict(chempot or {})
+    fermi = np.linspace(0.0, float(band_gap), n_points)
+    host_energy = dict(zip(map(str, host.obs_names),
+                           host.obs[energy_key].to_numpy(dtype=float)))
+
+    defect_energy = defective.obs[energy_key].to_numpy(dtype=float)
+    parents = defective.obs["parent"].astype(str).to_numpy()
+    removed = defective.obs.get("removed", pd.Series([""] * defective.n_obs))
+    added = defective.obs.get("added", pd.Series([""] * defective.n_obs))
+    removed = removed.astype(str).to_numpy()
+    added = added.astype(str).to_numpy()
+
+    curves = np.full((defective.n_obs, n_points), np.nan)
+    neutral = np.full(defective.n_obs, np.nan)
+    stable = [""] * defective.n_obs
+    missing_chempot: set[str] = set()
+
+    for i in range(defective.n_obs):
+        bulk = host_energy.get(parents[i], np.nan)
+        if not (np.isfinite(defect_energy[i]) and np.isfinite(bulk)):
+            continue
+
+        exchange = 0.0
+        ok = True
+        for symbol, sign in ((removed[i], +1.0), (added[i], -1.0)):
+            if not symbol:
+                continue
+            if symbol not in chempot:
+                missing_chempot.add(symbol)
+                ok = False
+                break
+            exchange += sign * float(chempot[symbol])
+        if not ok:
+            continue
+
+        base = float(defect_energy[i]) - float(bulk) + exchange
+        neutral[i] = base
+        # E_f(q, E_F) = base + q * E_F, the uncorrected charged formation energy.
+        per_charge = np.vstack([base + q * fermi for q in charges])
+        curves[i] = per_charge.min(axis=0)
+        stable[i] = str(charges[int(np.argmin(per_charge[:, 0]))])
+
+    defective.obs[f"defect_formation_energy_{level}"] = neutral
+    defective.obs[f"stable_charge_{level}"] = stable
+    deposit_grid(defective, "formation_vs_fermi", level, curves, fermi,
+                 unit="eV above the valence band maximum")
+    defective.uns["defect_thermodynamics"] = {
+        "level": level,
+        "band_gap": float(band_gap),
+        "charges": [int(q) for q in charges],
+        "chempot": chempot,
+        "missing_chempot": sorted(missing_chempot),
+        "image_charge_correction": False,
+        "note": "uncorrected for periodic image interaction; doped and "
+                "pydefect implement Freysoldt and Kumagai properly",
+    }
+    if missing_chempot:
+        warnings.warn(
+            f"no chemical potential given for {sorted(missing_chempot)}, so "
+            f"defects exchanging those species have no formation energy. A "
+            f"defect creates or destroys atoms, and what they cost is not "
+            f"derivable from the defective cell alone — pass chempot=.",
+            stacklevel=2)
+    record(defective, "thermo.defect_formation", level=level,
+           band_gap=band_gap, n_charges=len(charges))
+
+
+@register_function(
     aliases=["pourbaix", "aqueous stability", "corrosion", "electrochemical "
              "stability", "water stability", "ph potential"],
     category="thermo",
@@ -449,5 +563,6 @@ def references_from_mp(elements, api_key: str | None = None):
 
 
 __all__ = ["hull", "reaction", "chempot_limits", "pourbaix",
+           "defect_formation",
            "references_from_mp",
            "LevelMismatch"]

@@ -1,5 +1,76 @@
 # Release notes
 
+## v0.1.9
+
+Tier 2 of the gap analysis: the four capabilities the survey called important
+rather than essential. **115 functions across 20 namespaces.**
+
+### `mv.mag` — magnetic order, and why a hull needs it
+
+Every energy computed before this assumed the magnetic configuration handed to
+the calculator was the right one. For anything containing iron, cobalt, nickel,
+manganese or chromium that is usually wrong, and the ferromagnetic and
+antiferromagnetic states can differ by hundreds of meV per atom — so a hull
+built from whichever ordering the input file carried is a hull of the wrong
+quantity, systematically.
+
+`orderings` enumerates the candidates, `ground_state` collapses them onto the
+parent keeping the lowest, and `magnetic_spread` records how far apart they
+were. That last number is the one people skip and the one that says whether the
+guess would have mattered.
+
+pymatgen's antiferromagnetic strategies call out to **enumlib**, Fortran
+executables that are not pip-installable and absent from most environments —
+and it raises rather than returning the ferromagnetic state it could have
+produced. matverse falls back to generating sign assignments on the magnetic
+sublattice directly, which is coarser and dependency-free, and records that it
+did.
+
+The winning energy is written under the ordinary `energy_per_atom_<level>` name,
+so `mv.thermo.hull` needs no special case — it sees a normal column that happens
+to be the magnetic ground state.
+
+### `mv.prop.thermal_conductivity`
+
+κ_L by the Slack model from the phonon and elastic data already computed, with
+the Debye temperature and Grüneisen parameter it needs. Debye temperatures land
+within about 15% of the literature on fcc metals — Au 161 against 165, Ag 239
+against 225 — and the ordering is right.
+
+An order-of-magnitude model, not a solution of the Boltzmann transport equation,
+and it says so. Matbench Discovery weights thermal conductivity at 40% of its
+combined score precisely because it is the property cheap methods get wrong, so
+a screen ranked on this is a shortlist for phono3py rather than an answer.
+
+### `mv.dft.read_dos`
+
+The density of states onto a Fermi-referenced grid, plus the scalars a screen
+filters on: gap, whether it is direct, band edges, and the density of states at
+the Fermi level. Cheap, because `mv.dft` already parses the same files.
+
+The level records that a PBE gap is roughly half the experimental one — which is
+why `is_metal` from a PBE run is trustworthy while a small gap is not. PBE turns
+narrow-gap semiconductors into metals, so the false negatives all point the same
+way.
+
+### `mv.thermo.defect_formation`
+
+Defect enumeration existed; the thermodynamics did not. Formation energy depends
+on where the Fermi level sits and on the chemical potential of whatever was
+added or removed, so it is a **line rather than a number** — stored on the grid
+axis against the Fermi level, with the lowest charge state at each point giving
+the stable charge.
+
+Two things it refuses to do quietly. Without a chemical potential it produces
+NaN and warns, because what an added or removed atom costs is not derivable from
+the defective cell alone. And no image-charge correction is applied — a charged
+defect in a periodic cell interacts with its own images — so the result is
+declared uncorrected and points at doped and pydefect for the real thing.
+
+### Registry
+
+115 entries, 354 contract claims, **contract-verified rate 141/141**.
+
 ## v0.1.8
 
 The three capabilities a 2026 survey of the field named as must-haves and this
