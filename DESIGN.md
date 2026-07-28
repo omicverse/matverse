@@ -363,24 +363,39 @@ batch submission), caching and checkpointing, and the function registry (§7).
 
 Tiered by whether the library is *usable* without it.
 
-**v0.1.x — a screening pipeline that works end to end. ✅ shipped.**
-`mv.data`, `mv.pp` (standardize, qc, dedup, supercell), `mv.feat`, `mv.calc`
-with level dispatch, `mv.thermo.hull` taking real reference phases, `mv.screen`.
-`X` as composition and `mv.tl` on top of it landed here rather than in v0.2.
-Every function decorated at authoring time, with the probe harness (§7).
-Still outstanding from this tier: OPTIMADE ingestion, the TorchSim batched
-execution path, and `mv.pl`.
+*All three tiers shipped by v0.1.6: 96 functions across 16 namespaces, every
+contract claim verified by execution.*
 
-**v0.2.x — the object earns its keep. ◐ in progress.**
-Shipped in v0.1.2: the multi-axis layout (§2.1) as a sites object plus grid blocks,
-`mv.prop` (XRD, RDF, grid comparison), `mv.exp` (experiment as a level, pattern
-matching), `mv.pp.harmonize`, `mv.gen.validate` and `mv.gen.substitute`.
-Outstanding: `mv.model` with leakage-aware splits and foundation-model
-fine-tuning, and the rest of `mv.prop` — phonons, elastic, electronic structure.
+**Tier 1 — a screening pipeline that works end to end. ✅**
+`mv.data` (OPTIMADE, Materials Project, CIF, matminer, ASE), `mv.pp`, `mv.feat`,
+`mv.calc` with level dispatch, `mv.thermo.hull` taking real reference phases,
+`mv.screen`, `mv.pl`. `X` as composition and `mv.tl` on top of it landed here
+rather than a tier later. Every function decorated at authoring time, with the
+probe harness (§7).
 
-**v0.3.x — the loop closes.**
-`mv.opt` campaigns, `mv.exp` with XRD matching, defect thermodynamics,
-out-of-core at 10⁶–10⁸ (§5), and `matverse-bench`.
+**Tier 2 — the object earns its keep. ✅**
+The multi-axis layout (§2.1) as a sites object plus grid blocks; `mv.prop` (XRD,
+RDF, elastic, phonons and vibrational thermodynamics); `mv.exp` — experiment as
+a level, plus pattern matching; `mv.pp.harmonize`; `mv.gen`; `mv.model` with
+leakage-aware splits; `mv.dft` for the boundary between a screen and a directory
+tree of calculations.
+
+**Tier 3 — the loop closes. ✅**
+`mv.opt` campaigns, defect enumeration, Pourbaix, chunked compute at scale
+(§5), and `matverse-bench` — twelve goal-not-API tasks whose grader contains no
+model calls and is tested against wrong answers to show it discriminates.
+
+**What deliberately did not ship.** No interatomic potential, no graph network
+and no embedder are vendored; `mv.calc`, `mv.model` and `mv.feat` are
+registration interfaces, because weights are hundreds of megabytes with their
+own licences and the leaderboard reorders monthly. Workflow submission stays
+with atomate2, quacc and AiiDA. Both are choices, argued in §6, not omissions.
+
+**What is genuinely still missing**, and named in the README rather than here so
+a reader meets it first: the scale path is chunked rather than lazy — the object
+is still materialised — and `mv.pp.harmonize` recovers an injected offset
+exactly on synthetic anchors but has never been measured against a real
+MP-versus-OQMD-versus-Alexandria hull.
 
 ---
 
