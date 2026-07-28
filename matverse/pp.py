@@ -552,6 +552,98 @@ def rattle(md: AnnData, stdev: float = 0.03, source: str = "input",
 
 
 @register_function(
+    aliases=["defects", "vacancies", "substitutions", "point defects",
+             "enumerate defects", "doping", "make defects"],
+    category="pp",
+    description="Enumerate point defects — vacancies and substitutions — in a "
+                "supercell of every structure, returning them as a new dataset "
+                "with the parent and defect type recorded.",
+    requires={"structures": ["{source}"]},
+    examples=["defective = mv.pp.defects(md, kinds=('vacancy',))",
+              "defective = mv.pp.defects(md, substitutions={'Al': ['Mg']})"],
+    related=["mv.calc.relax", "mv.pp.supercell"],
+    notes="Returns a new dataset rather than depositing, because there are more "
+          "defects than parents. Symmetry-inequivalent sites are enumerated "
+          "once each; without that a 32-atom supercell yields 32 identical "
+          "vacancies and wastes a calculator on 31 of them.\n\n"
+          "Defect *formation energies* need charge states, a chemical "
+          "potential and a finite-size correction, which is what doped and "
+          "pydefect exist for. This builds the structures.",
+)
+def defects(md: AnnData, source: str = "input", supercell=(2, 2, 2),
+            kinds=("vacancy",), substitutions: dict | None = None,
+            symprec: float = 0.1) -> AnnData:
+    """Enumerate point defects. Returns a new dataset of defective cells."""
+    from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
+
+    from .data import from_structures  # noqa: F401  (imported for clarity)
+
+    unknown = set(kinds) - {"vacancy", "substitution"}
+    if unknown:
+        raise ValueError(f"unknown defect kind(s) {sorted(unknown)}; use "
+                         f"'vacancy' and 'substitution'")
+    if "substitution" in kinds and not substitutions:
+        raise ValueError("kinds includes 'substitution' but no substitutions "
+                         "were given, e.g. substitutions={'Al': ['Mg']}")
+
+    out, rows = [], []
+    for name, structure in zip(md.obs_names, structures(md, source)):
+        cell = structure.copy()
+        cell.make_supercell(list(supercell))
+        for site_index in _inequivalent_sites(cell, symprec):
+            symbol = str(cell[site_index].specie.symbol)
+            if "vacancy" in kinds:
+                defective = cell.copy()
+                defective.remove_sites([site_index])
+                out.append(defective)
+                rows.append({"parent": str(name), "defect": "vacancy",
+                             "site": int(site_index), "removed": symbol,
+                             "added": ""})
+            for replacement in (substitutions or {}).get(symbol, []):
+                defective = cell.copy()
+                defective.replace(site_index, replacement)
+                out.append(defective)
+                rows.append({"parent": str(name), "defect": "substitution",
+                             "site": int(site_index), "removed": symbol,
+                             "added": str(replacement)})
+
+    if not out:
+        raise ValueError("no defect was generated; check kinds= and "
+                         "substitutions=")
+
+    import pandas as _pd
+    defective = from_structures(out, _pd.DataFrame(rows))
+    record(defective, "pp.defects", source=source, supercell=list(supercell),
+           kinds=list(kinds), n_parents=int(md.n_obs))
+    return defective
+
+
+def _inequivalent_sites(structure, symprec: float) -> list:
+    """One representative per symmetry-equivalent set of sites.
+
+    Falls back to every site when symmetry cannot be determined, which is safe
+    but expensive — a 32-atom elemental supercell then yields 32 identical
+    vacancies instead of one.
+    """
+    from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
+
+    try:
+        dataset = SpacegroupAnalyzer(structure,
+                                     symprec=symprec).get_symmetry_dataset()
+        equivalent = getattr(dataset, "equivalent_atoms", None)
+        if equivalent is None:
+            equivalent = dataset["equivalent_atoms"]
+        seen, out = set(), []
+        for i, group in enumerate(equivalent):
+            if group not in seen:
+                seen.add(group)
+                out.append(i)
+        return out
+    except Exception:
+        return list(range(len(structure)))
+
+
+@register_function(
     aliases=["strain", "apply strain", "deform cell", "elastic deformation"],
     category="pp",
     description="Apply an isotropic or tensor strain to every cell and deposit "
@@ -581,5 +673,6 @@ def strain(md: AnnData, amount, source: str = "input",
 
 
 __all__ = ["standardize", "describe", "qc", "filter_materials", "harmonize",
+           "defects",
            "filter_elements", "normalize_composition", "dedup", "supercell",
            "rattle", "strain"]

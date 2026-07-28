@@ -349,6 +349,70 @@ def chempot_limits(md: AnnData, level: str = "emt", source: str = "input",
 
 
 @register_function(
+    aliases=["pourbaix", "aqueous stability", "corrosion", "electrochemical "
+             "stability", "water stability", "ph potential"],
+    category="thermo",
+    description="Compute how far each material sits from aqueous stability at "
+                "a given pH and applied potential, which is what decides "
+                "whether it survives in water.",
+    requires={"structures": ["input"]},
+    produces={"obs": ["pourbaix_decomposition"], "uns": ["pourbaix"]},
+    examples=["mv.thermo.pourbaix(md, ph=7.0, potential=0.0)"],
+    related=["mv.thermo.hull"],
+    notes="Needs mp-api and an MP_API_KEY: aqueous stability is measured "
+          "against the ion energies Materials Project fits, and there is no "
+          "way to compute it from a candidate set alone. A material on the "
+          "solid-state hull can still dissolve, which is why this is a "
+          "separate question rather than a column of the same one.",
+)
+def pourbaix(md: AnnData, ph: float = 7.0, potential: float = 0.0,
+             api_key: str | None = None) -> None:
+    """Distance from aqueous stability, in eV/atom, at one pH and potential."""
+    import os
+
+    try:
+        from mp_api.client import MPRester
+        from pymatgen.analysis.pourbaix_diagram import PourbaixDiagram
+    except ImportError as exc:                            # pragma: no cover
+        raise ImportError("mv.thermo.pourbaix needs `pip install "
+                          "matverse[mp]`") from exc
+
+    key = api_key or os.environ.get("MP_API_KEY")
+    if not key:
+        raise ValueError("set MP_API_KEY or pass api_key=; aqueous stability "
+                         "is measured against Materials Project's fitted ion "
+                         "energies and cannot be computed from candidates alone")
+
+    S = structures(md, "input")
+    distances, failures = [], []
+    with MPRester(key) as mpr:
+        for structure in S:
+            elements = sorted({str(el)
+                               for el in structure.composition.elements})
+            try:
+                entries = mpr.get_pourbaix_entries(elements)
+                diagram = PourbaixDiagram(entries)
+                entry = min(
+                    (e for e in entries
+                     if e.composition.reduced_formula
+                     == structure.composition.reduced_formula),
+                    key=lambda e: e.energy_per_atom, default=None)
+                if entry is None:
+                    raise KeyError("no matching Pourbaix entry")
+                distances.append(float(diagram.get_decomposition_energy(
+                    entry, pH=ph, V=potential)))
+            except Exception as exc:
+                distances.append(np.nan)
+                failures.append(f"{structure.composition.reduced_formula}: "
+                                f"{type(exc).__name__}: {exc}")
+
+    md.obs["pourbaix_decomposition"] = distances
+    md.uns["pourbaix"] = {"ph": float(ph), "potential": float(potential),
+                          "n_failed": len(failures), "errors": failures[:10]}
+    record(md, "thermo.pourbaix", ph=ph, potential=potential)
+
+
+@register_function(
     aliases=["reference phases", "competing phases", "get mp entries",
              "elemental references", "known phases"],
     category="thermo",
@@ -384,5 +448,6 @@ def references_from_mp(elements, api_key: str | None = None):
         return mpr.get_entries_in_chemsys([str(e) for e in elements])
 
 
-__all__ = ["hull", "reaction", "chempot_limits", "references_from_mp",
+__all__ = ["hull", "reaction", "chempot_limits", "pourbaix",
+           "references_from_mp",
            "LevelMismatch"]

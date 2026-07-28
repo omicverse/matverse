@@ -167,6 +167,74 @@ def soap(md: AnnData, source: str = "input", r_cut: float = 5.0,
            l_max=l_max)
 
 
+#: name -> (callable, metadata). Populated by :func:`register_embedder`.
+_EMBEDDERS: dict[str, tuple] = {}
+
+
+@register_function(
+    aliases=["register embedder", "add embedding model", "custom embedding",
+             "register featuriser"],
+    category="feat",
+    description="Make a pretrained model's latent representation available to "
+                "mv.feat.embed under a name.",
+    examples=["mv.feat.register_embedder('mace', embed_with_mace, "
+              "method='MACE-MPA-0', license='MIT')"],
+    related=["mv.feat.embed", "mv.calc.register_calculator"],
+)
+def register_embedder(name: str, function, *, method: str | None = None,
+                      license: str | None = None, **extra) -> None:
+    """Register an embedder. ``function(structures) -> array (n, d)``."""
+    _EMBEDDERS[name] = (function, {"method": method or name,
+                                   "license": license, **extra})
+
+
+@register_function(
+    aliases=["embed", "latent vector", "learned embedding", "model embedding",
+             "pretrained representation", "foundation model features"],
+    category="feat",
+    description="Take the latent representation a pretrained model assigns to "
+                "each structure and deposit it as a descriptor block.",
+    requires={"structures": ["{source}"]},
+    produces={"obsm": ["X_{model}"], "features": ["X_{model}"]},
+    dispatch="model= selects a registered embedder; each has its own licence "
+             "and its own idea of what a structure means",
+    examples=["mv.feat.embed(md, model='mace')"],
+    related=["mv.feat.register_embedder", "mv.feat.element_stats",
+             "mv.tl.pca"],
+    notes="matverse ships no embedder. A universal potential's latents are the "
+          "obvious source and they are hundreds of megabytes of weights with "
+          "their own licence, so this is an interface rather than a vendored "
+          "model — the same reasoning as mv.calc.register_calculator.\n\n"
+          "Worth knowing before reaching for one: 2026 out-of-distribution "
+          "studies find plain CGCNN and ALIGNN generalise better than "
+          "fine-tuned foundation embeddings, attributed to representation "
+          "collapse. Learned features are not automatically the better choice.",
+)
+def embed(md: AnnData, model: str, source: str = "input",
+          key_added: str | None = None) -> None:
+    """Deposit a pretrained model's latent vectors as a descriptor block."""
+    if model not in _EMBEDDERS:
+        raise KeyError(
+            f"no embedder {model!r}; registered: {sorted(_EMBEDDERS)}. "
+            f"matverse ships none — register one with "
+            f"mv.feat.register_embedder({model!r}, fn). "
+            f"mv.feat.element_stats needs nothing extra.")
+
+    function, meta = _EMBEDDERS[model]
+    block = key_added or f"X_{model}"
+    vectors = np.asarray(function(structures(md, source)), dtype=float)
+    if vectors.ndim != 2 or len(vectors) != md.n_obs:
+        raise ValueError(
+            f"embedder {model!r} returned shape {vectors.shape}; expected "
+            f"({md.n_obs}, d) — one row per material")
+
+    md.obsm[block] = vectors
+    md.uns["features"][block] = {
+        "names": [f"{model}_{i}" for i in range(vectors.shape[1])],
+        "featurizer": meta["method"], "license": meta.get("license")}
+    record(md, "feat.embed", model=model, source=source, dim=vectors.shape[1])
+
+
 @register_function(
     aliases=["matminer features", "matminer featurizer", "featurize with "
              "matminer"],
@@ -228,5 +296,6 @@ def similarity(md: AnnData, block: str = "X_element_stats") -> None:
     record(md, "feat.similarity", block=block)
 
 
-__all__ = ["element_stats", "composition", "soap", "matminer", "similarity",
+__all__ = ["element_stats", "composition", "soap", "embed", "register_embedder",
+           "matminer", "similarity",
            "STATISTICS"]

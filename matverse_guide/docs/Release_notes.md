@@ -1,5 +1,39 @@
 # Release notes
 
+## v0.1.6
+
+The last concrete gaps the roadmap named. **96 functions across 16 namespaces.**
+
+- **`mv.dft` is no longer VASP-only.** `code='espresso'` writes Quantum ESPRESSO
+  input. Pseudopotentials are named, not shipped: which set a run used is part of
+  the level of theory — SSSP and PSLibrary disagree for the same functional — so
+  guessing a filename would put a silent choice into a result the object claims
+  to record.
+- **`mv.pp.defects`** enumerates vacancies and substitutions in a supercell,
+  one per symmetry-inequivalent site. Without that deduplication a 32-atom
+  elemental supercell yields 32 identical vacancies and wastes a calculator on
+  31 of them. Defect *formation energies* need charge states, a chemical
+  potential and a finite-size correction, which is what doped and pydefect exist
+  for; this builds the structures.
+- **`mv.thermo.pourbaix`** gives distance from aqueous stability at a pH and
+  potential. A material on the solid-state hull can still dissolve, which is why
+  it is a separate question rather than a column of the same one. Needs
+  Materials Project's fitted ion energies and cannot be computed from a
+  candidate set alone.
+- **`mv.feat.embed`** takes a pretrained model's latent vectors, through the
+  same registration interface as `mv.calc.register_calculator`. matverse ships
+  no embedder — weights are hundreds of megabytes with their own licences — and
+  the docstring notes the 2026 finding that plain CGCNN and ALIGNN generalise
+  better out of distribution than fine-tuned foundation embeddings.
+
+### Fixed
+
+`mv.pp.defects` silently skipped its own symmetry deduplication.
+`SpacegroupAnalyzer` was imported inside the calling function, so the helper
+raised `NameError`, hit a bare `except`, and fell back to enumerating every
+site. The test that caught it asserts the physics — one distinct vacancy in an
+elemental fcc supercell — rather than a stored count.
+
 ## v0.1.5
 
 Working past memory, and a benchmark that can fail.

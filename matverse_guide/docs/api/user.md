@@ -12,7 +12,7 @@ agent. Every entry names the state it reads and the state it writes, and each of
 those claims is verified by execution in `tests/test_contracts.py` rather than
 asserted.
 
-Public registry entries listed here: 92
+Public registry entries listed here: 96
 
 Look a function up by intent rather than by name:
 
@@ -62,6 +62,7 @@ Structure standardisation, quality control, filtering, deduplication and cross-d
    :nosignatures:
 
    pp.dedup
+   pp.defects
    pp.describe
    pp.filter_elements
    pp.filter_materials
@@ -85,7 +86,9 @@ Descriptors into `obsm`.
    :nosignatures:
 
    feat.element_stats
+   feat.embed
    feat.matminer
+   feat.register_embedder
    feat.similarity
    feat.soap
 ```
@@ -156,6 +159,7 @@ Convex hull, reactions, chemical potentials.
 
    thermo.chempot_limits
    thermo.hull
+   thermo.pourbaix
    thermo.reaction
    thermo.references_from_mp
 ```
@@ -339,6 +343,7 @@ arguments — `obs['energy_{level}']` becomes `obs['energy_emt']` when you pass
 | `mv.pp.strain` | `obsm['structures']['{name}']` |
 | `mv.pp.supercell` | `obsm['structures']['{name}']` |
 | `mv.feat.element_stats` | `obsm['X_element_stats']`, `uns['features']['X_element_stats']` |
+| `mv.feat.embed` | `obsm['X_{model}']`, `uns['features']['X_{model}']` |
 | `mv.feat.matminer` | `obsm['X_matminer']`, `uns['features']['X_matminer']` |
 | `mv.feat.similarity` | `obsp['similarity_{block}']` |
 | `mv.feat.soap` | `obsm['X_soap']`, `uns['features']['X_soap']` |
@@ -359,6 +364,7 @@ arguments — `obs['energy_{level}']` becomes `obs['energy_emt']` when you pass
 | `mv.prop.xrd` | `obsm['xrd_{level}']`, `uns['grids']`, `uns['levels']['{level}']` |
 | `mv.thermo.chempot_limits` | `uns['chempot_limits']` |
 | `mv.thermo.hull` | `obs['e_above_hull_{level}']`, `obs['is_stable_{level}']`, `obs['formation_energy_{level}']`, `obs['decomposes_to_{level}']`, `uns['phase_diagram']` |
+| `mv.thermo.pourbaix` | `obs['pourbaix_decomposition']`, `uns['pourbaix']` |
 | `mv.thermo.reaction` | `uns['reactions']` |
 | `mv.dft.read_outputs` | `obs['energy_{level}']`, `obs['energy_per_atom_{level}']`, `obs['band_gap_{level}']`, `obs['converged_{level}']`, `obsm['structures']['relaxed_{level}']`, `uns['levels']['{level}']`, `uns['dft']` |
 | `mv.dft.write_inputs` | `obs['dft_directory']`, `written to disk`, `uns['dft']` |

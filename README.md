@@ -271,7 +271,7 @@ exactly `obs` versus `obsm`.
 
 ## Status
 
-v0.1.5. **92 functions across 16 namespaces**, every one carrying a registry
+v0.1.6. **96 functions across 16 namespaces**, every one carrying a registry
 entry whose claims are verified by execution — currently **142/142** — plus
 `matverse-bench`, whose grader contains no model calls. See [DESIGN.md](DESIGN.md) for the
 full plan and [Release notes](matverse_guide/docs/Release_notes.md) for what
@@ -316,11 +316,13 @@ Still open:
 - **`harmonize` is fitted, not validated.** It recovers an injected offset
   exactly on synthetic anchors. Whether it improves a real
   MP-versus-OQMD-versus-Alexandria hull is unmeasured.
-- **DFT input generation is VASP only.** Quantum ESPRESSO is a pymatgen
-  `PWInput` away and is not written. Workflow *submission* stays delegated to
-  atomate2 and quacc by choice, not by omission.
-- **No graph-network or fine-tuned-potential backends.** `mv.model` wires
-  scikit-learn only. Those belong behind `register_model` rather than vendored.
+- **No models ship.** `mv.calc`, `mv.model` and `mv.feat.embed` are registration
+  interfaces; matverse vendors no interatomic potential, no graph network and no
+  embedder. That is a choice — weights are hundreds of megabytes with their own
+  licences, and the leaderboard reorders monthly — but it means a fresh install
+  screens with EMT until you register something better.
+- **Workflow submission stays delegated** to atomate2, quacc and AiiDA. `mv.dft`
+  writes inputs and harvests outputs; it does not run jobs.
 - **Phonons are gamma-point frozen displacements**, which samples only the
   q-points commensurate with the supercell. phonopy does the full job and
   exploits symmetry; this is the version that needs no extra dependency.

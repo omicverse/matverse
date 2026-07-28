@@ -82,12 +82,14 @@ MANIFEST = "matverse.json"
 def write_inputs(md: AnnData, root, preset: str = "relax",
                  source: str = "input", code: str = "vasp",
                  overrides: dict | None = None,
-                 potcar_spec: bool = True) -> list:
+                 potcar_spec: bool = True,
+                 pseudopotentials: dict | None = None) -> list:
     """Write one input directory per material. Returns the paths written."""
+    if code == "espresso":
+        return _write_espresso(md, root, preset, source, overrides,
+                               pseudopotentials)
     if code != "vasp":
-        raise ValueError(f"only code='vasp' is implemented; got {code!r}. "
-                         f"Quantum ESPRESSO input is a pymatgen PWInput away "
-                         f"and is not written yet.")
+        raise ValueError(f"code must be 'vasp' or 'espresso', got {code!r}")
     if preset not in VASP_PRESETS:
         raise ValueError(f"unknown preset {preset!r}; use {sorted(VASP_PRESETS)}")
 
@@ -140,6 +142,73 @@ def write_inputs(md: AnnData, root, preset: str = "relax",
             "pymatgen at your own with PMG_VASP_PSP_DIR and set "
             "potcar_spec=False.")
     record(md, "dft.write_inputs", preset=preset, source=source,
+           n_written=int(sum(1 for w in written if w)))
+    return written
+
+
+#: Quantum ESPRESSO calculation types, by matverse preset name.
+QE_CALCULATIONS = {"relax": "vc-relax", "static": "scf", "bands": "bands",
+                   "scan": "vc-relax", "hse": "scf"}
+
+
+def _write_espresso(md: AnnData, root, preset: str, source: str,
+                    overrides: dict | None,
+                    pseudopotentials: dict | None) -> list:
+    """Quantum ESPRESSO input, one directory per material.
+
+    Pseudopotentials are named, not shipped. Which set a run used is part of the
+    level of theory — SSSP efficiency and PSLibrary give different numbers for
+    the same functional — so guessing a filename would put a silent choice into
+    a result the object claims to record.
+    """
+    from pymatgen.io.pwscf import PWInput
+
+    if preset not in QE_CALCULATIONS:
+        raise ValueError(f"unknown preset {preset!r}; use "
+                         f"{sorted(QE_CALCULATIONS)}")
+
+    root = Path(root)
+    root.mkdir(parents=True, exist_ok=True)
+    written, failed = [], []
+
+    for name, structure in zip(md.obs_names, structures(md, source)):
+        directory = root / str(name)
+        directory.mkdir(parents=True, exist_ok=True)
+        symbols = sorted({str(el) for el in structure.composition.elements})
+        pseudo = {s: (pseudopotentials or {}).get(s, f"{s}.UPF")
+                  for s in symbols}
+        try:
+            PWInput(
+                structure, pseudo=pseudo,
+                control={"calculation": QE_CALCULATIONS[preset],
+                         "prefix": str(name), "tprnfor": True, "tstress": True},
+                system={"ecutwfc": 60, "ecutrho": 480,
+                        **(overrides or {}).get("system", {})},
+                electrons={"conv_thr": 1e-8},
+                kpoints_grid=(6, 6, 6),
+            ).write_file(str(directory / "pw.in"))
+        except Exception as exc:
+            failed.append(f"{name}: {type(exc).__name__}: {exc}")
+            written.append("")
+            continue
+        (directory / MANIFEST).write_text(json.dumps({
+            "obs_name": str(name), "preset": preset, "code": "espresso",
+            "source_variant": source,
+            "reference": PRESET_REFERENCE.get(preset),
+        }, indent=2), encoding="utf-8")
+        written.append(str(directory))
+
+    md.obs["dft_directory"] = written
+    md.uns["dft"] = {
+        "root": str(root), "preset": preset, "code": "espresso",
+        "source": source, "reference": PRESET_REFERENCE.get(preset),
+        "n_written": int(sum(1 for w in written if w)), "errors": failed,
+        "note": "pseudopotentials are named, not shipped. Which set a run used "
+                "is part of the level of theory — SSSP and PSLibrary disagree "
+                "for the same functional — so pass pseudopotentials= rather "
+                "than accepting the placeholder filenames.",
+    }
+    record(md, "dft.write_inputs", preset=preset, source=source, code="espresso",
            n_written=int(sum(1 for w in written if w)))
     return written
 

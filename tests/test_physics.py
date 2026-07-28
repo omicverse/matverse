@@ -63,9 +63,31 @@ class TestDftInputs:
         with pytest.raises(ValueError, match="unknown preset"):
             mv.dft.write_inputs(md, tmp_path / "runs", preset="magic")
 
-    def test_only_vasp_is_claimed(self, md, tmp_path):
-        with pytest.raises(ValueError, match="only code='vasp'"):
-            mv.dft.write_inputs(md, tmp_path / "runs", code="espresso")
+    def test_an_unknown_code_is_refused(self, md, tmp_path):
+        with pytest.raises(ValueError, match="'vasp' or 'espresso'"):
+            mv.dft.write_inputs(md, tmp_path / "runs", code="castep")
+
+    def test_quantum_espresso_input_is_written(self, md, tmp_path):
+        from pathlib import Path
+        written = mv.dft.write_inputs(md, tmp_path / "qe", code="espresso")
+        assert md.uns["dft"]["code"] == "espresso"
+        text = (Path(written[0]) / "pw.in").read_text()
+        assert "calculation" in text and "vc-relax" in text
+
+    def test_pseudopotentials_are_named_not_shipped(self, md, tmp_path):
+        """Which pseudopotential set a run used is part of the level of theory
+        — SSSP and PSLibrary disagree for the same functional — so guessing a
+        filename would put a silent choice into a recorded result."""
+        mv.dft.write_inputs(md, tmp_path / "qe", code="espresso")
+        assert "not shipped" in md.uns["dft"]["note"]
+
+    def test_a_named_pseudopotential_is_used(self, md, tmp_path):
+        from pathlib import Path
+        written = mv.dft.write_inputs(
+            md, tmp_path / "qe", code="espresso",
+            pseudopotentials={"Al": "Al.pbe-n-kjpaw_psl.1.0.0.UPF"})
+        text = (Path(written[0]) / "pw.in").read_text()
+        assert "Al.pbe-n-kjpaw_psl.1.0.0.UPF" in text
 
     def test_presets_describe_themselves(self):
         table = mv.dft.presets()
@@ -127,6 +149,67 @@ class TestDftOutputs:
     def test_a_missing_root_is_an_error(self, md, tmp_path):
         with pytest.raises(FileNotFoundError):
             mv.dft.read_outputs(md, tmp_path / "nowhere", level="pbe")
+
+
+class TestDefects:
+    def test_vacancies_are_enumerated(self, md):
+        defective = mv.pp.defects(md, supercell=(2, 1, 1))
+        assert defective.n_obs > md.n_obs
+        assert set(defective.obs["defect"]) == {"vacancy"}
+        assert set(defective.obs["parent"]) <= set(md.obs_names)
+
+    def test_symmetry_equivalent_sites_are_not_repeated(self):
+        """A 32-atom supercell of an elemental fcc metal has one distinct
+        vacancy, not 32. Enumerating all of them wastes a calculator on 31."""
+        from pymatgen.core import Lattice, Structure
+        fcc = Structure(Lattice.cubic(3.61), ["Cu"] * 4,
+                        [[0, 0, 0], [0, .5, .5], [.5, 0, .5], [.5, .5, 0]])
+        md = mv.data.from_structures([fcc])
+        defective = mv.pp.defects(md, supercell=(2, 2, 2))
+        assert defective.n_obs == 1
+
+    def test_substitutions_widen_the_element_axis(self, md):
+        defective = mv.pp.defects(md, supercell=(1, 1, 1),
+                                  kinds=("substitution",),
+                                  substitutions={"Al": ["Mg"]})
+        assert "Mg" in set(defective.var_names)
+        assert set(defective.obs["added"]) == {"Mg"}
+
+    def test_substitution_without_a_mapping_is_refused(self, md):
+        with pytest.raises(ValueError, match="no substitutions"):
+            mv.pp.defects(md, kinds=("substitution",))
+
+    def test_an_unknown_kind_is_named(self, md):
+        with pytest.raises(ValueError, match="unknown defect kind"):
+            mv.pp.defects(md, kinds=("interstitial",))
+
+    def test_a_defect_dataset_is_an_ordinary_dataset(self, md):
+        defective = mv.pp.defects(md, supercell=(1, 1, 1))
+        mv.pp.describe(defective)
+        assert "formula" in defective.obs
+        assert any(step.startswith("pp.defects")
+                   for step in mv.provenance(defective))
+
+
+class TestEmbedders:
+    def test_a_registered_embedder_deposits_a_block(self, md):
+        def fake(structures_):
+            return np.array([[len(s), float(s.volume)] for s in structures_])
+
+        mv.feat.register_embedder("fake", fake, method="FakeNet",
+                                  license="MIT")
+        mv.feat.embed(md, model="fake")
+        assert md.obsm["X_fake"].shape == (md.n_obs, 2)
+        assert md.uns["features"]["X_fake"]["license"] == "MIT"
+
+    def test_an_unregistered_model_says_none_ship(self, md):
+        with pytest.raises(KeyError, match="matverse ships none"):
+            mv.feat.embed(md, model="nothing-here")
+
+    def test_a_wrong_shape_is_caught(self, md):
+        mv.feat.register_embedder("wrong", lambda s: np.zeros((2, 3)))
+        with pytest.raises(ValueError, match="one row per material"):
+            mv.feat.embed(md, model="wrong")
 
 
 class TestReactions:
