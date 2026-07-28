@@ -323,7 +323,7 @@ arguments — `obs['energy_{level}']` becomes `obs['energy_emt']` when you pass
 
 | Function | Writes |
 |---|---|
-| `mv.data.from_ase` | `obsm['structures']['input']`, `uns['sites']`, `X` |
+| `mv.data.from_ase` | `obsm['structures']['input']`, `X` |
 | `mv.data.from_ase_file` | `obsm['structures']['input']`, `X` |
 | `mv.data.from_cif` | `obsm['structures']['input']`, `obs['source_file']`, `X` |
 | `mv.data.from_iterable` | `obsm['structures']['input']`, `X` |

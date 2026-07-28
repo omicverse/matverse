@@ -141,25 +141,36 @@ def to_matminer(md: AnnData, variant: str = "input") -> pd.DataFrame:
     category="data",
     description="Build a dataset from ASE Atoms objects, keeping per-atom "
                 "arrays rather than dropping them.",
-    produces={"structures": ["input"], "uns": ["sites"], "X": ["composition"]},
-    examples=["md = mv.data.from_ase(atoms_list)"],
-    related=["mv.data.to_ase"],
-    notes="Per-atom arrays go to uns['sites'] as one record per material. That "
-          "is honest but not vectorised; a proper site axis is the open design "
-          "problem named in the README.",
+    produces={"structures": ["input"], "X": ["composition"]},
+    examples=["md = mv.data.from_ase(atoms_list)",
+              "sites = mv.multi.sites(mv.data.from_ase(atoms_list))"],
+    related=["mv.data.to_ase", "mv.multi.sites"],
+    notes="Per-atom arrays — magnetic moments, charges, tags — become site "
+          "properties on the structure itself, so they travel with it, "
+          "serialise with it, and appear as columns the moment you build a "
+          "sites object with mv.multi.sites.\n\n"
+          "They are deliberately not put in uns. Per-atom data is aligned to a "
+          "material, and uns does not subset with the object: md[mask] would "
+          "keep every record while dropping rows, leaving each surviving row "
+          "pointing at the wrong atoms. That is the same failure structures "
+          "themselves had before v0.1.1.",
 )
 def from_ase(atoms_list: list, obs: pd.DataFrame | None = None) -> AnnData:
     """From ASE ``Atoms``. Per-atom arrays are kept, not silently dropped."""
     from pymatgen.io.ase import AseAtomsAdaptor
 
     adaptor = AseAtomsAdaptor()
-    md = new([adaptor.get_structure(a) for a in atoms_list], obs,
-             source="data.from_ase")
-    md.uns["sites"] = [
-        {k: v.tolist() for k, v in a.arrays.items()
-         if k not in ("positions", "numbers")}
-        for a in atoms_list]
-    return md
+    built = []
+    for atoms in atoms_list:
+        structure = adaptor.get_structure(atoms)
+        for key, values in atoms.arrays.items():
+            if key in ("positions", "numbers"):
+                continue                     # already the structure's own state
+            values = np.asarray(values)
+            if len(values) == len(structure):
+                structure.add_site_property(key, values.tolist())
+        built.append(structure)
+    return new(built, obs, source="data.from_ase")
 
 
 @register_function(

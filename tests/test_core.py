@@ -141,6 +141,54 @@ class TestRoundTrip:
         assert "X_element_stats" in back.obsm
         assert back.uns["provenance"][0] == "data.from_structures"
 
+    def test_ase_per_atom_arrays_stay_aligned(self):
+        """Per-atom data belongs to a material, so it cannot live in uns.
+
+        uns does not subset: md[mask] would keep every record while dropping
+        rows, leaving each surviving row pointing at the wrong atoms. Putting
+        the arrays on the structure's own site properties makes alignment
+        automatic — the same lesson structures themselves taught in v0.1.1.
+        """
+        from ase.build import bulk
+
+        atoms = [bulk("Cu", "fcc", a=3.61, cubic=True),
+                 bulk("Al", "fcc", a=4.05, cubic=True)]
+        for i, a in enumerate(atoms):
+            a.arrays["magmom"] = np.full(len(a), float(i) + 1)
+
+        md = mv.data.from_ase(atoms)
+        assert "sites" not in md.uns
+        assert mv.structures(md)[0].site_properties["magmom"][0] == 1.0
+
+        subset = md[[1]].copy()
+        assert mv.structures(subset)[0].site_properties["magmom"][0] == 2.0
+
+    def test_ase_per_atom_arrays_survive_h5ad(self, tmp_path):
+        from ase.build import bulk
+
+        atoms = [bulk("Cu", "fcc", a=3.61, cubic=True)]
+        atoms[0].arrays["magmom"] = np.arange(len(atoms[0]), dtype=float)
+
+        md = mv.data.from_ase(atoms)
+        path = tmp_path / "ase.h5ad"
+        md.write_h5ad(path)
+
+        import anndata
+        back = anndata.read_h5ad(path)
+        assert mv.structures(back)[0].site_properties["magmom"] == [0.0, 1.0,
+                                                                    2.0, 3.0]
+
+    def test_ase_per_atom_arrays_reach_the_sites_axis(self):
+        """The payoff: they need no separate plumbing to become columns."""
+        from ase.build import bulk
+
+        atoms = [bulk("Cu", "fcc", a=3.61, cubic=True)]
+        atoms[0].arrays["magmom"] = np.arange(len(atoms[0]), dtype=float)
+
+        sites = mv.multi.sites(mv.data.from_ase(atoms))
+        assert "site_magmom" in sites.obs
+        assert list(sites.obs["site_magmom"]) == [0.0, 1.0, 2.0, 3.0]
+
     def test_matminer_dataframe_round_trip(self, md):
         mv.pp.describe(md)
         df = mv.data.to_matminer(md)

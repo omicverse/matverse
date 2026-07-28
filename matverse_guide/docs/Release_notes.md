@@ -1,5 +1,37 @@
 # Release notes
 
+## v0.1.7
+
+### Fixed
+
+`mv.data.from_ase` put per-atom arrays — magnetic moments, charges, tags — into
+`uns['sites']` as one record per material. That was wrong twice over, and the
+two failures are the same two the substrate has taught before:
+
+- **It did not subset.** `uns` is untouched by `md[mask]`, so filtering a dataset
+  left every surviving row pointing at another material's atoms.
+- **It did not save.** A list of dicts is not writable to `h5ad` at all, so any
+  object built with `from_ase` failed on `write_h5ad`.
+
+No test caught it because none combined `from_ase` with a save or a subset.
+Three now do.
+
+Per-atom arrays are now attached as **site properties on the structure itself**.
+They travel with it, serialise with it, and appear as columns the moment someone
+calls `mv.multi.sites` — no extra plumbing, and alignment is automatic rather
+than maintained. The function's note about a site axis being "the open design
+problem" was also stale: `mv.multi.sites` shipped in v0.1.2.
+
+### Documented
+
+The Developer guide gains the rule that decides where a result lives: **put it
+in `uns` only if it is not aligned to an axis.** `uns` is a first-class part of
+the model and holds much more than it gets credit for — scalars, arrays,
+DataFrames and nested dicts of those all serialise — and matverse uses it
+heavily and correctly for levels, grids, screens and provenance, none of which
+are per-material. What it will not do is subset, so anything of length `n_obs`
+belongs in `obs`, `obsm` or `obsp`.
+
 ## v0.1.6
 
 The last concrete gaps the roadmap named. **96 functions across 16 namespaces.**

@@ -67,7 +67,7 @@ from ._core import (check_commercial_use, compare_levels, grid_of,  # noqa: F401
                     variants)
 from ._registry import get_registry
 
-__version__ = "0.1.6"
+__version__ = "0.1.7"
 
 #: The process-global function registry.
 registry = get_registry()

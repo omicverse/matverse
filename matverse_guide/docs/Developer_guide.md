@@ -18,6 +18,34 @@ also compute gets `_<level>` in its slot name, and the method gets a record in
 produced the missing slot. `matverse._core.require` does this by asking the
 registry, so the message stays correct as the library changes.
 
+**Put it in `uns` only if it is not aligned to an axis.** This is the rule that
+decides where a result lives, and getting it wrong has cost this library two
+bugs.
+
+`uns` is a first-class part of the model and holds far more than it is usually
+given credit for — scalars, strings, arrays, DataFrames, and arbitrarily nested
+dicts of those all write to `h5ad` without complaint. matverse uses it heavily
+and correctly: `uns['levels']` is keyed by level, `uns['grids']` by quantity,
+`uns['screens']` by screen name, `uns['phase_diagram']` describes the object.
+None of those is per-material, which is exactly why `uns` is right for them.
+
+What `uns` will not do is subset. `md[mask]` drops rows and leaves `uns`
+untouched, so **anything with one entry per material must live in `obs`,
+`obsm` or `obsp`** — otherwise every surviving row silently points at the wrong
+entry. Structures were in `uns` until v0.1.1 and had precisely that bug;
+`mv.data.from_ase` kept per-atom arrays there until v0.1.7 and had it too. If a
+value has length `n_obs`, it does not belong in `uns`.
+
+Two smaller `uns` rules, both learned by trying to save:
+
+- **Heterogeneous lists do not serialise.** A list of dicts, a list of ragged
+  arrays, and a mixed-type tuple each fail on write. Use
+  `matverse._core.append_record` / `records`, which store an ordered list as a
+  dict keyed by a zero-padded index and write cleanly.
+- **Per-atom data belongs on the structure.** pymatgen site properties travel
+  with the structure, serialise with it, and appear as columns the moment
+  someone calls `mv.multi.sites`. No extra plumbing, and alignment is automatic.
+
 **Decorate in the same commit.** Every public function lands with its
 `@register_function` entry. Retrofitting a registry onto a grown library is an
 afternoon of work per few hundred functions; doing it as you go costs nothing and
