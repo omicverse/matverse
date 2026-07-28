@@ -4,3 +4,16 @@ __pycache__/
 dist/
 build/
 .pytest_cache/
+
+# Docs build output, and the autosummary stubs Sphinx writes into it.
+matverse_guide/docs/_build/
+matverse_guide/docs/api/reference/
+
+# api/user.md is regenerated from the registry on every build but stays checked
+# in, so it renders on GitHub and a diff shows when the public API changed.
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Build artefacts
+*.egg-info/

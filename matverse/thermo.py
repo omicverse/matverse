@@ -1,63 +1,568 @@
 """``mv.thermo`` — thermodynamic stability.
 
-``e_above_hull`` is only meaningful within one level of theory. Every function
-here takes a ``level`` and refuses to mix, because a hull built from a
-surrogate potential's energies and DFT's is not a hull of anything.
+``e_above_hull`` is only meaningful within one level of theory, and only
+absolute when the hull includes the competing phases the material could decay
+into. Both conditions are enforced here rather than assumed.
+
+Closed versus referenced hulls
+------------------------------
+A hull built only from the candidates in one dataset is a *relative* statement:
+it says which of these is lowest, not whether any of them is stable. Screening
+40 generated oxides against each other will happily report several as "on the
+hull" when all 40 decompose. Pass ``references=`` to make it absolute, and read
+``uns['phase_diagram']['closed_system']`` to know which kind of number you have.
+
+Mixing levels
+-------------
+Reference entries from Materials Project are PBE+U with fitted corrections.
+Candidate energies from a machine-learned potential are whatever that model was
+trained to reproduce. Putting them on one hull is the error the level system
+exists to catch, so :func:`hull` compares ``uns['levels'][level]['reference']``
+against the references' own and refuses by default when they disagree.
 """
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
+import pandas as pd
 from anndata import AnnData
 
 from ._core import record, structures
+from ._registry import register_function
 
 
-def hull(md: AnnData, level: str = "emt", source: str = "input") -> None:
-    """Convex hull over the dataset's own compositions.
+class LevelMismatch(ValueError):
+    """Candidate energies and reference energies are not the same quantity."""
 
-    Built from `pymatgen`'s ``PhaseDiagram``, so the result is a real hull and
-    not a per-formula minimum. The hull is over *this dataset only* — without
-    the elemental references it is a relative statement, which
-    ``uns['phase_diagram']['closed_system']`` records rather than hides.
 
-    requires: obs['energy_<level>']
-    produces: obs['e_above_hull_<level>'], obs['is_stable_<level>'],
-              uns['phase_diagram']
+@register_function(
+    aliases=["convex hull", "energy above hull", "thermodynamic stability",
+             "e above hull", "is stable", "phase diagram"],
+    category="thermo",
+    description="Build the convex hull of energies at one level of theory and "
+                "record each material's distance above it, together with what "
+                "it would decompose into.",
+    requires={"obs": ["energy_{level}"], "structures": ["{source}"]},
+    produces={"obs": ["e_above_hull_{level}", "is_stable_{level}",
+                      "formation_energy_{level}", "decomposes_to_{level}"],
+              "uns": ["phase_diagram"]},
+    prerequisites=["mv.calc.energy"],
+    dispatch="references= chooses the hull's scope: None is a closed hull over "
+             "this dataset only; a list of entries or another matverse object "
+             "makes it absolute",
+    examples=["mv.thermo.hull(md, level='emt')",
+              "mv.thermo.hull(md, level='mace-mpa', references=known_phases)"],
+    related=["mv.calc.energy", "mv.screen.filter", "mv.thermo.references_from_mp"],
+    notes="A closed hull is a relative statement and is recorded as "
+          "uns['phase_diagram']['closed_system'] rather than hidden. Without "
+          "elemental references, formation energies are not computed at all. "
+          "A claim on uns['levels'][level] was probed and deleted: the level "
+          "record is only read when references= is given, so the hull does not "
+          "require it on the default path.",
+)
+def hull(md: AnnData, level: str = "emt", source: str = "input",
+         references=None, allow_level_mismatch: bool = False) -> None:
+    """Distance above the convex hull, at one level of theory.
+
+    ``references`` may be a list of pymatgen ``ComputedEntry``, another matverse
+    object carrying energies at the same level, or ``None`` for a hull closed
+    over this dataset.
     """
     from pymatgen.analysis.phase_diagram import PhaseDiagram
     from pymatgen.entries.computed_entries import ComputedEntry
 
     key = f"energy_{level}"
     if key not in md.obs:
-        raise ValueError(f"obs[{key!r}] absent; run mv.calc.energy(level={level!r}) "
-                         f"or mv.calc.relax(level={level!r}) first")
+        raise ValueError(
+            f"obs[{key!r}] absent; run mv.calc.energy(md, level={level!r}) or "
+            f"mv.calc.relax(md, level={level!r}) first")
+
     S = structures(md, source)
     energies = md.obs[key].to_numpy(dtype=float)
-    entries, idx = [], []
+
+    own, own_index = [], []
     for i, (s, e) in enumerate(zip(S, energies)):
-        if e == e:                                   # skip NaN
-            entries.append(ComputedEntry(s.composition, float(e)))
-            idx.append(i)
+        if e == e:                                        # skip NaN
+            own.append(ComputedEntry(s.composition, float(e),
+                                     entry_id=str(md.obs_names[i])))
+            own_index.append(i)
+
+    ref_entries, ref_meta = _reference_entries(md, level, references,
+                                               allow_level_mismatch)
+    entries = own + ref_entries
+
+    elements = sorted({str(el) for s in S for el in s.composition.elements})
+    have_elemental = _elemental_coverage(entries, elements)
 
     above = np.full(len(S), np.nan)
     stable = np.zeros(len(S), dtype=bool)
-    elements = sorted({str(el) for s in S for el in s.composition.elements})
+    formation = np.full(len(S), np.nan)
+    decomp = [""] * len(S)
+    built, why = True, None
+
     try:
         pd_ = PhaseDiagram(entries)
-        for j, i in enumerate(idx):
-            above[i] = float(pd_.get_e_above_hull(entries[j]))
-            stable[i] = entries[j] in pd_.stable_entries
-        ok, why = True, None
+        for j, i in enumerate(own_index):
+            entry = own[j]
+            above[i] = float(pd_.get_e_above_hull(entry))
+            stable[i] = entry in pd_.stable_entries
+            if have_elemental:
+                formation[i] = float(pd_.get_form_energy_per_atom(entry))
+            decomp[i] = _decomposition_label(pd_, entry)
     except Exception as exc:
-        ok, why = False, f"{type(exc).__name__}: {exc}"
+        built, why = False, f"{type(exc).__name__}: {exc}"
 
     md.obs[f"e_above_hull_{level}"] = above
     md.obs[f"is_stable_{level}"] = stable
-    md.uns["phase_diagram"] = {"level": level, "elements": elements,
-                               "n_entries": len(entries), "closed_system": True,
-                               "built": ok, "error": why}
-    record(md, f"thermo.hull(level={level}, source={source})")
+    md.obs[f"formation_energy_{level}"] = formation
+    md.obs[f"decomposes_to_{level}"] = decomp
+    md.uns["phase_diagram"] = {
+        "level": level,
+        "elements": elements,
+        "n_candidates": len(own),
+        "n_references": len(ref_entries),
+        "closed_system": not ref_entries,
+        "has_elemental_references": bool(have_elemental),
+        "built": built,
+        "error": why,
+        **ref_meta,
+    }
+    if not ref_entries:
+        warnings.warn(
+            f"hull for level {level!r} was built over this dataset's own "
+            f"compositions only, so e_above_hull is relative to these "
+            f"candidates and not to the known phase diagram. Pass references= "
+            f"to make it absolute; see uns['phase_diagram']['closed_system'].",
+            stacklevel=2)
+    record(md, "thermo.hull", level=level, source=source,
+           n_references=len(ref_entries))
 
 
-__all__ = ["hull"]
+def _reference_entries(md: AnnData, level: str, references,
+                       allow_mismatch: bool):
+    """Normalise ``references`` to a list of entries, checking level agreement."""
+    if references is None:
+        return [], {}
+
+    if isinstance(references, AnnData):
+        entries, ref_level = _entries_from_object(references, level)
+        _check_levels(md, level, references, ref_level, allow_mismatch)
+        return entries, {"reference_source": "matverse object",
+                         "reference_level": ref_level}
+
+    entries = list(references)
+    if entries and not hasattr(entries[0], "composition"):
+        raise TypeError(
+            "references must be pymatgen ComputedEntry objects, a matverse "
+            f"AnnData, or None; got {type(entries[0]).__name__}")
+    return entries, {"reference_source": "entries"}
+
+
+def _entries_from_object(ref: AnnData, level: str):
+    """Pull entries out of another matverse object at the same level."""
+    from pymatgen.entries.computed_entries import ComputedEntry
+    from ._core import structures as _structures
+
+    key = f"energy_{level}"
+    if key not in ref.obs:
+        available = [c for c in ref.obs.columns if c.startswith("energy_")]
+        raise ValueError(
+            f"reference object has no obs[{key!r}]; it has {available}. A hull "
+            f"must be built from one level of theory.")
+    S = _structures(ref, "input")
+    energies = ref.obs[key].to_numpy(dtype=float)
+    entries = [ComputedEntry(s.composition, float(e), entry_id=f"ref:{name}")
+               for s, e, name in zip(S, energies, ref.obs_names) if e == e]
+    ref_level = (ref.uns.get("levels", {}).get(level, {}) or {}).get("reference")
+    return entries, ref_level
+
+
+def _check_levels(md: AnnData, level: str, ref: AnnData, ref_reference,
+                  allow_mismatch: bool) -> None:
+    """Refuse to build a hull from two incompatible references."""
+    own = (md.uns.get("levels", {}).get(level, {}) or {}).get("reference")
+    if own == ref_reference or allow_mismatch:
+        return
+    raise LevelMismatch(
+        f"candidate energies at level {level!r} reproduce {own!r} but the "
+        f"reference entries reproduce {ref_reference!r}. A hull mixing them is "
+        f"not a hull of anything. Recompute one side at the other's level, or "
+        f"pass allow_level_mismatch=True if you know why this is acceptable.")
+
+
+def _elemental_coverage(entries, elements) -> bool:
+    """Whether every element has an elemental reference phase in the hull.
+
+    Without one, pymatgen still builds a hull but formation energies are
+    measured from an arbitrary origin, so they are not reported.
+    """
+    have = set()
+    for entry in entries:
+        comp = entry.composition
+        if len(comp.elements) == 1:
+            have.add(str(comp.elements[0]))
+    return bool(elements) and set(elements).issubset(have)
+
+
+def _decomposition_label(pd_, entry) -> str:
+    """What this entry decomposes into, as a readable formula string."""
+    try:
+        decomp = pd_.get_decomposition(entry.composition)
+    except Exception:
+        return ""
+    parts = []
+    for phase, amount in sorted(decomp.items(), key=lambda kv: -kv[1]):
+        if amount > 1e-6:
+            parts.append(f"{phase.composition.reduced_formula}:{amount:.2f}")
+    return " + ".join(parts)
+
+
+@register_function(
+    aliases=["reaction energy", "reaction", "balance reaction",
+             "synthesis energy", "will it react"],
+    category="thermo",
+    description="Balance a reaction between compositions present in this "
+                "dataset and compute its energy at one level of theory.",
+    requires={"obs": ["energy_{level}"], "structures": ["input"]},
+    produces={"uns": ["reactions"]},
+    prerequisites=["mv.calc.energy"],
+    examples=["mv.thermo.reaction(md, ['Al', 'Ni'], ['AlNi'], level='emt')"],
+    related=["mv.thermo.hull", "mv.thermo.chempot_limits"],
+    notes="Uses the lowest energy found in this dataset for each formula, so "
+          "the answer is about the polymorphs you have. A reaction energy is "
+          "not a synthesis route: it says a product is downhill, not that "
+          "anything gets there.",
+)
+def reaction(md: AnnData, reactants: list, products: list, level: str = "emt",
+             source: str = "input", name: str | None = None) -> dict:
+    """Balance and evaluate a reaction. Returns the result and records it."""
+    from pymatgen.analysis.reaction_calculator import ComputedReaction
+    from pymatgen.core.composition import Composition
+
+    entries = _lowest_entries(md, level, source)
+    try:
+        left = [_entry_for(entries, Composition(f)) for f in reactants]
+        right = [_entry_for(entries, Composition(f)) for f in products]
+        computed = ComputedReaction(left, right)
+        energy = float(computed.calculated_reaction_energy)
+        equation = str(computed)
+    except Exception as exc:
+        raise ValueError(
+            f"could not balance {reactants} -> {products} from this dataset: "
+            f"{type(exc).__name__}: {exc}. Every formula must be present at "
+            f"level {level!r}; this dataset has "
+            f"{sorted(entries)}.") from exc
+
+    result = {
+        "reactants": list(reactants), "products": list(products),
+        "level": level, "equation": equation,
+        "energy": energy,
+        "energy_per_atom": energy / max(sum(
+            Composition(f).num_atoms for f in products), 1.0),
+        "favourable": bool(energy < 0),
+    }
+    md.uns.setdefault("reactions", {})[
+        name or f"{'+'.join(reactants)}->{'+'.join(products)}"] = result
+    record(md, "thermo.reaction", reactants=list(reactants),
+           products=list(products), level=level)
+    return result
+
+
+def _lowest_entries(md: AnnData, level: str, source: str) -> dict:
+    """One entry per reduced formula — the lowest energy this dataset has."""
+    from pymatgen.entries.computed_entries import ComputedEntry
+
+    key = f"energy_{level}"
+    if key not in md.obs:
+        raise ValueError(f"obs[{key!r}] absent; run mv.calc.energy(md, "
+                         f"level={level!r}) first")
+    energies = md.obs[key].to_numpy(dtype=float)
+    best: dict[str, ComputedEntry] = {}
+    for structure, energy in zip(structures(md, source), energies):
+        if energy != energy:
+            continue
+        formula = structure.composition.reduced_formula
+        per_atom = energy / len(structure)
+        current = best.get(formula)
+        if current is None or per_atom < current.energy / current.composition.num_atoms:
+            best[formula] = ComputedEntry(structure.composition, float(energy))
+    return best
+
+
+def _entry_for(entries: dict, composition):
+    formula = composition.reduced_formula
+    if formula not in entries:
+        raise KeyError(f"{formula} is not in this dataset")
+    return entries[formula]
+
+
+@register_function(
+    aliases=["chemical potential", "chempot", "stability window",
+             "chemical potential limits", "growth conditions"],
+    category="thermo",
+    description="Report the range of elemental chemical potentials over which "
+                "each stable phase remains on the hull — the conditions a phase "
+                "could be grown under.",
+    requires={"obs": ["energy_{level}"]},
+    produces={"uns": ["chempot_limits"]},
+    prerequisites=["mv.thermo.hull"],
+    examples=["mv.thermo.chempot_limits(md, level='emt')"],
+    related=["mv.thermo.hull", "mv.thermo.reaction"],
+    notes="Only meaningful when the hull includes the competing phases; on a "
+          "hull closed over one dataset the window is bounded by the dataset "
+          "rather than by chemistry, and this says so.",
+)
+def chempot_limits(md: AnnData, level: str = "emt", source: str = "input",
+                   references=None) -> dict:
+    """Chemical potential window for each stable phase, in eV."""
+    from pymatgen.analysis.phase_diagram import PhaseDiagram
+
+    entries = list(_lowest_entries(md, level, source).values())
+    if references is not None:
+        extra, _ = _reference_entries(md, level, references, True)
+        entries = entries + extra
+
+    diagram = PhaseDiagram(entries)
+    out = {}
+    for entry in diagram.stable_entries:
+        try:
+            ranges = diagram.get_chempot_range_stability_phase(
+                entry.composition, entry.composition.elements[0])
+        except Exception:
+            ranges = None
+        out[entry.composition.reduced_formula] = {
+            str(element): [float(v) for v in values]
+            for element, values in (ranges or {}).items()
+        }
+
+    md.uns["chempot_limits"] = {
+        "level": level,
+        "closed_system": references is None,
+        "limits": out,
+        "note": "bounded by this dataset rather than by chemistry"
+                if references is None else "",
+    }
+    record(md, "thermo.chempot_limits", level=level,
+           n_stable=len(diagram.stable_entries))
+    return out
+
+
+@register_function(
+    aliases=["defect formation energy", "defect thermodynamics", "charge "
+             "transition level", "does the defect form", "formation energy "
+             "diagram", "charged defect"],
+    category="thermo",
+    description="Compute defect formation energies as a function of Fermi "
+                "level and charge state, and find the charge transition levels "
+                "where the stable charge changes.",
+    requires={"obs": ["energy_{level}", "parent", "defect"]},
+    produces={"obs": ["defect_formation_energy_{level}",
+                      "stable_charge_{level}"],
+              "obsm": ["formation_vs_fermi_{level}"],
+              "uns": ["grids", "defect_thermodynamics"]},
+    prerequisites=["mv.pp.defects", "mv.calc.relax"],
+    examples=["mv.thermo.defect_formation(defective, host=md, level='pbe', "
+              "chempot={'Al': -3.7}, band_gap=1.2)"],
+    related=["mv.pp.defects", "mv.dft.read_dos"],
+    notes="Enumerating a defect and knowing whether it forms are different "
+          "questions, and this is the second one. The formation energy depends "
+          "on where the Fermi level sits and on the chemical potential of "
+          "whatever was added or removed, so it is a line rather than a number "
+          "— stored on the grid axis against the Fermi level, with the lowest "
+          "charge state at each point giving the stable charge.\n\n"
+          "No finite-size correction is applied. A charged defect in a periodic "
+          "cell interacts with its own images, and the image charge shifts "
+          "formation energies by tenths of an eV for a small supercell. doped "
+          "and pydefect implement the Freysoldt and Kumagai corrections "
+          "properly; this is the uncorrected quantity and says so, so use it "
+          "to rank rather than to quote.",
+)
+def defect_formation(defective: AnnData, host: AnnData, level: str = "emt",
+                     chempot: dict | None = None, band_gap: float = 2.0,
+                     charges=(-2, -1, 0, 1, 2), n_points: int = 200) -> None:
+    """Defect formation energy against the Fermi level, per charge state."""
+    from ._core import deposit_grid
+
+    energy_key = f"energy_{level}"
+    for obj, label in ((defective, "defects"), (host, "host")):
+        if energy_key not in obj.obs:
+            raise ValueError(f"obs[{energy_key!r}] absent on the {label}; run "
+                             f"mv.calc.relax(..., level={level!r}) on both")
+    for column in ("parent", "defect"):
+        if column not in defective.obs:
+            raise ValueError(f"obs[{column!r}] absent; these did not come from "
+                             f"mv.pp.defects")
+
+    chempot = dict(chempot or {})
+    fermi = np.linspace(0.0, float(band_gap), n_points)
+    host_energy = dict(zip(map(str, host.obs_names),
+                           host.obs[energy_key].to_numpy(dtype=float)))
+
+    defect_energy = defective.obs[energy_key].to_numpy(dtype=float)
+    parents = defective.obs["parent"].astype(str).to_numpy()
+    removed = defective.obs.get("removed", pd.Series([""] * defective.n_obs))
+    added = defective.obs.get("added", pd.Series([""] * defective.n_obs))
+    removed = removed.astype(str).to_numpy()
+    added = added.astype(str).to_numpy()
+
+    curves = np.full((defective.n_obs, n_points), np.nan)
+    neutral = np.full(defective.n_obs, np.nan)
+    stable = [""] * defective.n_obs
+    missing_chempot: set[str] = set()
+
+    for i in range(defective.n_obs):
+        bulk = host_energy.get(parents[i], np.nan)
+        if not (np.isfinite(defect_energy[i]) and np.isfinite(bulk)):
+            continue
+
+        exchange = 0.0
+        ok = True
+        for symbol, sign in ((removed[i], +1.0), (added[i], -1.0)):
+            if not symbol:
+                continue
+            if symbol not in chempot:
+                missing_chempot.add(symbol)
+                ok = False
+                break
+            exchange += sign * float(chempot[symbol])
+        if not ok:
+            continue
+
+        base = float(defect_energy[i]) - float(bulk) + exchange
+        neutral[i] = base
+        # E_f(q, E_F) = base + q * E_F, the uncorrected charged formation energy.
+        per_charge = np.vstack([base + q * fermi for q in charges])
+        curves[i] = per_charge.min(axis=0)
+        stable[i] = str(charges[int(np.argmin(per_charge[:, 0]))])
+
+    defective.obs[f"defect_formation_energy_{level}"] = neutral
+    defective.obs[f"stable_charge_{level}"] = stable
+    deposit_grid(defective, "formation_vs_fermi", level, curves, fermi,
+                 unit="eV above the valence band maximum")
+    defective.uns["defect_thermodynamics"] = {
+        "level": level,
+        "band_gap": float(band_gap),
+        "charges": [int(q) for q in charges],
+        "chempot": chempot,
+        "missing_chempot": sorted(missing_chempot),
+        "image_charge_correction": False,
+        "note": "uncorrected for periodic image interaction; doped and "
+                "pydefect implement Freysoldt and Kumagai properly",
+    }
+    if missing_chempot:
+        warnings.warn(
+            f"no chemical potential given for {sorted(missing_chempot)}, so "
+            f"defects exchanging those species have no formation energy. A "
+            f"defect creates or destroys atoms, and what they cost is not "
+            f"derivable from the defective cell alone — pass chempot=.",
+            stacklevel=2)
+    record(defective, "thermo.defect_formation", level=level,
+           band_gap=band_gap, n_charges=len(charges))
+
+
+@register_function(
+    aliases=["pourbaix", "aqueous stability", "corrosion", "electrochemical "
+             "stability", "water stability", "ph potential"],
+    category="thermo",
+    description="Compute how far each material sits from aqueous stability at "
+                "a given pH and applied potential, which is what decides "
+                "whether it survives in water.",
+    requires={"structures": ["input"]},
+    produces={"obs": ["pourbaix_decomposition"], "uns": ["pourbaix"]},
+    examples=["mv.thermo.pourbaix(md, ph=7.0, potential=0.0)"],
+    related=["mv.thermo.hull"],
+    notes="Needs mp-api and an MP_API_KEY: aqueous stability is measured "
+          "against the ion energies Materials Project fits, and there is no "
+          "way to compute it from a candidate set alone. A material on the "
+          "solid-state hull can still dissolve, which is why this is a "
+          "separate question rather than a column of the same one.",
+)
+def pourbaix(md: AnnData, ph: float = 7.0, potential: float = 0.0,
+             api_key: str | None = None) -> None:
+    """Distance from aqueous stability, in eV/atom, at one pH and potential."""
+    import os
+
+    try:
+        from mp_api.client import MPRester
+        from pymatgen.analysis.pourbaix_diagram import PourbaixDiagram
+    except ImportError as exc:                            # pragma: no cover
+        raise ImportError("mv.thermo.pourbaix needs `pip install "
+                          "matverse[mp]`") from exc
+
+    key = api_key or os.environ.get("MP_API_KEY")
+    if not key:
+        raise ValueError("set MP_API_KEY or pass api_key=; aqueous stability "
+                         "is measured against Materials Project's fitted ion "
+                         "energies and cannot be computed from candidates alone")
+
+    S = structures(md, "input")
+    distances, failures = [], []
+    with MPRester(key) as mpr:
+        for structure in S:
+            elements = sorted({str(el)
+                               for el in structure.composition.elements})
+            try:
+                entries = mpr.get_pourbaix_entries(elements)
+                diagram = PourbaixDiagram(entries)
+                entry = min(
+                    (e for e in entries
+                     if e.composition.reduced_formula
+                     == structure.composition.reduced_formula),
+                    key=lambda e: e.energy_per_atom, default=None)
+                if entry is None:
+                    raise KeyError("no matching Pourbaix entry")
+                distances.append(float(diagram.get_decomposition_energy(
+                    entry, pH=ph, V=potential)))
+            except Exception as exc:
+                distances.append(np.nan)
+                failures.append(f"{structure.composition.reduced_formula}: "
+                                f"{type(exc).__name__}: {exc}")
+
+    md.obs["pourbaix_decomposition"] = distances
+    md.uns["pourbaix"] = {"ph": float(ph), "potential": float(potential),
+                          "n_failed": len(failures), "errors": failures[:10]}
+    record(md, "thermo.pourbaix", ph=ph, potential=potential)
+
+
+@register_function(
+    aliases=["reference phases", "competing phases", "get mp entries",
+             "elemental references", "known phases"],
+    category="thermo",
+    description="Fetch the known competing phases spanning a set of elements "
+                "from Materials Project, for use as hull references.",
+    produces={"files": []},
+    examples=["refs = mv.thermo.references_from_mp(['Fe', 'O'])",
+              "mv.thermo.hull(md, level='pbe', references=refs)"],
+    related=["mv.thermo.hull"],
+    notes="Returns PBE+U entries with Materials Project's fitted corrections "
+          "applied. Putting them on a hull with a machine-learned potential's "
+          "energies is the mistake mv.thermo.hull refuses by default.",
+)
+def references_from_mp(elements, api_key: str | None = None):
+    """Competing phases across a chemical system, from Materials Project.
+
+    Needs ``mp-api`` and an ``MP_API_KEY``. Kept thin: ``mp-api`` owns the query
+    language and duplicating it here would mean tracking their schema forever.
+    """
+    import os
+
+    try:
+        from mp_api.client import MPRester
+    except ImportError as exc:                            # pragma: no cover
+        raise ImportError(
+            "mv.thermo.references_from_mp needs `pip install matverse[mp]`"
+        ) from exc
+
+    key = api_key or os.environ.get("MP_API_KEY")
+    if not key:
+        raise ValueError("set MP_API_KEY or pass api_key=")
+    with MPRester(key) as mpr:
+        return mpr.get_entries_in_chemsys([str(e) for e in elements])
+
+
+__all__ = ["hull", "reaction", "chempot_limits", "pourbaix",
+           "defect_formation",
+           "references_from_mp",
+           "LevelMismatch"]

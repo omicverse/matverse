@@ -4,18 +4,61 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "matverse"
-version = "0.1.0"
+version = "0.1.9"
 description = "A materials analysis ecosystem on the AnnData substrate"
 readme = "README.md"
-requires-python = ">=3.9"
-license = {text = "MIT"}
-dependencies = ["anndata>=0.9", "numpy", "pandas", "pymatgen", "ase"]
+requires-python = ">=3.10"
+license = {file = "LICENSE"}
+authors = [{name = "matverse contributors"}]
+keywords = ["materials science", "high-throughput screening", "anndata",
+            "density functional theory", "machine learning interatomic potentials"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Chemistry",
+    "Topic :: Scientific/Engineering :: Physics",
+]
+
+# Core stays deliberately small. This ecosystem's dependency conflicts are real
+# and current — AMSET pins Python >=3.9 while pymatgen requires >=3.11,
+# reaction-network's PyPI release trails its git by two years, matminer has not
+# released since April 2024 — so everything beyond this list is an optional
+# extra, imported inside the function that needs it and failing with an error
+# that names the extra. `pip install matverse` must never break an environment.
+dependencies = ["anndata>=0.9", "numpy", "pandas", "scipy", "pymatgen", "ase"]
 
 [project.optional-dependencies]
+analysis = ["scikit-learn", "igraph", "leidenalg"]   # mv.tl clustering routes
+descriptors = ["dscribe"]                            # mv.feat.soap
+multi = ["mudata"]                                   # mv.multi.to_mudata only
+plot = ["matplotlib"]                                # mv.pl
+ml = ["scikit-learn"]                                # mv.model estimators
 matminer = ["matminer"]
-mp = ["mp-api"]
-mlip = ["mace-torch", "chgnet"]
-dev = ["pytest"]
+mp = ["mp-api>=0.46.2"]                              # Delta-table data products
+mlip = ["mace-torch"]
+# Batched GPU molecular dynamics. torch-sim-atomistic requires Python >= 3.11
+# (>= 3.12 from its 0.4 line) while matverse's own floor is 3.10, so this extra
+# is installable only on a newer interpreter. mv.md.batched_available() reports
+# which situation an installation is in, and the ASE path works regardless.
+batched = ["torch-sim-atomistic"]
+dev = ["pytest", "build", "twine"]
+
+[project.urls]
+Homepage = "https://github.com/omicverse/matverse"
+Source = "https://github.com/omicverse/matverse"
+Issues = "https://github.com/omicverse/matverse/issues"
 
 [tool.setuptools.packages.find]
 include = ["matverse*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = [
+    "ignore::DeprecationWarning:spglib.*",
+    "ignore:Transforming to str index:UserWarning",
+]

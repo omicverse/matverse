@@ -1,0 +1,82 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.10 is the declared floor and 3.12 is where the newest pandas and
+        # numpy live. Both are load-bearing: pandas 3.0 string dtypes and its
+        # read-only to_numpy caught two real bugs that 3.10 hid, so testing only
+        # the floor would have shipped them.
+        python-version: ["3.10", "3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          # analysis and plot are installed because a third of the suite covers
+          # mv.tl's clustering routes and mv.pl, and skipping them silently
+          # would leave the badge green over untested code.
+          pip install -e ".[dev,analysis,plot,multi]"
+
+      - name: Show the environment the results belong to
+        run: |
+          python -c "
+          import importlib.metadata as m
+          for p in ('numpy','pandas','scipy','pymatgen','ase','anndata'):
+              print(f'{p:10s} {m.version(p)}')
+          "
+
+      - name: Test
+        run: pytest -q --durations=10
+
+      - name: Contract-verified rate
+        # Every registry claim is checked by execution rather than asserted.
+        # Printed on every run so a drop is visible in the log, not only in a
+        # failing assertion.
+        run: pytest tests/test_contracts.py -q -s -k "rate or audit"
+
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install -r matverse_guide/requirements.txt
+
+      - name: Build the guide
+        # api/user.md is regenerated from the registry by conf.py, so this also
+        # checks that a newly decorated function reaches the documentation.
+        working-directory: matverse_guide/docs
+        run: python -m sphinx -b html -E . _build/html
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: guide
+          path: matverse_guide/docs/_build/html
+          retention-days: 7
