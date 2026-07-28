@@ -57,9 +57,17 @@ already have installed.
 We use the olivine and NASICON cathodes:
 
 - **LiFePO₄** — the olivine cathode of [Padhi et al.
-  (1997)](https://doi.org/10.1149/1.1837571)
-- **NaFePO₄** — the sodium analogue of the same framework
-- **Li₃V₂(PO₄)₃** — a NASICON-framework cathode"""),
+  (1997)](https://doi.org/10.1149/1.1837571), the paper that made
+  phospho-olivines a cathode class rather than a curiosity
+- **NaFePO₄** — the sodium analogue of the same framework, the reason
+  sodium-ion work keeps returning to olivines (Moreau et al., *Chem. Mater.*
+  2010)
+- **Li₃V₂(PO₄)₃** — a NASICON-framework cathode, a different way of building
+  open channels out of phosphate polyanions (Yin et al., *J. Am. Chem. Soc.*
+  2003)
+
+Three materials is not a screen. It is enough to see what the object does with
+them, which is what this page is for."""),
 
     ("code", """\
 mv.datasets.available()"""),
