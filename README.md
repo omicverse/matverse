@@ -277,7 +277,7 @@ exactly `obs` versus `obsm`.
 
 ## Status
 
-v0.1.14. **121 functions across 21 namespaces**, every one carrying a registry
+v0.1.15. **144 functions across 26 namespaces**, every one carrying a registry
 entry whose claims are verified by execution — currently **141/141**. See
 [DESIGN.md](DESIGN.md) for the full plan and
 [Release notes](matverse_guide/docs/Release_notes.md) for what changed.

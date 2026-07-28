@@ -262,7 +262,30 @@ def _encode(structure) -> str:
 
     if isinstance(structure, str):
         return structure
-    return json.dumps(structure.as_dict())
+    return json.dumps(structure.as_dict(), default=_jsonable)
+
+
+def _jsonable(value):
+    """Last resort for values ``json`` does not know.
+
+    pymatgen puts numpy arrays into site properties — an ``Interface`` carries
+    its interface-normal vector that way, and so does anything built from a
+    calculator that attached per-site data. ``as_dict`` passes them through
+    untouched, so encoding failed with a bare TypeError naming only 'ndarray'
+    and no hint of which structure or which property.
+    """
+    import numpy as _np
+
+    if isinstance(value, _np.ndarray):
+        return value.tolist()
+    if isinstance(value, (_np.integer, _np.floating, _np.bool_)):
+        return value.item()
+    if isinstance(value, (set, frozenset, tuple)):
+        return list(value)
+    raise TypeError(
+        f"cannot store a site property of type {type(value).__name__} in a "
+        f"structure; matverse serialises structures to JSON so the object "
+        f"survives write_h5ad. Convert it to a list or a number first.")
 
 
 def _decode(payload):

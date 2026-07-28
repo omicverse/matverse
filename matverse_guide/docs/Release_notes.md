@@ -1,5 +1,159 @@
 # Release notes
 
+## v0.1.15
+
+### Two namespaces for what composition cannot reach
+
+matverse wrapped 15 of pymatgen's 48 `analysis` modules, and the two biggest
+holes were the two questions a composition vector provably cannot answer.
+
+**`mv.env` — local and coordination environments.** Near-neighbour algorithms,
+ChemEnv's polyhedron classifier, and the bond network. Validated on olivine
+LiFePO₄: Li and Fe come out six-coordinate, P four-coordinate, and the
+**continuous symmetry measure** tells the structural story a coordination
+number cannot — 0.14 for the rigid phosphate tetrahedron against 2.37 for the
+heavily distorted FeO₆ octahedron. That contrast is why the olivine framework
+does not collapse when lithium leaves it.
+
+Results land where their shape belongs: per-atom to the sites axis, the bond
+network to `obsp` (the atoms × atoms slot a kNN graph occupies in single-cell
+analysis), per-material summaries back to `obs` where a screen can reach them.
+
+**`mv.elec` — electronic structure.** Previously `mv.dft` could read a density
+of states and nothing else.
+
+A band structure is *bands × k-points* per material and ragged in the number of
+bands, so it gets **its own axis**: one row per band per spin per material, `X`
+its energy along the path, `var` the k-points. Structurally a cells × genes
+matrix again.
+
+Two materials generally have different k-paths — Cu gets 102 points and Al 95 —
+so bands are resampled onto a normalised path fraction. That is the same move
+that puts two diffraction patterns on one 2θ grid, and the axis must be read as
+"fraction along this material's own path", never as a wavevector.
+
+Energies are stored relative to the Fermi level, because an absolute eigenvalue
+means nothing across codes or even across two runs of one code.
+
+`kpath`, `bands`, `read_bands`, `band_features`, `dos_fingerprint`, `cohp` and
+`transport`. Registry 121 → 132, all of them exercised in a notebook.
+
+**`mv.iface` — interfaces between two materials.** A pairing is not a
+material, so rows are *pairs*, with `obs['film']` and `obs['substrate']`
+pointing back at the parent — the same derived-axis-with-foreign-keys shape as
+the sites and bands axes.
+
+`match` runs Zur and McGill's epitaxial search and reports the strain each match
+would need; `reactivity` reads off whether the contact survives; `build` returns
+the interface cells as an ordinary materials object, one per termination.
+
+The pairing is **ordered**: copper grown on aluminium is a different problem
+from aluminium grown on copper, because the substrate is the fixed lattice and
+the film is what has to stretch.
+
+Validated on Ni–Al, where `reactivity` finds **Ni + 3 Al → Al₃Ni at
+−0.45 eV/atom** — the intermetallic that actually forms, and the reason
+diffusion barriers exist in turbine coatings. This is the question that decides
+whether a solid electrolyte works: lithium metal and most sulfide electrolytes
+are each stable and destroy each other on contact, which no hull computed on
+either one alone can see.
+
+**`mv.disorder` — partial occupancy.** Everything else in matverse assumes a
+structure is ordered; a large fraction of real materials are not, and a
+first-principles code cannot take a fractionally occupied cell as input.
+
+`describe` reports where the disorder is and the ideal **configurational
+entropy**, which comes out exactly at `k_B ln m` for an equiatomic mixture of
+*m* species. That number is the argument for high-entropy alloys: at a
+synthesis temperature of 1500 K a five-component equiatomic alloy gets
+−0.21 eV/atom, four times the 50 meV a screen typically calls "close to the
+hull". A screen that ignores `-TS` rejects exactly the phases the field exists
+to study.
+
+`orderings` produces ordered approximants, and admits when its ranking is
+arbitrary: Ewald energies need oxidation states, and without them every
+arrangement scores zero — honest for a metallic alloy and wrong for an oxide.
+
+`sqs` **refuses** when ATAT is absent rather than handing back the ordered
+ground state, which is the opposite of a solid solution and would be a
+plausible-looking answer to a different question.
+
+`dope` catches a silent failure in pymatgen: `DopingTransformation` enumerates
+with enumlib and returns an **empty list** rather than raising when it is
+missing, so a doping study runs to completion and produces nothing. matverse
+reports which of the two things happened.
+
+**`mv.transform` — pymatgen's transformations, on the object.** There are
+around forty-five `Transformation` classes. Wrapping forty-five of them as
+forty-five matverse functions would be a bad trade: most are one line, the
+registry would be mostly noise, and every pymatgen release would need another
+wrapper.
+
+So there is one function that takes the transformation **by name**, looked up
+in pymatgen at call time — which means a transformation added upstream is
+available the day it lands:
+
+```python
+mv.transform.apply(md, 'PrimitiveCellTransformation')
+mv.transform.apply(md, 'CubicSupercellTransformation', min_length=10)
+```
+
+The result becomes a structure **variant**, so the input survives and "which
+structure was this computed on" stays answerable. A transformation that fails
+on one row leaves that row alone and records `False` — a dataset where
+something applies to some materials and not others is the normal case, not the
+exceptional one.
+
+`expand` keeps every result of a one-to-many transformation as its own row;
+`chain` applies a sequence; `oxidation_states` is the missing prerequisite
+behind three of pymatgen's more confusing errors (`Element has no attribute
+oxi_state!`, `Valences cannot be assigned!`, and Ewald ranking that silently
+scores everything zero).
+
+### A migration guide for pymatgen users
+
+`tutorials/from_pymatgen.ipynb` answers the question a pymatgen user actually
+has, which is not "what do I learn instead" but "what does putting my
+structures in an object buy me". It is explicit about what matverse does *not*
+do — molecules, visualisation, running anything — so nobody goes looking.
+
+### Structures carrying numpy site properties could not be stored
+
+`mv.iface.build` returns pymatgen `Interface` objects, which carry the
+interface-normal vector as a numpy array in their site properties. matverse
+serialises structures to JSON so the object survives `write_h5ad`, and `json`
+refused, with a bare `TypeError: Object of type ndarray is not JSON
+serializable` naming neither the structure nor the property.
+
+The encoder now converts arrays and numpy scalars, and refuses anything it
+genuinely cannot store with a message that names the offending property type
+and says what to do about it. Any structure from any source was affected, not
+just interfaces.
+
+### `mv.pl.set_style` follows omicverse's `plot_set`
+
+Same shape: emoji status lines, inline retina format, font support including
+the Arial download, scalar `figsize` promoted to a square, warning suppression,
+accelerator detection, an ASCII logo printed once with the version and tutorial
+link, and a closing line.
+
+One item differs on purpose. Where omicverse reports scanpy's verbosity,
+matverse reports **which calculators this installation can actually run** —
+because it ships one working calculator and dispatches the rest to whatever you
+installed, so that answer differs on every machine and decides what the session
+can do.
+
+`quiet=` still works and still silences everything, because v0.1.15's
+predecessor is on PyPI and a rename is not worth breaking a working notebook
+over.
+
+### A wrong alias, caught by the registry
+
+`mv.dft.read_dos` claimed the alias `band structure`. It reads a density of
+states. The collision check refused to let `mv.elec.bands` register the name it
+should have owned all along, which is the alias machinery doing exactly what it
+was built for.
+
 ## v0.1.14
 
 ### Every registered function is called in a notebook

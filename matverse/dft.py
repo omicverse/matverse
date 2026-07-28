@@ -334,9 +334,10 @@ def _band_gap(run) -> float:
 
 
 @register_function(
-    aliases=["read dos", "electronic structure", "density of states",
-             "band gap", "parse dos", "electronic descriptors",
-             "band structure"],
+    # 'band structure' used to be claimed here and should not have been: this
+    # reads a density of states. mv.elec.bands owns it now.
+    aliases=["read dos", "density of states", "band gap", "parse dos",
+             "electronic descriptors", "dos from vasprun"],
     category="dft",
     description="Parse the electronic density of states from completed runs "
                 "onto a shared energy grid, and derive the scalars a screen "

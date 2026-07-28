@@ -1,7 +1,7 @@
 # Tutorials
 
-Each tutorial is a working pipeline rather than a feature tour, and eleven of
-the twelve are **executed notebooks** — every number and figure on those pages is the
+Each tutorial is a working pipeline rather than a feature tour, and fifteen of
+the sixteen are **executed notebooks** — every number and figure on those pages is the
 real output of the code above it, produced when the documentation was built.
 They run on a small library and a calculator that ships with matverse, so you
 can execute them before deciding whether to install a machine-learned potential.
@@ -100,6 +100,30 @@ and a melt-quench with its known failure mode.
 Enumerate the spin states before the hull — and read the number that says your
 calculator cannot tell them apart.
 :::
+
+:::{grid-item-card} Environments and bands {octicon}`telescope;1em;`
+:link: structure_and_bands
+:link-type: doc
+
+The two questions composition cannot answer: what an atom's neighbourhood looks
+like, and what the electrons can do.
+:::
+
+:::{grid-item-card} Interfaces {octicon}`versions;1em;`
+:link: interfaces
+:link-type: doc
+
+Will the lattices match, will the contact survive, and what cell do you
+actually run — three separate questions about two materials at once.
+:::
+
+:::{grid-item-card} Disorder {octicon}`shuffle;1em;`
+:link: disorder
+:link-type: doc
+
+Fractional occupancy, ordered approximants, and the entropy term that lets a
+high-entropy alloy sit above the hull and form anyway.
+:::
 ::::
 
 ## Plumbing
@@ -123,6 +147,14 @@ OPTIMADE — where 7 of 15 hits turn out to be duplicates.
 
 Units, checkpoints, corpora larger than memory, Slurm scripts, and handing the
 shortlist to VASP.
+:::
+
+:::{grid-item-card} Coming from pymatgen {octicon}`arrow-switch;1em;`
+:link: from_pymatgen
+:link-type: doc
+
+Every pymatgen transformation by name, and what putting your structures in an
+object actually buys you.
 :::
 ::::
 
@@ -165,6 +197,10 @@ defects_and_diffusion
 surfaces_and_adsorption
 dynamics
 magnetic_ordering
+structure_and_bands
+interfaces
+disorder
+from_pymatgen
 data_io
 infrastructure
 ```
