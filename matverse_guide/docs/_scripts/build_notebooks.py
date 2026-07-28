@@ -30,6 +30,7 @@ NOTEBOOKS = [
     "interfaces",
     "disorder",
     "from_pymatgen",
+    "molecules",
     "data_io",
     "infrastructure",
 ]

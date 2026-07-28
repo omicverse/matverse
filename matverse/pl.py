@@ -275,6 +275,115 @@ def _report_gpu() -> None:
 
 
 @register_function(
+    aliases=["view structure", "show structure", "3d view", "visualise",
+             "look at it", "render structure", "draw the cell"],
+    category="pl",
+    description="Draw a structure in three dimensions — interactive in a "
+                "notebook, a static image otherwise.",
+    requires={"structures": ["{source}"]},
+    examples=["mv.pl.structure(md, 0)",
+              "mv.pl.structure(md, 'LiFePO4', supercell=(2, 2, 2))",
+              "mv.pl.structure(md, 0, backend='matplotlib')"],
+    related=["mv.pl.periodic_table", "mv.env.coordination"],
+    notes="Looking at a structure is how you catch the mistakes a number will "
+          "not show you: a slab built upside down, a molecule that came out of "
+          "a parser inside out, an interface with the film on the wrong side.\n\n"
+          "py3Dmol renders in the browser and is interactive; the matplotlib "
+          "fallback needs nothing extra and produces an axis like every other "
+          "plot here, so it composes into a figure. Neither replaces VESTA or "
+          "Crystal Toolkit for real inspection — this is for the quick look "
+          "you take twenty times a day.",
+)
+def structure(md: AnnData, which=0, source: str = "input",
+              backend: str = "auto", supercell=None, style: str = "stick",
+              width: int = 480, height: int = 360, ax=None):
+    """Draw one structure. Returns the viewer or the axis."""
+    from ._core import structures as _structures
+
+    names = [str(x) for x in md.obs.get("name", md.obs_names)]
+    if isinstance(which, (int, np.integer)):
+        index = int(which)
+    else:
+        text = str(which)
+        pool = names if text in names else [str(x) for x in md.obs_names]
+        if text not in pool:
+            raise KeyError(f"{which!r} is not a row; rows are {pool[:8]}")
+        index = pool.index(text)
+
+    obj = _structures(md, source)[index]
+    if supercell is not None and hasattr(obj, "lattice"):
+        obj = obj.copy()
+        obj.make_supercell(list(supercell))
+
+    if backend == "auto":
+        try:
+            import py3Dmol                                # noqa: F401
+            backend = "py3dmol"
+        except ImportError:
+            backend = "matplotlib"
+
+    if backend == "py3dmol":
+        return _view_py3dmol(obj, style, width, height)
+    if backend == "matplotlib":
+        return _view_matplotlib(obj, ax)
+    raise ValueError(f"backend must be 'auto', 'py3dmol' or 'matplotlib', "
+                     f"got {backend!r}")
+
+
+def _view_py3dmol(obj, style: str, width: int, height: int):
+    import py3Dmol
+
+    from pymatgen.io.xyz import XYZ
+
+    viewer = py3Dmol.view(width=width, height=height)
+    if hasattr(obj, "lattice"):
+        # CIF carries the cell, which is the point of drawing a crystal.
+        from pymatgen.io.cif import CifWriter
+
+        viewer.addModel(str(CifWriter(obj)), "cif")
+        viewer.addUnitCell()
+    else:
+        viewer.addModel(str(XYZ(obj)), "xyz")
+    viewer.setStyle({style: {}, "sphere": {"scale": 0.3}})
+    viewer.zoomTo()
+    return viewer
+
+
+def _view_matplotlib(obj, ax=None):
+    """A projection along the shortest axis. Crude, and needs nothing."""
+    plt = _plt()
+    from .elements import element_frame
+
+    coords = np.asarray(obj.cart_coords, dtype=float)
+    symbols = [str(s.specie.symbol) for s in obj]
+    spread = coords.max(axis=0) - coords.min(axis=0)
+    depth = int(np.argmin(spread))
+    plane = [k for k in range(3) if k != depth]
+
+    ax = _axis(ax, figsize=(4.8, 4.4))
+    frame = element_frame(sorted(set(symbols)))
+    radii = frame["atomic_radius"].to_dict() if "atomic_radius" in frame \
+        else {}
+    order = np.argsort(coords[:, depth])
+    palette = plt.get_cmap("tab20")
+    colours = {el: palette(i % 20) for i, el in enumerate(sorted(set(symbols)))}
+
+    for i in order:
+        radius = radii.get(symbols[i]) or 1.0
+        ax.scatter(coords[i, plane[0]], coords[i, plane[1]],
+                   s=260 * float(radius) ** 2, color=colours[symbols[i]],
+                   edgecolors="#333", linewidths=0.6, zorder=2)
+    for element, colour in colours.items():
+        ax.scatter([], [], color=colour, edgecolors="#333", label=element)
+
+    ax.set_aspect("equal")
+    ax.set_xlabel(f"{'xyz'[plane[0]]} (Å)")
+    ax.set_ylabel(f"{'xyz'[plane[1]]} (Å)")
+    ax.legend(fontsize=8, loc="best")
+    return ax
+
+
+@register_function(
     aliases=["periodic table", "periodic table heatmap", "element map",
              "plot elements", "element heatmap"],
     category="pl",
@@ -695,5 +804,5 @@ def provenance(md: AnnData, ax=None):
     return ax
 
 
-__all__ = ["set_style", "periodic_table", "rank_elements_groups", "hull",
+__all__ = ["set_style", "structure", "periodic_table", "rank_elements_groups", "hull",
            "parity", "pareto", "embedding", "spectra", "provenance"]

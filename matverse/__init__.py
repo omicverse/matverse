@@ -60,15 +60,15 @@ creates::
 from __future__ import annotations
 
 from . import (calc, data, datasets, dft, disorder, elec,  # noqa: F401
-               elements, env, exp, feat, gen, iface, mag, md, model, multi,
+               elements, env, exp, feat, gen, iface, mag, md, mol, model, multi,
                neb, opt, pl, pp, prop, screen, struct, surf, thermo, tl,
                transform, utils)
 from ._core import (check_commercial_use, compare_levels, grid_of,  # noqa: F401
-                    level_info, levels_used, new, provenance, set_level,
-                    structures, variants)
+                    level_info, levels_used, new, provenance, records,
+                    set_level, structures, variants)
 from ._registry import get_registry
 
-__version__ = "0.1.15"
+__version__ = "0.1.16"
 
 #: The process-global function registry.
 registry = get_registry()
@@ -94,9 +94,10 @@ __all__ = [
     "multi", "gen", "pl", "model", "opt", "utils", "dft",
     "md", "neb", "surf", "mag", "datasets",
     "disorder", "elec", "elements", "env", "iface", "struct",
-    "transform",
+    "mol", "transform",
     "new", "structures", "variants", "provenance", "compare_levels",
-    "levels_used", "level_info", "set_level", "check_commercial_use",
+    "levels_used", "level_info", "set_level", "records",
+    "check_commercial_use",
     "grid_of",
     "registry", "describe", "find", "__version__",
 ]

@@ -289,13 +289,23 @@ def _jsonable(value):
 
 
 def _decode(payload):
+    """JSON back to a pymatgen object, periodic or not.
+
+    A ``Molecule`` is a ``Structure`` without a lattice, and the composition
+    axis does not care which it got — H2O contributes H:2, O:1 exactly as a
+    crystal would. Only the decode has to know, so it dispatches on whether the
+    payload carries a lattice rather than assuming periodicity.
+    """
     import json
 
-    from pymatgen.core import Structure
+    from pymatgen.core import Molecule, Structure
 
     if not isinstance(payload, str):
         return payload
-    return Structure.from_dict(json.loads(payload))
+    data = json.loads(payload)
+    if "lattice" in data:
+        return Structure.from_dict(data)
+    return Molecule.from_dict(data)
 
 
 def require(md: AnnData, container: str, key: str, hint: str = "") -> Any:

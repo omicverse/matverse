@@ -263,17 +263,34 @@ for step in mv.provenance(md):
     ("markdown", """\
 ## What matverse does not do
 
-Worth being explicit, so nobody goes looking:
+An earlier version of this page listed three things, and two of them were wrong
+— not architectural limits, just untested assumptions. They are worth recording
+because the corrections are more informative than the original claims.
 
-- **Molecules.** `X` is a composition matrix over the periodic table and `obs`
-  is materials. pymatgen's `Molecule`, `fragmenter`, `functional_groups` and
-  `bond_dissociation` are out of scope by construction.
-- **Visualisation.** Crystal Toolkit and VESTA do that better.
+**"Molecules are out of scope by construction."** False. A `Molecule` has a
+composition, so `X` and `var` build for water exactly as for a crystal. The only
+thing that failed was a decoder assuming a lattice. See
+[Molecules](molecules.ipynb) — `mv.mol` now does point groups, covalent bonds,
+fragments and matching, and one object holds molecules and crystals together.
+
+**"Visualisation — Crystal Toolkit and VESTA do that better."** They do, for
+real inspection. That was a reason not to compete, not a reason to have
+nothing: `mv.pl.structure` draws either kind of material, interactively when
+py3Dmol is installed. It is the quick look you take twenty times a day.
+
+**"Running anything."** This one was half right, and the half that was wrong is
+now `mv.utils.submit`, which shells out to `sbatch` and records the job id on
+the object. matverse still runs no DFT and is not a workflow manager — atomate2,
+quacc and AiiDA do that, and a fourth would be a maintenance liability. What it
+adds is the link back: *which job is computing this dataset* is answerable from
+the data rather than from shell history.
+
+What is genuinely left outside:
+
 - **File format coverage.** `mv.data` has doors for the common ones and hands
   the rest to `pymatgen.io`, which reads far more than matverse should try to.
-- **Running anything.** No DFT, no queue, no workflow engine —
-  [Infrastructure](infrastructure.ipynb) explains why that boundary is where it
-  is.
+- **Being a workflow engine.** Retrying, chaining and monitoring belong to the
+  tools built for it.
 
 ```{seealso}
 [Getting data in and out](data_io.ipynb) is every door into and out of the

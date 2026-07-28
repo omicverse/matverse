@@ -87,6 +87,19 @@ ax = mv.pl.periodic_table(md, color="n_materials", label="materials containing")
 ax.set_title("the chemistry of this library")"""),
 
     ("markdown", """\
+And you can just look at one, which catches the mistakes a number will not
+show you — a slab built upside down, a cell that came out of a parser inside
+out."""),
+
+    ("code", """\
+ax = mv.pl.structure(md, "LiFePO4", backend="matplotlib")
+ax.set_title("LiFePO$_4$, projected along its thinnest axis")"""),
+
+    ("markdown", """\
+With `py3Dmol` installed the default backend is an interactive viewer instead.
+Neither replaces VESTA for real inspection — this is the quick look you take
+twenty times a day.
+
 Counts come from the **reduced** formula, so a supercell and its primitive cell
 occupy the same point in chemical space. Cell size lives in `obs['nsites']`.
 

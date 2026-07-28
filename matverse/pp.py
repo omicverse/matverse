@@ -87,13 +87,31 @@ def standardize(md: AnnData, source: str = "input", symprec: float = 0.01) -> No
 )
 def describe(md: AnnData, source: str = "input") -> None:
     """The columns every materials table has, computed once and named once."""
+    import numpy as _np
+
     S = structures(md, source)
     md.obs["formula"] = [s.composition.reduced_formula for s in S]
     md.obs["nsites"] = [len(s) for s in S]
-    md.obs["volume"] = [float(s.volume) for s in S]
-    md.obs["density"] = [float(s.density) for s in S]
     md.obs["n_elements"] = [len(s.composition.elements) for s in S]
-    md.obs["volume_per_atom"] = [float(s.volume) / len(s) for s in S]
+    md.obs["molecular_weight"] = [float(s.composition.weight) for s in S]
+
+    # Volume and density are properties of a cell, and a Molecule has no cell.
+    # They become NaN rather than absent, so a dataset mixing crystals with
+    # molecules stays one table and a periodic-only dataset is unchanged.
+    def _volume(s):
+        try:
+            return float(s.volume)
+        except (AttributeError, TypeError):
+            return _np.nan
+
+    volumes = _np.array([_volume(s) for s in S], dtype=float)
+    md.obs["volume"] = volumes
+    md.obs["density"] = [
+        float(s.density) if _np.isfinite(v) else _np.nan
+        for s, v in zip(S, volumes)]
+    md.obs["volume_per_atom"] = volumes / _np.array(
+        [max(len(s), 1) for s in S], dtype=float)
+    md.obs["is_periodic"] = _np.isfinite(volumes)
     record(md, "pp.describe", source=source)
 
 

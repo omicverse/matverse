@@ -1,7 +1,7 @@
 # Tutorials
 
-Each tutorial is a working pipeline rather than a feature tour, and fifteen of
-the sixteen are **executed notebooks** — every number and figure on those pages is the
+Each tutorial is a working pipeline rather than a feature tour, and sixteen of
+the seventeen are **executed notebooks** — every number and figure on those pages is the
 real output of the code above it, produced when the documentation was built.
 They run on a small library and a calculator that ships with matverse, so you
 can execute them before deciding whether to install a machine-learned potential.
@@ -124,6 +124,14 @@ actually run — three separate questions about two materials at once.
 Fractional occupancy, ordered approximants, and the entropy term that lets a
 high-entropy alloy sit above the hull and form anyway.
 :::
+
+:::{grid-item-card} Molecules {octicon}`beaker;1em;`
+:link: molecules
+:link-type: doc
+
+Point groups, covalent bonds and fragments — on the same axes as crystals,
+because the composition matrix never cared whether a formula unit repeats.
+:::
 ::::
 
 ## Plumbing
@@ -200,6 +208,7 @@ magnetic_ordering
 structure_and_bands
 interfaces
 disorder
+molecules
 from_pymatgen
 data_io
 infrastructure

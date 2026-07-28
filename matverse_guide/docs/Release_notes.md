@@ -1,5 +1,61 @@
 # Release notes
 
+## v0.1.16
+
+### Molecules were never out of scope
+
+The design note said molecules were out of scope "by construction". That was
+wrong, and checking it took one line: a `Molecule` has a composition, so `X`
+and `var` build for water exactly as they do for a crystal — H:2, O:1. The only
+thing that failed was a decoder that assumed a lattice.
+
+So molecules live on the same axes as everything else, and **one object holds
+both**. `obs['is_periodic']` tells them apart; `volume` and `density` become
+NaN for a molecule rather than absent, so a dataset mixing a catalyst with its
+adsorbates stays one table. `mv.pp.qc`, `mv.feat.element_stats` and even
+`mv.calc.energy` needed no changes at all.
+
+**`mv.mol`** adds what genuinely differs — a point group rather than a space
+group, covalent bonds rather than a coordination polyhedron, fragments rather
+than defects. Validated against textbook answers: C2v for water, Td for
+methane, C3v for ammonia, with group orders 4, 24 and 6.
+
+The methane row is the one worth reading. `can_be_polar` comes out **False**,
+and not as a tendency: Td contains operations that map any candidate dipole
+onto its own negative, so symmetry forbids it outright. A dipole survives only
+in C1, Cs, Cn and Cnv.
+
+`fragments` breaks every acyclic bond and keeps the pieces, conserving atoms on
+every cut. It records the **unreduced** formula next to the reduced one,
+because pymatgen's reduced formula applies the diatomic convention — a single
+hydrogen atom reads `H2` and a hydroxyl reads `H2O2`, which is right for a
+stoichiometry and actively misleading for a fragment.
+
+### `mv.pl.structure`
+
+"Crystal Toolkit and VESTA do that better" was a reason not to compete, not a
+reason to have nothing. Draws either kind of material, interactively through
+py3Dmol when it is installed and through matplotlib when it is not. It is the
+quick look you take twenty times a day to catch a slab built upside down.
+
+### `mv.utils.submit` and `mv.utils.job_status`
+
+matverse still runs no DFT and is not a workflow manager — atomate2, quacc and
+AiiDA do that. What was missing was the link back: `submit` shells out to
+`sbatch` and records the job id **on the object**, so "which job is computing
+this dataset" is answerable from the data rather than from shell history.
+`job_status` reads `squeue`, falling back to `sacct` for jobs that have
+finished, because `squeue` forgets a job shortly after it ends.
+
+`mv.records` is now exported, since reading the submissions back needs it.
+
+### Another alias that pointed at the wrong function
+
+`mv.utils.slurm_script` claimed `submit` and `sbatch`. It writes a script and
+stops. This is the second time the registry's collision check has caught a
+misdirected alias — the first was `mv.dft.read_dos` claiming `band structure` —
+which is the machinery working rather than a coincidence.
+
 ## v0.1.15
 
 ### Two namespaces for what composition cannot reach
