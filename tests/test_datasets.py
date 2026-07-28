@@ -8,6 +8,8 @@ something loaded.
 
 from __future__ import annotations
 
+import sys
+
 import numpy as np
 import pytest
 
@@ -53,6 +55,27 @@ class TestBundled:
         md = mv.datasets.load("simple")
         assert md.uns["dataset"]["name"] == "simple"
         assert md.obs["source"].iloc[0]
+
+    def test_loading_does_not_need_the_test_tooling(self, monkeypatch):
+        """`mv.datasets.load` once read its path from
+        `pymatgen.util.testing.STRUCTURES_DIR`, which imports pytest at module
+        scope — so it failed with `No module named 'pytest'` on any
+        installation without the test tooling, which is most of them. Found by
+        the docs CI job, which builds in a clean environment.
+        """
+        import builtins
+
+        real = builtins.__import__
+
+        def without_pytest(name, *args, **kwargs):
+            if name == "pytest" or name.startswith("pytest."):
+                raise ModuleNotFoundError("No module named 'pytest'")
+            return real(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", without_pytest)
+        monkeypatch.delitem(sys.modules, "pymatgen.util.testing", raising=False)
+
+        assert mv.datasets._pymatgen_structures_dir().is_dir()
 
     def test_an_unknown_name_lists_the_options(self):
         with pytest.raises(KeyError, match="available"):

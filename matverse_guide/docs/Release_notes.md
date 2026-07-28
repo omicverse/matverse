@@ -57,6 +57,20 @@ who computes a column themselves had no supported way to type it — which made
 the level system a thing the library did to you rather than a thing you could
 use. `mv.compare_levels` works on the result like any other level.
 
+### `mv.datasets.load` no longer needs pytest
+
+It located pymatgen's bundled structures by reading
+`pymatgen.util.testing.STRUCTURES_DIR`. That module imports pytest at module
+scope, so `mv.datasets.load('battery_cathodes')` — the first call in the
+getting-started tutorial — raised `ModuleNotFoundError: No module named
+'pytest'` on any installation without the test tooling, which is most of them.
+Every local environment here happened to have pytest, so nothing caught it.
+
+The new docs CI job did, on its first run, which is the argument for the job.
+The path is now found from the pymatgen package directory; the constant was
+only a `Path` join, and there was never anything to gain by importing a test
+helper to get it. There is a test that blocks the pytest import and pins this.
+
 ### Fixes surfaced by executing the tutorials
 
 - `mv.data.from_structures` and `mv.multi.sites` named their rows *after*
