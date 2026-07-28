@@ -277,8 +277,8 @@ exactly `obs` versus `obsm`.
 
 ## Status
 
-v0.1.10. **120 functions across 21 namespaces**, every one carrying a registry
-entry whose claims are verified by execution — currently **142/142**. See
+v0.1.11. **121 functions across 21 namespaces**, every one carrying a registry
+entry whose claims are verified by execution — currently **141/141**. See
 [DESIGN.md](DESIGN.md) for the full plan and
 [Release notes](matverse_guide/docs/Release_notes.md) for what changed.
 
@@ -310,7 +310,7 @@ Landed:
 - molecular dynamics, migration barriers, surfaces and adsorption
 - magnetic ordering enumeration, lattice thermal conductivity, electronic
   structure ingestion and charged-defect thermodynamics
-- the registry and the probe harness that verifies it: **142/142 claims**
+- the registry and the probe harness that verifies it: **141/141 claims**
 
 Still open:
 

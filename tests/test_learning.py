@@ -297,6 +297,30 @@ class TestPlots:
             md.obs["energy_per_atom_emt"].to_numpy(dtype=float) + 0.1
         return md
 
+    def test_set_style_changes_the_defaults(self):
+        import matplotlib.pyplot as plt
+
+        before = dict(plt.rcParams)
+        try:
+            mv.pl.set_style(dpi=123, fontsize=9, quiet=True)
+            assert plt.rcParams["figure.dpi"] == 123
+            assert plt.rcParams["font.size"] == 9
+        finally:
+            plt.rcParams.update(before)
+
+    def test_set_style_leaves_later_settings_alone(self):
+        """It touches rcParams and nothing else, so a figure styled by hand
+        afterwards still wins."""
+        import matplotlib.pyplot as plt
+
+        before = dict(plt.rcParams)
+        try:
+            mv.pl.set_style(quiet=True)
+            plt.rcParams["font.size"] = 20
+            assert plt.rcParams["font.size"] == 20
+        finally:
+            plt.rcParams.update(before)
+
     def test_periodic_table(self, plotted):
         ax = mv.pl.periodic_table(plotted, color="n_materials")
         assert ax.get_figure() is not None
