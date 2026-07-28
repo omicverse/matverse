@@ -1,0 +1,96 @@
+name: publish
+
+# Publishing is irreversible: PyPI will not let a version number be reused, even
+# after a deletion. So nothing here runs on a push. A release has to be created
+# deliberately, and TestPyPI can be exercised on its own first.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Where to publish"
+        required: true
+        default: testpypi
+        type: choice
+        options: [testpypi, pypi]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Check that the tag and the package agree
+        # A tag saying v0.2.0 on a tree whose pyproject says 0.1.9 produces a
+        # release nobody can install by the name they were given. Cheap to
+        # check, and impossible to fix after upload.
+        if: github.event_name == 'release'
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e . --no-deps
+          PACKAGE=$(python -c "import matverse; print(matverse.__version__)")
+          TAG="${GITHUB_REF_NAME#v}"
+          echo "package=$PACKAGE tag=$TAG"
+          if [ "$PACKAGE" != "$TAG" ]; then
+            echo "::error::tag $TAG does not match matverse.__version__ $PACKAGE"
+            exit 1
+          fi
+
+      - name: Build
+        run: |
+          python -m pip install --upgrade pip build twine
+          python -m build
+          python -m twine check dist/*
+
+      - name: Verify the wheel outside the source tree
+        # Importing from the repository root would pass even if the wheel were
+        # missing half the package, since the source directory is on the path.
+        run: |
+          python -m venv /tmp/check
+          /tmp/check/bin/pip install --quiet dist/*.whl
+          cd /tmp && /tmp/check/bin/python -c "
+          import matverse as mv
+          print('version', mv.__version__)
+          print('functions', len(mv.registry))
+          assert len(mv.registry) > 100, 'registry did not survive packaging'
+          "
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  testpypi:
+    needs: build
+    if: github.event_name == 'workflow_dispatch' && inputs.target == 'testpypi'
+    runs-on: ubuntu-latest
+    environment: testpypi
+    permissions:
+      id-token: write            # trusted publishing; no stored token
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+
+  pypi:
+    needs: build
+    if: github.event_name == 'release' || inputs.target == 'pypi'
+    runs-on: ubuntu-latest
+    environment: pypi              # add a required reviewer here for a manual gate
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1

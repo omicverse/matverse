@@ -8,7 +8,21 @@ version = "0.1.9"
 description = "A materials analysis ecosystem on the AnnData substrate"
 readme = "README.md"
 requires-python = ">=3.10"
-license = {text = "MIT"}
+license = {file = "LICENSE"}
+authors = [{name = "matverse contributors"}]
+keywords = ["materials science", "high-throughput screening", "anndata",
+            "density functional theory", "machine learning interatomic potentials"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Chemistry",
+    "Topic :: Scientific/Engineering :: Physics",
+]
 
 # Core stays deliberately small. This ecosystem's dependency conflicts are real
 # and current — AMSET pins Python >=3.9 while pymatgen requires >=3.11,
@@ -32,10 +46,12 @@ mlip = ["mace-torch"]
 # is installable only on a newer interpreter. mv.md.batched_available() reports
 # which situation an installation is in, and the ASE path works regardless.
 batched = ["torch-sim-atomistic"]
-dev = ["pytest"]
+dev = ["pytest", "build", "twine"]
 
 [project.urls]
-Source = "https://github.com/matverse/matverse"
+Homepage = "https://github.com/omicverse/matverse"
+Source = "https://github.com/omicverse/matverse"
+Issues = "https://github.com/omicverse/matverse/issues"
 
 [tool.setuptools.packages.find]
 include = ["matverse*"]
