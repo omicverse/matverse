@@ -269,6 +269,18 @@ ax = mv.pl.spectra(metals, "phonon_dos", levels=("emt",), rows=[0, 1, 4],
 ax.set_title("phonon density of states")"""),
 
     ("markdown", """\
+The phonons are also everything thermodynamics needs. `mv.prop.free_energy`
+integrates the density of states into a vibrational free energy and entropy at
+a temperature you name — the term that decides which polymorph wins when two
+sit within a few meV at zero kelvin."""),
+
+    ("code", """\
+mv.prop.free_energy(metals, level="emt", temperature=300.0)
+
+metals.obs[["name", "vibrational_free_energy_emt",
+            "vibrational_entropy_emt"]].round(4)"""),
+
+    ("markdown", """\
 ## Screening
 
 `mv.screen.filter` takes criteria as `column__operator=value` and **deposits** a

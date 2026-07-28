@@ -144,6 +144,48 @@ the same composition. When that matters, reach for a structure descriptor:
 mv.feat.soap(md)          # needs matverse[descriptors]
 ```
 
+### Descriptors matverse does not ship
+
+`mv.feat.register_embedder` is the door for anything that turns a structure into
+a vector — a pretrained graph network, a fingerprint from another library, a
+scheme of your own. `mv.feat.embed` runs it and records where the numbers came
+from."""),
+
+    ("code", """\
+def mass_and_volume(structures):
+    \"\"\"A deliberately trivial embedder.
+
+    It takes the whole list and returns one row per structure — the batch
+    contract, so a model that runs on a GPU is called once rather than n times.
+    \"\"\"
+    return np.array([[s.composition.weight / len(s), s.volume / len(s)]
+                     for s in structures])
+
+
+mv.feat.register_embedder("toy", mass_and_volume, method="mass and volume",
+                          license="n/a")
+mv.feat.embed(md, model="toy")
+
+pd.DataFrame(md.obsm["X_toy"], index=md.obs["formula"],
+             columns=["mean mass", "volume per atom"]).round(3)"""),
+
+    ("code", """\
+md.uns["features"]["X_toy"]"""),
+
+    ("markdown", """\
+Which model produced the block, and under what licence, is recorded next to it
+in `uns['features']` — the same slot `mv.feat.element_stats` writes to. Two
+descriptor blocks from different models are therefore distinguishable after the
+fact, which matters the moment two people in a group use different checkpoints
+of the same network.
+
+```{note}
+Note that this is `uns['features']`, not `uns['levels']`. A descriptor is not a
+level of theory: it makes no claim about energy and cannot be mixed into a hull,
+so it does not need the machinery that stops that happening. The rule is that
+the record goes where the thing being described lives.
+```
+
 ## Mapping the space"""),
 
     ("code", """\
@@ -227,6 +269,18 @@ With seven materials that will happen often. On a real library it means one
 group is empty and the contingency table has a structural zero, which is worth
 seeing rather than having smoothed away.
 
+### Dropping elements nothing uses
+
+A library assembled from a database query often carries columns for elements
+that appear in one material, or none. `mv.pp.filter_elements` narrows the
+periodic table to what is actually present, which matters once `var` is
+thousands of columns wide rather than three."""),
+
+    ("code", """\
+narrowed = mv.pp.filter_elements(md, min_materials=2)
+md.n_vars, narrowed.n_vars, list(narrowed.var_names)"""),
+
+    ("markdown", """\
 ## Is this candidate actually new?
 
 Novelty is distance in composition space to the nearest known material. Here the

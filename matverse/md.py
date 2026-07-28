@@ -174,7 +174,9 @@ def run(md: AnnData, level: str = "emt", source: str = "input",
 
     energies, temperatures, msds, diffusivities = [], [], [], []
     volumes, finals, per_element, failed = [], [], [], 0
+    traces, times = [], None
     elements = list(map(str, md.var_names))
+    n_samples = len(range(0, steps, sample_every))
 
     for structure in structures(md, source):
         try:
@@ -187,6 +189,7 @@ def run(md: AnnData, level: str = "emt", source: str = "input",
             msds.append(np.nan); diffusivities.append(np.nan)
             volumes.append(np.nan); finals.append(structure)
             per_element.append(np.full(len(elements), np.nan))
+            traces.append(np.full(n_samples, np.nan))
             continue
         energies.append(result["energy"])
         temperatures.append(result["temperature"])
@@ -195,6 +198,8 @@ def run(md: AnnData, level: str = "emt", source: str = "input",
         volumes.append(result["volume"])
         finals.append(result["structure"])
         per_element.append(result["per_element"])
+        traces.append(result["trace"])
+        times = result["times"]
 
     md.obs[f"md_energy_{tag}"] = energies
     md.obs[f"md_temperature_{tag}"] = temperatures
@@ -203,6 +208,8 @@ def run(md: AnnData, level: str = "emt", source: str = "input",
     md.obs[f"md_volume_{tag}"] = volumes
     if md.n_vars:
         md.layers[f"diffusivity_{tag}"] = np.vstack(per_element)
+    if times is not None and traces:
+        _replace_trace(md, tag, np.vstack(traces), times)
     deposit_structures(md, f"md_{tag}", finals)
     set_level(md, tag, **meta, source=source, ensemble=ensemble,
               temperature=temperature, steps=steps, timestep=timestep,
@@ -210,6 +217,30 @@ def run(md: AnnData, level: str = "emt", source: str = "input",
     _check_thermostat(md, tag, temperature)
     record(md, "md.run", level=level, source=source, temperature=temperature,
            steps=steps, ensemble=ensemble)
+
+
+def _replace_trace(md: AnnData, tag: str, block: np.ndarray,
+                   times: np.ndarray) -> None:
+    """Deposit the temperature trace, discarding any earlier one of a
+    different length.
+
+    Grids exist so two levels of the same quantity can be compared, and
+    ``deposit_grid`` refuses when a new grid disagrees with the stored one.
+    That is right for a diffraction pattern, whose axis the caller chooses.
+    A trace axis is not chosen: its length falls out of ``steps`` and
+    ``sample_every``, so a second run of different length produces a curve that
+    genuinely cannot share an axis with the first. Keeping both is impossible,
+    so the stale one goes.
+    """
+    grids = md.uns.setdefault("grids", {})
+    stored = grids.get("md_temperature_trace")
+    if stored is not None and not np.array_equal(
+            np.asarray(stored.get("values"), dtype=float), times):
+        for key in [k for k in md.obsm
+                    if k.startswith("md_temperature_trace_")]:
+            del md.obsm[key]
+        del grids["md_temperature_trace"]
+    deposit_grid(md, "md_temperature_trace", tag, block, times, unit="K")
 
 
 def _check_thermostat(md: AnnData, tag: str, target: float,
@@ -323,13 +354,19 @@ def _integrate(structure, adaptor, calculator, temperature, steps, timestep,
     samples: list[tuple[float, np.ndarray]] = []
     energy, kinetic_t, volume, n = 0.0, 0.0, 0.0, 0
 
+    trace: list[float] = []
     for step in range(0, steps, sample_every):
         dynamics.run(min(sample_every, steps - step))
         displacement = atoms.get_positions() - reference
         samples.append(((step + sample_every) * timestep * 1e-3,   # ps
                         (displacement ** 2).sum(axis=1)))
         energy += float(atoms.get_potential_energy())
-        kinetic_t += float(atoms.get_temperature())
+        instantaneous = float(atoms.get_temperature())
+        kinetic_t += instantaneous
+        # Keep the trace, not just its mean. The mean cannot distinguish a run
+        # that equilibrated from one still drifting at the last step, and that
+        # distinction is the difference between a result and an artefact.
+        trace.append(instantaneous)
         volume += float(atoms.get_volume())
         n += 1
 
@@ -350,6 +387,8 @@ def _integrate(structure, adaptor, calculator, temperature, steps, timestep,
             "msd": float(squared.mean(axis=1)[-1]),
             "diffusivity": overall,
             "per_element": by_element,
+            "trace": np.asarray(trace, dtype=float),
+            "times": times,
             "structure": adaptor.get_structure(atoms)}
 
 

@@ -1,7 +1,7 @@
 # Tutorials
 
-Each tutorial is a working pipeline rather than a feature tour, and the first
-five are **executed notebooks** — every number and figure on those pages is the
+Each tutorial is a working pipeline rather than a feature tour, and eleven of
+the twelve are **executed notebooks** — every number and figure on those pages is the
 real output of the code above it, produced when the documentation was built.
 They run on a small library and a calculator that ships with matverse, so you
 can execute them before deciding whether to install a machine-learned potential.
@@ -60,6 +60,72 @@ the survivors to VASP or Quantum ESPRESSO.
 :::
 ::::
 
+## Physics
+
+The four above are about the shape of the object. These four are about what you
+compute with it — the parts of materials science that are not a scalar per
+material.
+
+::::{grid} 1 2 2 2
+:gutter: 2
+
+:::{grid-item-card} Defects and diffusion {octicon}`git-branch;1em;`
+:link: defects_and_diffusion
+:link-type: doc
+
+Vacancies, formation energy against Fermi level, and a migration barrier that
+lands at 0.754 eV against a literature 0.70 for copper.
+:::
+
+:::{grid-item-card} Surfaces and adsorption {octicon}`stack;1em;`
+:link: surfaces_and_adsorption
+:link-type: doc
+
+Slabs, surface energies in the literature ordering, the Wulff shape, and where
+oxygen actually binds on Cu(111).
+:::
+
+:::{grid-item-card} Dynamics {octicon}`pulse;1em;`
+:link: dynamics
+:link-type: doc
+
+Temperature: equilibration you can see, thermal expansion from motion alone,
+and a melt-quench with its known failure mode.
+:::
+
+:::{grid-item-card} Magnetic ordering {octicon}`north-star;1em;`
+:link: magnetic_ordering
+:link-type: doc
+
+Enumerate the spin states before the hull — and read the number that says your
+calculator cannot tell them apart.
+:::
+::::
+
+## Plumbing
+
+Getting data in and out, and getting a campaign to finish.
+
+::::{grid} 1 2 2 2
+:gutter: 2
+
+:::{grid-item-card} Getting data in and out {octicon}`database;1em;`
+:link: data_io
+:link-type: doc
+
+Every door into the object and back out, queried against a **live** OQMD over
+OPTIMADE — where 7 of 15 hits turn out to be duplicates.
+:::
+
+:::{grid-item-card} Infrastructure {octicon}`gear;1em;`
+:link: infrastructure
+:link-type: doc
+
+Units, checkpoints, corpora larger than memory, Slurm scripts, and handing the
+shortlist to VASP.
+:::
+::::
+
 ## Suggested order
 
 **Getting started** is the shortest complete pass through the library. Start
@@ -76,6 +142,15 @@ shortlist needs real DFT. That last page stays prose rather than a notebook: it
 is about corpora larger than memory and jobs handed to VASP, and a notebook of
 it would be a page of code nobody could execute.
 
+The two **plumbing** pages are reference more than story, and between them they
+exercise every function in the registry — which is checked, not asserted: the
+documentation build fails if a registered function appears in no notebook.
+
+The four **physics** tutorials are independent of each other and of everything
+above. Each answers a question that a scalar per material cannot: how fast do
+atoms move, what does the crystal show the world, what happens at temperature,
+and which spin state are you actually computing.
+
 ```{toctree}
 :hidden: true
 :maxdepth: 1
@@ -86,4 +161,10 @@ chemical_space
 beyond_one_number
 models_and_campaigns
 scale_and_dft
+defects_and_diffusion
+surfaces_and_adsorption
+dynamics
+magnetic_ordering
+data_io
+infrastructure
 ```

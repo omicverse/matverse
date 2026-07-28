@@ -464,7 +464,20 @@ def record(md: AnnData, op: str, **params: Any) -> None:
     if params:
         args = ", ".join(f"{k}={v!r}" for k, v in params.items())
         op = f"{op}({args})"
-    md.uns.setdefault("provenance", []).append(op)
+
+    # h5ad stores a list of strings and reads it back as a numpy array, which
+    # has no .append — so every operation on a saved-and-reloaded object used
+    # to fail on its provenance write. Normalising here rather than at read
+    # time means it holds however the object arrived: from disk, from a cache,
+    # from anndata.concat, or from someone else's pipeline.
+    existing = md.uns.get("provenance")
+    if existing is None:
+        md.uns["provenance"] = [op]
+        return
+    if not isinstance(existing, list):
+        existing = [str(x) for x in existing]
+        md.uns["provenance"] = existing
+    existing.append(op)
 
 
 def provenance(md: AnnData) -> list[str]:
