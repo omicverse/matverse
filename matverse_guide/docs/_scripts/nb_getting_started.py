@@ -25,6 +25,7 @@ network, no API key and no downloaded model."""),
 
     ("code", """\
 import matverse as mv
+import numpy as np
 import pandas as pd
 
 mv.pl.set_style()"""),
@@ -73,6 +74,17 @@ pd.DataFrame(md.X.toarray(), index=md.obs["name"], columns=md.var_names)"""),
 
     ("code", """\
 md.var[["Z", "electronegativity", "period", "is_transition_metal"]]"""),
+
+    ("markdown", """\
+Because `var` is the periodic table, the natural display of anything
+element-indexed is the periodic table itself — here, how many of the three
+cathodes each element appears in."""),
+
+    ("code", """\
+md.var["n_materials"] = (md.X > 0).sum(axis=0).A1
+
+ax = mv.pl.periodic_table(md, color="n_materials", label="materials containing")
+ax.set_title("the chemistry of this library")"""),
 
     ("markdown", """\
 Counts come from the **reduced** formula, so a supercell and its primitive cell
@@ -230,6 +242,28 @@ because a composition can sit on the convex hull and still be a structure that
 will not hold together."""),
 
     ("code", """\
+import matplotlib.pyplot as plt
+
+measured = {"Al": 76, "Cu": 140, "Ni": 180, "Ag": 101, "Au": 180,
+            "Pd": 180, "Pt": 230}
+names = list(metals.obs["name"])
+predicted = metals.obs["bulk_modulus_emt"].to_numpy(dtype=float)
+
+fig, ax = plt.subplots(figsize=(7, 4))
+x = np.arange(len(names))
+ax.bar(x - 0.2, predicted, 0.4, label="EMT")
+ax.bar(x + 0.2, [measured[n] for n in names], 0.4, label="experiment")
+ax.set_xticks(x, names)
+ax.set_ylabel("bulk modulus (GPa)")
+ax.set_title("where the potential holds, and where it does not")
+ax.legend()"""),
+
+    ("markdown", """\
+Aluminium is the outlier and the rest track. A plot makes that visible in a way
+the table above does not — EMT is not uniformly wrong, it is wrong about one
+element, which is a different thing to know."""),
+
+    ("code", """\
 ax = mv.pl.spectra(metals, "phonon_dos", levels=("emt",), rows=[0, 1, 4],
                    offset=0.3)
 ax.set_title("phonon density of states")"""),
@@ -279,6 +313,9 @@ is the reason `X` holds composition rather than being left empty.
     ("code", """\
 for step in mv.provenance(metals):
     print(step)"""),
+
+    ("code", """\
+ax = mv.pl.provenance(metals)"""),
 
     ("markdown", """\
 Parameters are recorded with each call, so the history replays as code rather

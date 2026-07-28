@@ -194,6 +194,18 @@ ordinary screening mistakes, and both are visible here because the level of
 theory and the structure variant are recorded rather than assumed."""),
 
     ("code", """\
+ax = mv.pl.hull(md, level="emt", x="Al")"""),
+
+    ("markdown", """\
+The hull plot labels itself when the hull is closed, because a convex hull drawn
+without its competing phases looks identical to one drawn with them and means
+something entirely different.
+
+Formation energy against composition is also the plot that makes the previous
+paragraph obvious: the two elemental endpoints sit at zero and everything
+between them is above the tie-line."""),
+
+    ("code", """\
 md.uns["phase_diagram"]["closed_system"]"""),
 
     ("markdown", """\
@@ -225,6 +237,23 @@ md.uns["screens"]["passes"]"""),
     ("code", """\
 md.obs[["formula", "e_above_hull_emt", "density", "passes"]].round(4)"""),
 
+    ("code", """\
+import matplotlib.pyplot as plt
+
+fig, ax = plt.subplots(figsize=(7, 3.6))
+passes = md.obs["passes"].to_numpy(dtype=bool)
+ax.bar(md.obs["formula"], md.obs["e_above_hull_emt"],
+       color=np.where(passes, "#2b7bba", "#cccccc"))
+ax.axhline(0.12, linestyle="--", linewidth=0.9, color="#c1121f")
+ax.set_ylabel("E above hull (eV/atom)")
+ax.set_title("blue passed both criteria; the line is only one of them")"""),
+
+    ("markdown", """\
+Cu and Ni sit at zero and are still grey — they failed on density, not on
+stability. That is the argument for depositing a boolean column instead of
+returning a shorter list: the reason a candidate was dropped is a result, and a
+filtered list throws it away."""),
+
     ("markdown", """\
 The screen deposits a boolean column and the criteria that produced it. It does
 **not** return a shorter list, because which criterion a candidate failed is a
@@ -255,6 +284,9 @@ ax.set_title("stability against density")"""),
     ("code", """\
 for step in mv.provenance(md):
     print(step)"""),
+
+    ("code", """\
+ax = mv.pl.provenance(md)"""),
 
     ("markdown", """\
 Parameters are recorded with each call, so the history replays as code rather

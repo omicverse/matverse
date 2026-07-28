@@ -11,7 +11,9 @@ rather than merely written. A tutorial whose examples only ever lived in a
 markdown fence rots silently; this one fails the build.
 
 `_scripts/build_notebooks.py` builds all five and exits non-zero if any cell
-raised. `scale_and_dft` stays prose deliberately: it is about corpora larger
+raised. Between them the tutorials now carry **27 figures**, up from 11 — a
+number in a table and the same number in a plot are not interchangeable, and
+several of the corrections below were only obvious once the result was drawn. `scale_and_dft` stays prose deliberately: it is about corpora larger
 than memory and jobs handed to VASP, and a notebook of it would be a page of
 code nobody could execute.
 

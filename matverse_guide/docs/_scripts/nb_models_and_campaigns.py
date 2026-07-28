@@ -166,6 +166,19 @@ pd.DataFrame({
 }).T.round(4)"""),
 
     ("code", """\
+import matplotlib.pyplot as plt
+
+results = md.uns["cross_validate"]["results"]
+strategies = list(results)
+means = [results[k]["mae"]["mean"] for k in strategies]
+errors = [results[k]["mae"]["std"] for k in strategies]
+
+fig, ax = plt.subplots(figsize=(5.6, 3.6))
+ax.bar(strategies, means, yerr=errors, capsize=6, color="#4c72b0")
+ax.set_ylabel("MAE (eV/atom)")
+ax.set_title("the error bars are the result")"""),
+
+    ("code", """\
 md.uns["cross_validate"]["leakage_mae"]"""),
 
     ("markdown", """\
@@ -238,6 +251,19 @@ mv.opt.history(md)"""),
     ("code", """\
 round(float(truth.min()), 6), round(float(md.obs["objective"].min()), 6)"""),
 
+    ("code", """\
+history = mv.opt.history(md)
+
+fig, ax = plt.subplots(figsize=(6, 3.6))
+ax.plot(history["round"], history["best_so_far"], "o-", label="best so far")
+ax.axhline(truth.min(), linestyle="--", linewidth=0.9, color="#c1121f",
+           label="true optimum")
+ax.set_xlabel("round")
+ax.set_ylabel("objective (eV/atom)")
+ax.set_xticks(history["round"])
+ax.set_title(f"found in round 2, having computed 12 of {md.n_obs}")
+ax.legend()"""),
+
     ("markdown", """\
 The campaign found the true optimum having computed a fraction of the
 twenty-eight candidates. That is the entire point: compute is the binding
@@ -267,7 +293,22 @@ try:
 except (KeyError, ValueError) as exc:
     print(f"{type(exc).__name__}: {exc}")"""),
 
+    ("code", """\
+fig, ax = plt.subplots(figsize=(6, 3.8))
+seen = md.obs["observed"].to_numpy(dtype=bool)
+ax.errorbar(md.obs["objective_pred"][~seen], np.arange((~seen).sum()),
+            xerr=md.obs["objective_pred_std"][~seen], fmt="o", markersize=4,
+            elinewidth=0.8, capsize=2)
+ax.set_xlabel("predicted objective (eV/atom)")
+ax.set_ylabel("unobserved candidate")
+ax.set_title("what UCB is choosing between: mean and spread")"""),
+
     ("markdown", """\
+A candidate is worth computing either because its predicted value is good or
+because nobody knows what it is. UCB adds `beta` × sigma to the mean, so the
+long bars compete with the leftmost points — which is the whole difference
+between exploring and running greedy under another name.
+
 ### Diversifying a batch
 
 The ten highest-scoring candidates are often ten variations on one idea, and

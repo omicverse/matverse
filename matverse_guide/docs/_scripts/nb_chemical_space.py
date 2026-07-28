@@ -112,6 +112,27 @@ row = list(md.obs["formula"]).index("Al3Cu")
 md.obsm["X_element_stats"][row, j], 0.75 * 1.61 + 0.25 * 1.90"""),
 
     ("markdown", """\
+Those descriptors are also a distance, which makes the library a matrix you can
+look at."""),
+
+    ("code", """\
+import matplotlib.pyplot as plt
+
+mv.feat.similarity(md)
+
+fig, ax = plt.subplots(figsize=(5.2, 4.4))
+im = ax.imshow(md.obsp["similarity_X_element_stats"], cmap="magma")
+labels = list(md.obs["formula"])
+ax.set_xticks(range(len(labels)), labels, rotation=90)
+ax.set_yticks(range(len(labels)), labels)
+ax.set_title("descriptor similarity")
+fig.colorbar(im, ax=ax, shrink=0.8)"""),
+
+    ("markdown", """\
+The two Al–Cu orderings sit next to each other and the elementals separate,
+which is the expected structure and therefore worth checking — a similarity
+matrix with no block structure means the descriptor is not carrying chemistry.
+
 `min`, `max` and `range` are taken over the elements that are *present at all*,
 so "the most electronegative element in this compound" is the quantity it sounds
 like rather than an amount-weighted blend.
@@ -182,6 +203,14 @@ display for differential expression."""),
 
     ("code", """\
 mv.tl.rank_elements_groups(md, "passes")
+ax = mv.pl.rank_elements_groups(md, group="True")
+ax.set_title("elements enriched on the shortlist")"""),
+
+    ("markdown", """\
+The bar chart when you want the numbers; the periodic table when you want the
+layout."""),
+
+    ("code", """\
 frame = md.uns["rank_elements_groups"]["True"]
 scores = frame.set_index("element")["log2_odds"].reindex(md.var_names)
 
@@ -209,6 +238,12 @@ mv.pp.describe(known)
 mv.tl.novelty(md, reference=known)
 
 md.obs[["formula", "novelty_distance", "nearest_reference"]].round(3)"""),
+
+    ("code", """\
+fig, ax = plt.subplots(figsize=(6.4, 3.4))
+ax.bar(md.obs["formula"], md.obs["novelty_distance"], color="#4c72b0")
+ax.set_ylabel("distance to nearest known")
+ax.set_title("novelty in composition space")"""),
 
     ("markdown", """\
 ```{warning}

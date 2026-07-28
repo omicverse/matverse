@@ -137,7 +137,23 @@ sites.obsm["forces_emt"].shape"""),
     ("code", """\
 sites.obs[["material", "element", "force_magnitude_emt"]].head(8).round(4)"""),
 
+    ("code", """\
+import matplotlib.pyplot as plt
+
+fig, ax = plt.subplots(figsize=(6.4, 3.6))
+for k, element in enumerate(sites.var_names):
+    values = sites.obs.loc[sites.obs["element"] == element,
+                           "force_magnitude_emt"]
+    ax.scatter(np.full(len(values), k) + np.linspace(-0.12, 0.12, len(values)),
+               values, s=22, alpha=0.8)
+ax.set_xticks(range(sites.n_vars), list(sites.var_names))
+ax.set_ylabel("|F| (eV/Å)")
+ax.set_title("one point per atom, 26 in total")"""),
+
     ("markdown", """\
+Twenty-six points where the material axis has room for seven — which is the
+whole reason the sites axis exists.
+
 `mv.calc.forces` takes **both** objects, and the signature is honest about why:
 forces need the structures, which live on the material axis, and produce one row
 per atom, which lives on the sites axis.
@@ -223,7 +239,14 @@ Three numbers, three levels, one table, and nobody had to decide which one is
     ("code", """\
 mv.level_info(md, "experiment")"""),
 
+    ("code", """\
+ax = mv.pl.parity(md, "energy_per_atom", "emt", "experiment")"""),
+
     ("markdown", """\
+`mv.pl.parity` annotates the error and — the useful bit — prints a warning on
+the plot when the two levels reproduce different methods. A parity plot silently
+comparing PBE against r2SCAN looks exactly like one comparing PBE against PBE.
+
 ### Phase identification
 
 The compelling case is a measured pattern against a candidate library. Take the
@@ -239,6 +262,16 @@ observed = (md.obsm["xrd_calc"][3]
 
 mv.exp.match_xrd(md, observed, two_theta)
 md.obs[["formula", "xrd_match", "xrd_match_rank"]].sort_values("xrd_match_rank")"""),
+
+    ("code", """\
+fig, ax = plt.subplots(figsize=(8, 3.8))
+ax.plot(two_theta, observed, linewidth=0.7, label="observed")
+ax.plot(two_theta, md.obsm["xrd_calc"][3] - 60, linewidth=0.7,
+        label="Al₃Cu, calculated (offset)")
+ax.set_xlabel("2θ (degrees)")
+ax.set_ylabel("intensity")
+ax.set_title("the match, drawn")
+ax.legend()"""),
 
     ("markdown", """\
 Both patterns are baseline-shifted and unit-normalised before the dot product,
@@ -329,7 +362,24 @@ The fitted offsets should recover the ones put in — 0.10, −0.06 and 0.03:"""
 pd.Series(both.uns["harmonize"]["offsets"]["oqmd"],
           index=both.var_names, name="fitted offset").round(3)"""),
 
+    ("code", """\
+n = md.n_obs
+raw = both.obs["energy_per_atom_dft"].to_numpy(dtype=float)
+fixed = both.obs["energy_per_atom_dft_harmonized"].to_numpy(dtype=float)
+
+fig, axes = plt.subplots(1, 2, figsize=(9, 3.8), sharex=True, sharey=True)
+for ax, values, title in ((axes[0], raw, "before"), (axes[1], fixed, "after")):
+    ax.scatter(values[:n], values[n:], s=36)
+    lo, hi = values.min() - 0.02, values.max() + 0.02
+    ax.plot([lo, hi], [lo, hi], "--", linewidth=0.8, color="#888")
+    ax.set_xlabel("mp"); ax.set_title(title)
+axes[0].set_ylabel("oqmd")
+fig.tight_layout()"""),
+
     ("markdown", """\
+Same materials, two databases, plotted against each other. Before, they scatter
+off the diagonal in a way that depends on composition; after, they land on it.
+
 The model is the one the field already uses by hand — a per-element reference
 offset — fitted by least squares on the compositions two databases share.
 
