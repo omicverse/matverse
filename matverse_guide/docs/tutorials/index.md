@@ -7,6 +7,14 @@ execute them before deciding whether to install a machine-learned potential.
 ::::{grid} 1 2 2 2
 :gutter: 2
 
+:::{grid-item-card} Getting started {octicon}`rocket;1em;`
+:link: getting_started
+:link-type: doc
+
+A runnable notebook on published structures — LiFePO₄, Li₁₀GeP₂S₁₂ — with no
+network, no API key and no downloaded model.
+:::
+
 :::{grid-item-card} Screening, end to end {octicon}`beaker;1em;`
 :link: screening
 :link-type: doc
@@ -50,7 +58,10 @@ the survivors to VASP or Quantum ESPRESSO.
 
 ## Suggested order
 
-The first three build on each other and are worth reading in sequence — the
+**Getting started** is the notebook, and the only page that runs on real
+published structures rather than cells built in code. Start there.
+
+The next three build on each other and are worth reading in sequence — the
 screening tutorial produces the object the other two pick up.
 
 The last two are independent of each other and of the first three. Read **Models
@@ -62,6 +73,7 @@ memory, or when the shortlist needs real DFT.
 :hidden: true
 :maxdepth: 1
 
+getting_started
 screening
 chemical_space
 beyond_one_number

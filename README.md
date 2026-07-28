@@ -9,7 +9,8 @@ a new file format.
 ```python
 import matverse as mv
 
-md = mv.data.from_cif('candidates/')     # or from_mp / from_ase / from_matminer
+md = mv.datasets.load('battery_cathodes')  # real structures, no network needed
+# or: mv.data.from_cif('candidates/') / from_mp / from_optimade / from_ase
 mv.pp.standardize(md)                    # primitive + conventional + symmetry
 mv.pp.qc(md)                             # -> obs['is_valid'], obs['min_distance']
 md = mv.pp.filter_materials(md)          # drop the broken ones
@@ -79,6 +80,7 @@ not single compositions.
 
 | | |
 |---|---|
+| `mv.datasets` | real published structures to work on, bundled or fetched |
 | `mv.data` | build a dataset — OPTIMADE, Materials Project, CIF, matminer, ASE, pymatgen |
 | `mv.pp` | standardisation, symmetry, quality control, filtering, deduplication, cross-database harmonisation |
 | `mv.feat` | descriptors into `obsm` |
@@ -275,7 +277,7 @@ exactly `obs` versus `obsm`.
 
 ## Status
 
-v0.1.9. **115 functions across 20 namespaces**, every one carrying a registry
+v0.1.10. **120 functions across 21 namespaces**, every one carrying a registry
 entry whose claims are verified by execution — currently **142/142**. See
 [DESIGN.md](DESIGN.md) for the full plan and
 [Release notes](matverse_guide/docs/Release_notes.md) for what changed.
