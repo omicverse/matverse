@@ -12,7 +12,7 @@ agent. Every entry names the state it reads and the state it writes, and each of
 those claims is verified by execution in `tests/test_contracts.py` rather than
 asserted.
 
-Public registry entries listed here: 80
+Public registry entries listed here: 88
 
 Look a function up by intent rather than by name:
 
@@ -136,6 +136,8 @@ Derived properties, including curves stored on a shared grid.
 
    prop.compare_grids
    prop.elastic
+   prop.free_energy
+   prop.phonon
    prop.rdf
    prop.xrd
 ```
@@ -143,15 +145,33 @@ Derived properties, including curves stored on a shared grid.
 
 ## Thermodynamics
 
-Convex hull, energy above hull, decomposition products.
+Convex hull, reactions, chemical potentials.
 
 ```{eval-rst}
 .. autosummary::
    :toctree: reference/
    :nosignatures:
 
+   thermo.chempot_limits
    thermo.hull
+   thermo.reaction
    thermo.references_from_mp
+```
+
+
+## First principles
+
+Input generation and result harvesting. Submission stays delegated.
+
+```{eval-rst}
+.. autosummary::
+   :toctree: reference/
+   :nosignatures:
+
+   dft.presets
+   dft.read_outputs
+   dft.status
+   dft.write_inputs
 ```
 
 
@@ -327,9 +347,15 @@ arguments — `obs['energy_{level}']` becomes `obs['energy_emt']` when you pass
 | `mv.calc.relax` | `obsm['structures']['relaxed_{level}']`, `obs['energy_{level}']`, `obs['energy_per_atom_{level}']`, `obs['relax_converged_{level}']`, `obs['max_force_{level}']`, `uns['levels']['{level}']` |
 | `mv.prop.compare_grids` | `obs['{quantity}_cosine_{a}_vs_{b}']`, `obs['{quantity}_rmse_{a}_vs_{b}']`, `obs['{quantity}_overlap_{a}_vs_{b}']` |
 | `mv.prop.elastic` | `obs['bulk_modulus_{level}']`, `obs['shear_modulus_{level}']`, `obs['youngs_modulus_{level}']`, `obs['poisson_ratio_{level}']`, `obs['elastic_stable_{level}']`, `obsm['elastic_tensor_{level}']`, `uns['levels']['{level}']` |
+| `mv.prop.free_energy` | `obs['vibrational_free_energy_{level}']`, `obs['vibrational_entropy_{level}']`, `obs['heat_capacity_{level}']` |
+| `mv.prop.phonon` | `obsm['phonon_dos_{level}']`, `obs['n_imaginary_modes_{level}']`, `obs['dynamically_stable_{level}']`, `obs['zero_point_energy_{level}']`, `uns['grids']`, `uns['levels']['{level}']` |
 | `mv.prop.rdf` | `obsm['rdf_{level}']`, `uns['grids']`, `uns['levels']['{level}']` |
 | `mv.prop.xrd` | `obsm['xrd_{level}']`, `uns['grids']`, `uns['levels']['{level}']` |
+| `mv.thermo.chempot_limits` | `uns['chempot_limits']` |
 | `mv.thermo.hull` | `obs['e_above_hull_{level}']`, `obs['is_stable_{level}']`, `obs['formation_energy_{level}']`, `obs['decomposes_to_{level}']`, `uns['phase_diagram']` |
+| `mv.thermo.reaction` | `uns['reactions']` |
+| `mv.dft.read_outputs` | `obs['energy_{level}']`, `obs['energy_per_atom_{level}']`, `obs['band_gap_{level}']`, `obs['converged_{level}']`, `obsm['structures']['relaxed_{level}']`, `uns['levels']['{level}']`, `uns['dft']` |
+| `mv.dft.write_inputs` | `obs['dft_directory']`, `written to disk`, `uns['dft']` |
 | `mv.multi.aggregate` | `obs['{key_added}']` |
 | `mv.exp.attach` | `obsm['{quantity}_{level}']`, `uns['levels']['{level}']` |
 | `mv.exp.match_xrd` | `obs['xrd_match']`, `obs['xrd_match_rank']`, `uns['xrd_match']` |

@@ -32,7 +32,7 @@ else:
 project = "matverse"
 author = "matverse contributors"
 copyright = f"{datetime.now():%Y}, matverse contributors"
-release = "0.1.3"
+release = "0.1.4"
 version = release
 repository_url = "https://github.com/matverse/matverse"
 default_github_ref = "main"

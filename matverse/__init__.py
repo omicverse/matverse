@@ -23,7 +23,16 @@ Namespaces
 ``mv.tl``      analysis on the composition matrix — ordination, clustering,
                and which elements distinguish one group of materials from another
 ``mv.calc``    energies and relaxation, tagged by level of theory
-``mv.thermo``  stability: convex hull, energy above hull, decomposition
+``mv.prop``    derived properties — elastic moduli, phonons, and curves
+``mv.thermo``  stability: convex hull, reactions, chemical potentials
+``mv.dft``     first-principles inputs out, results back in
+``mv.multi``   the sites axis — one row per atom
+``mv.exp``     measured data, on the same footing as computed data
+``mv.gen``     scoring generated candidates
+``mv.model``   property prediction with splits that do not leak
+``mv.opt``     design campaigns
+``mv.pl``      plotting, including the periodic-table heatmap
+``mv.utils``   units, checkpointing, cluster submission
 ``mv.screen``  filtering, ranking and Pareto fronts that leave a record
 
 Three conventions carry the design
@@ -50,14 +59,15 @@ creates::
 
 from __future__ import annotations
 
-from . import (calc, data, elements, exp, feat, gen, model, multi,  # noqa: F401
-               opt, pl, pp, prop, screen, struct, thermo, tl, utils)
+from . import (calc, data, dft, elements, exp, feat, gen, model,  # noqa: F401
+               multi, opt, pl, pp, prop, screen, struct, thermo, tl,
+               utils)
 from ._core import (check_commercial_use, compare_levels, grid_of,  # noqa: F401
                     level_info, levels_used, new, provenance, structures,
                     variants)
 from ._registry import get_registry
 
-__version__ = "0.1.3"
+__version__ = "0.1.4"
 
 #: The process-global function registry.
 registry = get_registry()
@@ -80,7 +90,7 @@ def find(query: str, limit: int = 5) -> list:
 
 __all__ = [
     "data", "pp", "feat", "tl", "calc", "prop", "thermo", "screen", "exp",
-    "multi", "gen", "pl", "model", "opt", "utils",
+    "multi", "gen", "pl", "model", "opt", "utils", "dft",
     "elements", "struct",
     "new", "structures", "variants", "provenance", "compare_levels",
     "levels_used", "level_info", "check_commercial_use", "grid_of",

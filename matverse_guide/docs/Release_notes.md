@@ -1,5 +1,75 @@
 # Release notes
 
+## v0.1.4
+
+First principles at the boundary, phase equilibria beyond the hull, and lattice
+dynamics. **88 functions across 16 namespaces**, contract-verified rate 142/142.
+
+### `mv.dft` — inputs out, results back in
+
+matverse runs no DFT and submits no jobs. Workflow management has three good
+answers already — atomate2 with jobflow-remote, quacc, AiiDA — and a fourth would
+be a liability.
+
+What is not solved is the boundary: a screen lives in one object, DFT lives in a
+directory tree, and the correspondence is normally maintained by a naming
+convention and someone's memory.
+
+```python
+mv.dft.write_inputs(md, 'runs/', preset='relax')   # one directory per row
+# ... sbatch, atomate2, quacc, a week ...
+mv.dft.read_outputs(md, 'runs/', level='pbe')      # back onto the same rows
+```
+
+Each directory carries a manifest recording which row it came from, so a
+directory renamed by a workflow manager still resolves — the usual reason a
+hand-rolled harvest attaches results to the wrong material. Presets (`relax`,
+`static`, `bands`, `scan`, `hse`) record what each reproduces, so a run tagged
+`scan` arrives as r2SCAN and `mv.thermo.hull` will not mix it with PBE.
+
+Rows whose run is missing or unconverged get NaN and a reason rather than being
+dropped: which candidates failed is a result, and a systematically failing corner
+of composition space is worth seeing.
+
+### `mv.prop.phonon` — the check a hull cannot make
+
+Gamma-point frozen phonons on a supercell, giving the phonon density of states on
+a shared frequency grid, the zero-point energy, and a count of imaginary modes.
+
+A composition can sit on the convex hull and still be a structure that will not
+hold together. Copper's stable phase is fcc; bcc copper has the same composition
+and is dynamically unstable, and only a phonon calculation says so. Generated
+structures fail this far more often than they fail the hull.
+
+`mv.prop.free_energy` derives the harmonic vibrational free energy, entropy and
+heat capacity from that DOS, which is where a hull built at 0 K starts to become
+a hull at temperature.
+
+Both are validated against physics rather than against a stored number: the
+zero-point energy of copper (0.029 eV/atom against a literature 0.03) and the
+Dulong–Petit limit (heat capacity converging to 3k_B per atom above the Debye
+temperature). A regression test that compares only to last week's output cannot
+tell a refactoring from a sign error.
+
+### `mv.prop.elastic`
+
+Elastic stiffness by finite strains with Voigt–Reuss–Hill moduli, Poisson ratio
+and a Born stability flag.
+
+### `mv.thermo` — beyond the hull distance
+
+- `reaction` balances a reaction between compositions in the dataset and computes
+  its energy. A reaction energy is not a synthesis route: it says a product is
+  downhill, not that anything gets there.
+- `chempot_limits` reports the chemical potential window over which each stable
+  phase remains on the hull — the conditions it could be grown under — and says
+  plainly when a closed hull makes that window a statement about the dataset
+  rather than about chemistry.
+
+### Registry
+
+88 entries, 250 contract claims, **contract-verified rate 142/142**.
+
 ## v0.1.3
 
 The namespaces the design named and the library did not have: plotting,

@@ -122,6 +122,17 @@ def _probe_everything(make_md) -> ProbeReport:
         mv.opt.start(md, objective="volume", observed=known)
         return md
 
+    def vibrating():
+        md = make_md()
+        mv.calc.relax(md, level="emt", fmax=0.05, steps=30)
+        return md
+
+    def phononed():
+        md = vibrating()
+        mv.prop.phonon(md, level="emt", source="relaxed_emt",
+                       supercell=(1, 1, 1))
+        return md
+
     def suggested():
         md = campaigning()
         mv.opt.suggest(md, n=2, method="greedy", predicted="volume")
@@ -190,6 +201,11 @@ def _probe_everything(make_md) -> ProbeReport:
         (mv.utils.convert, targeted, (), {"column": "volume",
                                           "unit": "eV",
                                           "key_added": "volume_ev"}),
+        (mv.prop.phonon, vibrating, (), {"level": "emt",
+                                         "source": "relaxed_emt",
+                                         "supercell": (1, 1, 1)}),
+        (mv.prop.free_energy, phononed, (), {"level": "emt"}),
+        (mv.thermo.chempot_limits, energised, (), {"level": "emt"}),
         (mv.multi.aggregate, None, (), {}),          # placeholder, see below
     ]
     cases = [case for case in cases if case[1] is not None]

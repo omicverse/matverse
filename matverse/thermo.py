@@ -219,6 +219,136 @@ def _decomposition_label(pd_, entry) -> str:
 
 
 @register_function(
+    aliases=["reaction energy", "reaction", "balance reaction",
+             "synthesis energy", "will it react"],
+    category="thermo",
+    description="Balance a reaction between compositions present in this "
+                "dataset and compute its energy at one level of theory.",
+    requires={"obs": ["energy_{level}"], "structures": ["input"]},
+    produces={"uns": ["reactions"]},
+    prerequisites=["mv.calc.energy"],
+    examples=["mv.thermo.reaction(md, ['Al', 'Ni'], ['AlNi'], level='emt')"],
+    related=["mv.thermo.hull", "mv.thermo.chempot_limits"],
+    notes="Uses the lowest energy found in this dataset for each formula, so "
+          "the answer is about the polymorphs you have. A reaction energy is "
+          "not a synthesis route: it says a product is downhill, not that "
+          "anything gets there.",
+)
+def reaction(md: AnnData, reactants: list, products: list, level: str = "emt",
+             source: str = "input", name: str | None = None) -> dict:
+    """Balance and evaluate a reaction. Returns the result and records it."""
+    from pymatgen.analysis.reaction_calculator import ComputedReaction
+    from pymatgen.core.composition import Composition
+
+    entries = _lowest_entries(md, level, source)
+    try:
+        left = [_entry_for(entries, Composition(f)) for f in reactants]
+        right = [_entry_for(entries, Composition(f)) for f in products]
+        computed = ComputedReaction(left, right)
+        energy = float(computed.calculated_reaction_energy)
+        equation = str(computed)
+    except Exception as exc:
+        raise ValueError(
+            f"could not balance {reactants} -> {products} from this dataset: "
+            f"{type(exc).__name__}: {exc}. Every formula must be present at "
+            f"level {level!r}; this dataset has "
+            f"{sorted(entries)}.") from exc
+
+    result = {
+        "reactants": list(reactants), "products": list(products),
+        "level": level, "equation": equation,
+        "energy": energy,
+        "energy_per_atom": energy / max(sum(
+            Composition(f).num_atoms for f in products), 1.0),
+        "favourable": bool(energy < 0),
+    }
+    md.uns.setdefault("reactions", {})[
+        name or f"{'+'.join(reactants)}->{'+'.join(products)}"] = result
+    record(md, "thermo.reaction", reactants=list(reactants),
+           products=list(products), level=level)
+    return result
+
+
+def _lowest_entries(md: AnnData, level: str, source: str) -> dict:
+    """One entry per reduced formula — the lowest energy this dataset has."""
+    from pymatgen.entries.computed_entries import ComputedEntry
+
+    key = f"energy_{level}"
+    if key not in md.obs:
+        raise ValueError(f"obs[{key!r}] absent; run mv.calc.energy(md, "
+                         f"level={level!r}) first")
+    energies = md.obs[key].to_numpy(dtype=float)
+    best: dict[str, ComputedEntry] = {}
+    for structure, energy in zip(structures(md, source), energies):
+        if energy != energy:
+            continue
+        formula = structure.composition.reduced_formula
+        per_atom = energy / len(structure)
+        current = best.get(formula)
+        if current is None or per_atom < current.energy / current.composition.num_atoms:
+            best[formula] = ComputedEntry(structure.composition, float(energy))
+    return best
+
+
+def _entry_for(entries: dict, composition):
+    formula = composition.reduced_formula
+    if formula not in entries:
+        raise KeyError(f"{formula} is not in this dataset")
+    return entries[formula]
+
+
+@register_function(
+    aliases=["chemical potential", "chempot", "stability window",
+             "chemical potential limits", "growth conditions"],
+    category="thermo",
+    description="Report the range of elemental chemical potentials over which "
+                "each stable phase remains on the hull — the conditions a phase "
+                "could be grown under.",
+    requires={"obs": ["energy_{level}"]},
+    produces={"uns": ["chempot_limits"]},
+    prerequisites=["mv.thermo.hull"],
+    examples=["mv.thermo.chempot_limits(md, level='emt')"],
+    related=["mv.thermo.hull", "mv.thermo.reaction"],
+    notes="Only meaningful when the hull includes the competing phases; on a "
+          "hull closed over one dataset the window is bounded by the dataset "
+          "rather than by chemistry, and this says so.",
+)
+def chempot_limits(md: AnnData, level: str = "emt", source: str = "input",
+                   references=None) -> dict:
+    """Chemical potential window for each stable phase, in eV."""
+    from pymatgen.analysis.phase_diagram import PhaseDiagram
+
+    entries = list(_lowest_entries(md, level, source).values())
+    if references is not None:
+        extra, _ = _reference_entries(md, level, references, True)
+        entries = entries + extra
+
+    diagram = PhaseDiagram(entries)
+    out = {}
+    for entry in diagram.stable_entries:
+        try:
+            ranges = diagram.get_chempot_range_stability_phase(
+                entry.composition, entry.composition.elements[0])
+        except Exception:
+            ranges = None
+        out[entry.composition.reduced_formula] = {
+            str(element): [float(v) for v in values]
+            for element, values in (ranges or {}).items()
+        }
+
+    md.uns["chempot_limits"] = {
+        "level": level,
+        "closed_system": references is None,
+        "limits": out,
+        "note": "bounded by this dataset rather than by chemistry"
+                if references is None else "",
+    }
+    record(md, "thermo.chempot_limits", level=level,
+           n_stable=len(diagram.stable_entries))
+    return out
+
+
+@register_function(
     aliases=["reference phases", "competing phases", "get mp entries",
              "elemental references", "known phases"],
     category="thermo",
@@ -254,4 +384,5 @@ def references_from_mp(elements, api_key: str | None = None):
         return mpr.get_entries_in_chemsys([str(e) for e in elements])
 
 
-__all__ = ["hull", "references_from_mp", "LevelMismatch"]
+__all__ = ["hull", "reaction", "chempot_limits", "references_from_mp",
+           "LevelMismatch"]

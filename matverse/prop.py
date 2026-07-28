@@ -265,6 +265,241 @@ def _moduli(C: np.ndarray):
 
 
 @register_function(
+    aliases=["phonon", "phonons", "vibrational spectrum", "phonon dos",
+             "frozen phonon", "lattice dynamics", "imaginary modes"],
+    category="prop",
+    description="Compute the vibrational spectrum of every structure by frozen "
+                "displacements, store the phonon density of states on a shared "
+                "frequency grid, and flag structures with imaginary modes.",
+    requires={"structures": ["{source}"]},
+    produces={"obsm": ["phonon_dos_{level}"],
+              "obs": ["n_imaginary_modes_{level}", "dynamically_stable_{level}",
+                      "zero_point_energy_{level}"],
+              "uns": ["grids"], "levels": ["{level}"]},
+    prerequisites=["mv.calc.relax"],
+    dispatch="level= selects the calculator, as for mv.calc.energy",
+    examples=["mv.prop.phonon(md, level='emt', source='relaxed_emt')",
+              "mv.prop.phonon(md, level='emt', supercell=(2, 2, 2))"],
+    related=["mv.calc.relax", "mv.prop.free_energy", "mv.thermo.hull"],
+    notes="Gamma-point frozen phonons on a supercell: displace each atom, read "
+          "the forces, diagonalise. Cheap, and coarser than phonopy's full "
+          "q-mesh — a supercell samples only the q-points commensurate with it. "
+          "Run it on a relaxed structure; imaginary modes on an unrelaxed one "
+          "mean the geometry, not the material.\n\n"
+          "An imaginary mode is the check a hull cannot make. A composition can "
+          "sit on the convex hull and still be dynamically unstable, and "
+          "generated structures fail this far more often than they fail the "
+          "hull.",
+)
+def phonon(md: AnnData, level: str = "emt", source: str = "input",
+           supercell=(2, 2, 2), displacement: float = 0.01,
+           f_max: float = 15.0, n_bins: int = 200,
+           sigma: float = 0.3) -> None:
+    """Phonon density of states by frozen displacements, in THz."""
+    from pymatgen.io.ase import AseAtomsAdaptor
+
+    from .calc import _get
+
+    factory, meta = _get(level)
+    adaptor = AseAtomsAdaptor()
+    calculator = factory()
+    grid = np.linspace(0.0, f_max, n_bins)
+
+    rows, imaginary, stable, zpe, failed = [], [], [], [], 0
+    for structure in structures(md, source):
+        try:
+            frequencies = _frequencies(structure, supercell, adaptor,
+                                       calculator, displacement)
+            negative = int((frequencies < -_IMAGINARY_TOLERANCE).sum())
+            real = frequencies[frequencies > _IMAGINARY_TOLERANCE]
+            rows.append(_smear(real, grid, sigma))
+            imaginary.append(negative)
+            stable.append(negative == 0)
+            # ZPE is the sum of hbar*omega/2 over modes, reported per atom so
+            # it is comparable between cells of different size.
+            n_atoms = len(structure) * int(np.prod(supercell))
+            zpe.append(float(0.5 * _THZ_TO_EV * real.sum() / n_atoms))
+        except Exception:
+            rows.append(np.full(len(grid), np.nan))
+            imaginary.append(-1)
+            stable.append(False)
+            zpe.append(np.nan)
+            failed += 1
+
+    deposit_grid(md, "phonon_dos", level, np.vstack(rows), grid, unit="THz",
+                 supercell=list(supercell), displacement=displacement,
+                 smearing=sigma)
+    md.obs[f"n_imaginary_modes_{level}"] = imaginary
+    md.obs[f"dynamically_stable_{level}"] = stable
+    md.obs[f"zero_point_energy_{level}"] = zpe
+    set_level(md, level, **meta, source=source, supercell=list(supercell),
+              displacement=displacement, n_failed=failed)
+    record(md, "prop.phonon", level=level, source=source,
+           supercell=list(supercell))
+
+
+#: Frequencies below this magnitude are the three acoustic modes at gamma, which
+#: are zero by translational invariance and numerically are not quite.
+_IMAGINARY_TOLERANCE = 0.05        # THz
+
+#: sqrt(eV / (angstrom^2 * amu)) -> THz, and h * THz -> eV.
+_OMEGA_TO_THZ = 15.633302
+_THZ_TO_EV = 4.135667696e-3
+
+
+def _frequencies(structure, supercell, adaptor, calculator,
+                 displacement: float) -> np.ndarray:
+    """Gamma-point frequencies of a supercell, in THz.
+
+    Central differences of the forces with respect to each atomic displacement
+    give the force constants; mass-weighting and diagonalising gives the modes.
+    Negative eigenvalues come back as negative frequencies rather than complex
+    ones, which is the convention every phonon code prints.
+    """
+    cell = structure.copy()
+    cell.make_supercell(list(supercell))
+    n = len(cell)
+    if n > 64:
+        raise ValueError(
+            f"supercell has {n} atoms; frozen phonons cost 6N force "
+            f"evaluations, so this would need {6 * n}. Use a smaller supercell, "
+            f"or phonopy, which exploits symmetry.")
+
+    masses = np.array([site.specie.atomic_mass for site in cell], dtype=float)
+    force_constants = np.zeros((3 * n, 3 * n))
+
+    for atom in range(n):
+        for axis in range(3):
+            plus = _forces_displaced(cell, atom, axis, displacement,
+                                     adaptor, calculator)
+            minus = _forces_displaced(cell, atom, axis, -displacement,
+                                      adaptor, calculator)
+            force_constants[3 * atom + axis] = -(plus - minus).ravel() / \
+                (2.0 * displacement)
+
+    force_constants = 0.5 * (force_constants + force_constants.T)
+    weights = np.repeat(masses, 3)
+    dynamical = force_constants / np.sqrt(np.outer(weights, weights))
+
+    eigenvalues = np.linalg.eigvalsh(dynamical)
+    return np.sign(eigenvalues) * np.sqrt(np.abs(eigenvalues)) * _OMEGA_TO_THZ
+
+
+def _forces_displaced(cell, atom: int, axis: int, amount: float,
+                      adaptor, calculator) -> np.ndarray:
+    moved = cell.copy()
+    shift = np.zeros(3)
+    shift[axis] = amount
+    moved.translate_sites([atom], shift, frac_coords=False, to_unit_cell=False)
+    atoms = adaptor.get_atoms(moved)
+    atoms.calc = calculator
+    return np.asarray(atoms.get_forces(), dtype=float)
+
+
+def _smear(frequencies: np.ndarray, grid: np.ndarray,
+           sigma: float) -> np.ndarray:
+    """Gaussian-broadened density of states, normalised to unit area."""
+    if not len(frequencies):
+        return np.zeros(len(grid))
+    delta = grid[:, None] - frequencies[None, :]
+    dos = np.exp(-0.5 * (delta / sigma) ** 2).sum(axis=1)
+    area = np.trapezoid(dos, grid) if hasattr(np, "trapezoid") \
+        else np.trapz(dos, grid)
+    return dos / area if area > 0 else dos
+
+
+@register_function(
+    aliases=["free energy", "vibrational free energy", "heat capacity",
+             "finite temperature", "entropy", "thermal properties"],
+    category="prop",
+    description="Derive the harmonic vibrational free energy, entropy and heat "
+                "capacity at one temperature from a phonon density of states.",
+    requires={"obsm": ["phonon_dos_{level}"], "uns": ["grids"]},
+    produces={"obs": ["vibrational_free_energy_{level}",
+                      "vibrational_entropy_{level}", "heat_capacity_{level}"]},
+    prerequisites=["mv.prop.phonon"],
+    examples=["mv.prop.free_energy(md, level='emt', temperature=300.0)"],
+    related=["mv.prop.phonon", "mv.thermo.hull"],
+    notes="The harmonic approximation, which is where a hull built at 0 K "
+          "starts to become a hull at temperature. It is also where the "
+          "approximation shows: near melting, and for anything with a soft "
+          "mode, harmonic free energies are wrong in a way this cannot detect.",
+)
+def free_energy(md: AnnData, level: str = "emt",
+                temperature: float = 300.0) -> None:
+    """Harmonic vibrational thermodynamics from the phonon DOS.
+
+    Free energy in eV/atom, entropy and heat capacity in eV/K/atom. Well above
+    the Debye temperature the heat capacity approaches ``3 k_B`` per atom, which
+    is the check worth running on a new calculator.
+    """
+    key = f"phonon_dos_{level}"
+    if key not in md.obsm:
+        raise ValueError(f"obsm[{key!r}] absent; run mv.prop.phonon(md, "
+                         f"level={level!r}) first")
+    from ._core import grid_of
+
+    grid = grid_of(md, "phonon_dos")
+    dos = np.asarray(md.obsm[key], dtype=float)
+
+    kT = _BOLTZMANN_EV_PER_K * float(temperature)
+    energy = _THZ_TO_EV * grid                       # hbar*omega, in eV
+    positive = energy > 1e-6
+
+    free, entropy, capacity = [], [], []
+    for row in dos:
+        if not np.isfinite(row).all():
+            free.append(np.nan); entropy.append(np.nan); capacity.append(np.nan)
+            continue
+        weight = row[positive]
+        e = energy[positive]
+        x = e / kT if kT > 0 else np.full_like(e, np.inf)
+
+        # F = integral g(w) [ hw/2 + kT ln(1 - exp(-hw/kT)) ] dw
+        with np.errstate(over="ignore", divide="ignore", invalid="ignore"):
+            f_density = 0.5 * e + kT * np.log1p(-np.exp(-x))
+            n = 1.0 / np.expm1(x)
+            s_density = _BOLTZMANN_EV_PER_K * ((1.0 + n) * np.log1p(n)
+                                               - n * np.log(np.maximum(n, 1e-300)))
+            c_density = _BOLTZMANN_EV_PER_K * x ** 2 * np.exp(x) / \
+                np.maximum(np.expm1(x) ** 2, 1e-300)
+
+        # The stored DOS is normalised to unit area, so each integral is an
+        # average per vibrational mode. Three modes per atom turns that into a
+        # per-atom quantity, which is what a hull and a heat capacity are
+        # normally quoted in — and lets the classical limit be checked: the
+        # heat capacity should approach 3k_B per atom well above the Debye
+        # temperature.
+        free.append(float(_MODES_PER_ATOM * _integrate(
+            np.nan_to_num(f_density), weight, grid[positive])))
+        entropy.append(float(_MODES_PER_ATOM * _integrate(
+            np.nan_to_num(s_density), weight, grid[positive])))
+        capacity.append(float(_MODES_PER_ATOM * _integrate(
+            np.nan_to_num(c_density), weight, grid[positive])))
+
+    md.obs[f"vibrational_free_energy_{level}"] = free
+    md.obs[f"vibrational_entropy_{level}"] = entropy
+    md.obs[f"heat_capacity_{level}"] = capacity
+    md.uns.setdefault("thermal", {})[level] = {"temperature": float(temperature)}
+    record(md, "prop.free_energy", level=level, temperature=temperature)
+
+
+#: eV/K
+_BOLTZMANN_EV_PER_K = 8.617333262e-5
+
+#: Three vibrational modes per atom, which converts a per-mode average taken
+#: over a unit-area density of states into a per-atom quantity.
+_MODES_PER_ATOM = 3.0
+
+
+def _integrate(density: np.ndarray, weight: np.ndarray,
+               grid: np.ndarray) -> float:
+    product = density * weight
+    return (np.trapezoid(product, grid) if hasattr(np, "trapezoid")
+            else np.trapz(product, grid))
+
+
+@register_function(
     aliases=["compare grids", "compare spectra", "spectrum difference",
              "computed versus measured"],
     category="prop",
@@ -313,4 +548,4 @@ def compare_grids(md: AnnData, quantity: str, a: str, b: str) -> None:
     record(md, "prop.compare_grids", quantity=quantity, a=a, b=b)
 
 
-__all__ = ["xrd", "rdf", "elastic", "compare_grids"]
+__all__ = ["xrd", "rdf", "elastic", "phonon", "free_energy", "compare_grids"]
