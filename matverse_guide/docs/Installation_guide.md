@@ -44,11 +44,49 @@ pip install "matverse[matminer]"      # matminer delegation
 | `mp` | `mv.data.from_mp`, `mv.thermo.references_from_mp` | absolute hulls against known phases |
 | `mlip` | `mace-mpa`, `mace-omat` levels | screening with something better than EMT |
 | `matminer` | `mv.feat.matminer` | reusing an existing matminer featuriser |
+| `batched` | `mv.md.run` on a GPU | integrating hundreds of trajectories at once |
 
 `mv.tl.pca` and `mv.tl.neighbors` work without `analysis`: PCA is an exact SVD
 (the element axis is at most 118 columns wide, so there is nothing to
 approximate) and the neighbour search falls back to an exact brute-force
 computation.
+
+## Batched molecular dynamics needs a newer Python
+
+`mv.md` runs on ASE by default, one trajectory at a time. For a screen with
+hundreds of candidates that leaves a GPU idle between force calls, and
+[TorchSim](https://github.com/TorchSim/torch-sim) is the engine that fixes it —
+it puts the whole dataset in one tensor and steps it together, which is the
+shape the object already has.
+
+```python
+mv.md.batched_available()
+# {'torch_sim': True, 'cuda': True, 'devices': 1, 'models': {...}}
+```
+
+```{warning}
+`torch-sim-atomistic` requires **Python ≥ 3.11**, and ≥ 3.12 from its 0.4 line,
+while matverse's own floor is 3.10. On an older interpreter the extra simply
+will not resolve, and `batched_available()` says so rather than failing at
+import. Everything else works; you lose the batched path, not the module.
+
+Two more constraints found the hard way on one cluster, in case they match
+yours: `torch-sim-atomistic` 0.4.2 pins `vesin-torch==0.4.2` exactly and that
+version ships no wheel, so 0.3.x installs where the newest does not; and on
+Python 3.12 a source build of `scikit-learn` will drag in a `scipy` that wants
+OpenBLAS, which pinning `scipy<1.17` and `scikit-learn<1.9` avoids.
+```
+
+Register a batched model separately from an ASE calculator — the interfaces
+differ, and registering the same physics under both is normal:
+
+```python
+from torch_sim.models.mace import MaceModel
+
+mv.md.register_batched("mace-mpa", lambda: MaceModel(device="cuda"),
+                       method="MACE-MPA-0", reference="PBE+U", license="MIT")
+mv.md.run(md, level="mace-mpa", temperature=600.0, steps=2000)
+```
 
 ## Which calculator should I install?
 

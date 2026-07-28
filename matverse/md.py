@@ -52,10 +52,69 @@ _BOLTZMANN_EV_PER_K = 8.617333262e-5
 _NERNST_EINSTEIN = 1.602176634e-19 * 1.0e8
 
 
+#: name -> (factory, metadata) for batched TorchSim models. Registered rather
+#: than hardcoded, for the same reason ``mv.calc`` registers its calculators.
+_BATCHED: dict[str, tuple] = {}
+
+
 def _engine(level: str):
     """The calculator and its metadata, shared with ``mv.calc``."""
     from .calc import _get
     return _get(level)
+
+
+@register_function(
+    aliases=["register batched model", "torchsim model", "gpu md model",
+             "batched potential"],
+    category="md",
+    description="Register a model that integrates many systems at once on a "
+                "GPU, for use by mv.md.run(engine='torchsim').",
+    examples=["mv.md.register_batched('lj', lambda: LennardJonesModel(), "
+              "method='Lennard-Jones')"],
+    related=["mv.md.run", "mv.md.batched_available"],
+    notes="Separate from mv.calc.register_calculator because the interfaces "
+          "differ: an ASE calculator answers about one structure at a time, "
+          "and a TorchSim model answers about a batch. Registering the same "
+          "physics under both is normal — one for a relaxation, one for a "
+          "thousand trajectories.",
+)
+def register_batched(name: str, factory, *, method: str | None = None,
+                     reference: str | None = None, surrogate: bool = True,
+                     license: str | None = None, **extra) -> None:
+    """Register a batched (TorchSim) model under a level name."""
+    _BATCHED[name] = (factory, {"kind": "mlip", "method": method or name,
+                                "reference": reference,
+                                "surrogate": bool(surrogate),
+                                "license": license, "uncertainty": None,
+                                "engine": "torchsim", **extra})
+
+
+@register_function(
+    aliases=["batched available", "which batched models", "is torchsim "
+             "installed", "gpu md available"],
+    category="md",
+    description="Report whether a batched molecular-dynamics engine is "
+                "available and which models are registered with it.",
+    examples=["mv.md.batched_available()"],
+    related=["mv.md.register_batched", "mv.md.run"],
+)
+def batched_available() -> dict:
+    """What the batched path can run here, and why not if it cannot."""
+    try:
+        import torch
+
+        import torch_sim                                    # noqa: F401
+        engine = {"torch_sim": True,
+                  "cuda": bool(torch.cuda.is_available()),
+                  "devices": int(torch.cuda.device_count())}
+    except ImportError as exc:
+        return {"torch_sim": False, "reason": str(exc),
+                "install": "torch-sim-atomistic needs Python >= 3.11; "
+                           "matverse's own floor is 3.10, so this is an "
+                           "environment decision rather than a dependency"}
+    return {**engine,
+            "models": {name: dict(meta) for name, (_, meta) in
+                       _BATCHED.items()}}
 
 
 @register_function(
@@ -104,10 +163,14 @@ def run(md: AnnData, level: str = "emt", source: str = "input",
 
     from pymatgen.io.ase import AseAtomsAdaptor
 
+    tag = key_added or level
+    if level in _BATCHED:
+        return _run_batched(md, level, tag, source, temperature, steps,
+                            timestep, ensemble, seed)
+
     factory, meta = _engine(level)
     adaptor = AseAtomsAdaptor()
     calculator = factory()
-    tag = key_added or level
 
     energies, temperatures, msds, diffusivities = [], [], [], []
     volumes, finals, per_element, failed = [], [], [], 0
@@ -175,6 +238,62 @@ def _check_thermostat(md: AnnData, tag: str, target: float,
         f"one asked for. Raise `equilibration`, raise `friction`, or use a "
         f"larger cell — a few-atom cell fluctuates too much to hold a "
         f"temperature.", stacklevel=3)
+
+
+def _run_batched(md: AnnData, level: str, tag: str, source: str,
+                 temperature: float, steps: int, timestep: float,
+                 ensemble: str, seed: int) -> None:
+    """Integrate every structure at once on one device.
+
+    The ASE path above runs one trajectory per structure in a Python loop, which
+    leaves a GPU idle between force calls. A batched engine puts the whole
+    dataset in one tensor and steps it together — the same shape the object
+    already has, which is why this is a different execution path rather than a
+    different library.
+
+    Per-atom displacement is not read back here: the batched state packs every
+    system into one flat atom index, and unpacking it correctly is worth doing
+    deliberately rather than inferring. Diffusivity therefore comes from the ASE
+    path, and this one is for relaxing and equilibrating a large batch.
+    """
+    import torch
+    import torch_sim as ts
+
+    factory, meta = _BATCHED[level]
+    model = factory()
+    integrator = (ts.integrators.npt_langevin if ensemble == "npt"
+                  else ts.integrators.nvt_langevin)
+
+    S = structures(md, source)
+    torch.manual_seed(seed)
+    final = ts.integrate(system=S, model=model, integrator=integrator,
+                         n_steps=int(steps), temperature=float(temperature),
+                         timestep=float(timestep))
+    relaxed = final.to_structures() if hasattr(final, "to_structures") else S
+
+    md.obs[f"md_energy_{tag}"] = _detach(getattr(final, "energy", None), md.n_obs)
+    md.obs[f"md_temperature_{tag}"] = _detach(
+        ts.calc_kT(masses=final.masses, momenta=final.momenta,
+                   system_idx=final.system_idx) / _BOLTZMANN_EV_PER_K, md.n_obs)
+    md.obs[f"md_volume_{tag}"] = [float(s.volume) for s in relaxed]
+    deposit_structures(md, f"md_{tag}", relaxed)
+    set_level(md, tag, **{**meta, "engine": "torchsim"}, source=source,
+              ensemble=ensemble, temperature=temperature, steps=steps,
+              timestep=timestep, device=str(getattr(model, "device", "?")),
+              note="Batched engine: no per-atom displacement is read back, so "
+                   "no MSD or diffusivity. Use the ASE path for those.")
+    _check_thermostat(md, tag, temperature)
+    record(md, "md.run", level=level, source=source, temperature=temperature,
+           steps=steps, ensemble=ensemble, engine="torchsim")
+
+
+def _detach(value, n: int) -> np.ndarray:
+    """A torch tensor as a plain array of the right length, or NaN."""
+    if value is None:
+        return np.full(n, np.nan)
+    array = np.asarray(value.detach().cpu().numpy()
+                       if hasattr(value, "detach") else value, dtype=float)
+    return array if array.shape == (n,) else np.full(n, np.nan)
 
 
 def _integrate(structure, adaptor, calculator, temperature, steps, timestep,
@@ -505,4 +624,5 @@ def _quench(cell, adaptor, calculator, melt_t, final_t, melt_steps,
     return adaptor.get_structure(atoms)
 
 
-__all__ = ["run", "sweep", "conductivity", "melt_quench"]
+__all__ = ["run", "sweep", "conductivity", "melt_quench", "register_batched",
+           "batched_available"]

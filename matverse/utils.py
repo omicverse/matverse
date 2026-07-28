@@ -135,10 +135,12 @@ def convert(md: AnnData, column: str, unit: str | None = None,
 )
 def check_units(md: AnnData) -> dict:
     """Column to unit, with ``None`` where nothing is known."""
+    import pandas as pd
+
     declared = dict(md.uns.get("units", {}))
     out: dict[str, str | None] = {}
     for column in md.obs.columns:
-        if not np.issubdtype(md.obs[column].dtype, np.number):
+        if not pd.api.types.is_numeric_dtype(md.obs[column]):
             continue
         if column in declared:
             out[column] = declared[column]

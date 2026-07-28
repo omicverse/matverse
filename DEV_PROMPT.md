@@ -176,7 +176,18 @@ in the whole line of work.
 
 ## Environment
 
-Python env: `/scratch/users/steorra/env/omicdev/bin/python`. Never run heavy work
+Python env: **not** `omicdev` — it has neither pymatgen nor ase, so matverse
+cannot import there. Two environments work, and which you want depends on
+whether you need the batched GPU path:
+
+- `/scratch/users/steorra/env/beacon_mat2/bin/python` — Python 3.10, pymatgen
+  2025.10.7. Everything except `mv.md`'s batched engine.
+- `/scratch/users/steorra/env/mv312/bin/python` — Python 3.12, pymatgen
+  2026.5.4, torch 2.6 cu124, torch-sim-atomistic 0.3.0. Adds batched GPU
+  molecular dynamics. Built with `uv`; note that `pandas` 3.0 and `numpy` 2.5
+  here caught two real forward-compatibility bugs that 3.10 did not.
+
+Never run heavy work
 on the Sherlock login node — `sh_dev` or `sbatch`. Job I/O to `$SCRATCH`.
 
 The decorator lives in `omicverse.utils.register_function`; the standalone

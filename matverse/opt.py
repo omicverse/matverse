@@ -272,8 +272,10 @@ def observe(md: AnnData, values=None, name: str = "campaign") -> None:
         raise ValueError("no candidate is selected; run mv.opt.suggest first")
 
     if values is not None:
-        column = md.obs[objective].to_numpy(dtype=float) \
-            if objective in md.obs else np.full(md.n_obs, np.nan)
+        # copy=True: from pandas 3.0 to_numpy may return a read-only view, and
+        # this writes the observed values into it.
+        column = (md.obs[objective].to_numpy(dtype=float, copy=True)
+                  if objective in md.obs else np.full(md.n_obs, np.nan))
         names = list(map(str, md.obs_names))
         for key, value in dict(values).items():
             if str(key) not in names:

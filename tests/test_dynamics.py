@@ -105,6 +105,69 @@ class TestMolecularDynamics:
             mv.md.conductivity(big, species="Li", level="emt")
 
 
+class TestBatchedEngine:
+    """The GPU path, skipped where its backend is absent.
+
+    torch-sim-atomistic requires Python >= 3.11 while matverse's own floor is
+    3.10, so whether these run is an environment decision rather than a
+    dependency one. `mv.md.batched_available()` says which situation you are in.
+    """
+
+    @pytest.fixture
+    def model(self):
+        torch_sim = pytest.importorskip("torch_sim")           # noqa: F841
+        from torch_sim.models.lennard_jones import LennardJonesModel
+        import torch
+
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        mv.md.register_batched("lj-batched",
+                               lambda: LennardJonesModel(device=device),
+                               method="Lennard-Jones (TorchSim)",
+                               license="MIT")
+        return device
+
+    @pytest.fixture
+    def batch(self):
+        cell = _fcc("Cu", 3.61)
+        cell.make_supercell([2, 2, 2])
+        return mv.data.from_structures([cell.copy() for _ in range(4)])
+
+    def test_availability_reports_the_reason_when_absent(self):
+        report = mv.md.batched_available()
+        assert "torch_sim" in report
+        if not report["torch_sim"]:
+            assert "3.11" in report["install"]
+
+    def test_a_batch_integrates_in_one_call(self, model, batch):
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            mv.md.run(batch, level="lj-batched", temperature=300.0, steps=100,
+                      timestep=0.002)
+        assert "md_energy_lj-batched" in batch.obs
+        assert "md_lj-batched" in mv.variants(batch)
+        assert np.isfinite(
+            batch.obs["md_energy_lj-batched"].to_numpy(dtype=float)).all()
+
+    def test_the_engine_is_recorded_on_the_level(self, model, batch):
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            mv.md.run(batch, level="lj-batched", temperature=300.0, steps=50,
+                      timestep=0.002)
+        info = mv.level_info(batch, "lj-batched")
+        assert info["engine"] == "torchsim"
+        assert "no MSD or diffusivity" in info["note"]
+
+    def test_the_thermostat_check_applies_to_this_path_too(self, model, batch):
+        """Default Lennard-Jones parameters are argon-like and wrong for a
+        copper lattice, so the system heats itself. The point is that matverse
+        says so rather than reporting the temperature that was requested."""
+        with pytest.warns(UserWarning, match="requested"):
+            mv.md.run(batch, level="lj-batched", temperature=300.0, steps=100,
+                      timestep=0.002)
+
+
 class TestTemperatureSweep:
     @pytest.fixture
     def big(self):

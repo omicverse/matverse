@@ -27,6 +27,11 @@ ml = ["scikit-learn"]                                # mv.model estimators
 matminer = ["matminer"]
 mp = ["mp-api>=0.46.2"]                              # Delta-table data products
 mlip = ["mace-torch"]
+# Batched GPU molecular dynamics. torch-sim-atomistic requires Python >= 3.11
+# (>= 3.12 from its 0.4 line) while matverse's own floor is 3.10, so this extra
+# is installable only on a newer interpreter. mv.md.batched_available() reports
+# which situation an installation is in, and the ASE path works regardless.
+batched = ["torch-sim-atomistic"]
 dev = ["pytest"]
 
 [project.urls]

@@ -50,8 +50,12 @@ def element_stats(md: AnnData, properties=None, statistics=STATISTICS,
         raise ValueError(
             "this object has no element axis; it was built with build_X=False")
 
+    # pandas' own predicate, not np.issubdtype: from pandas 3.0 a string column
+    # carries an extension dtype that numpy cannot interpret at all, and the
+    # numpy check raises rather than returning False.
+    import pandas as pd
     numeric = [c for c in md.var.columns
-               if np.issubdtype(md.var[c].dtype, np.number)]
+               if pd.api.types.is_numeric_dtype(md.var[c])]
     props = list(properties) if properties is not None else numeric
     missing = [p for p in props if p not in md.var.columns]
     if missing:

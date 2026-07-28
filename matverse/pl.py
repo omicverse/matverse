@@ -355,8 +355,8 @@ def embedding(md: AnnData, color: str | None = None, use_rep: str = "X_pca",
         if color not in md.obs:
             raise ValueError(f"obs[{color!r}] absent")
         values = md.obs[color]
-        if isinstance(values.dtype, pd.CategoricalDtype) or \
-                values.dtype == object or values.dtype == bool:
+        if not pd.api.types.is_numeric_dtype(values) or \
+                pd.api.types.is_bool_dtype(values):
             categories = list(pd.unique(values.astype(str)))
             palette = _plt().get_cmap("tab10")
             for k, category in enumerate(categories):
