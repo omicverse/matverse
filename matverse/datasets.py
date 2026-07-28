@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import json
 import os
+import warnings
 from pathlib import Path
 
 from anndata import AnnData
@@ -293,9 +294,20 @@ def fetch(query: str, provider: str = "mp", max_n: int = 200,
     path = directory / f"{stem}.h5ad"
 
     if path.exists() and not refresh:
-        md = anndata.read_h5ad(path)
-        md.uns.setdefault("dataset", {})["from_cache"] = str(path)
-        return md
+        try:
+            md = anndata.read_h5ad(path)
+        except Exception as exc:
+            # A cache entry written by a different anndata version, or a file
+            # truncated by a job that was killed mid-write, must not be fatal:
+            # a cache exists to make things faster, and one that can make a
+            # working call fail is worse than no cache at all. Re-fetch.
+            warnings.warn(
+                f"the cached {path.name} could not be read "
+                f"({type(exc).__name__}), so it is being fetched again. "
+                f"Delete it if this repeats.", stacklevel=2)
+        else:
+            md.uns.setdefault("dataset", {})["from_cache"] = str(path)
+            return md
 
     from .data import from_mp, from_optimade
 

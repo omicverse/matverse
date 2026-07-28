@@ -161,7 +161,16 @@ def _run_neb(start, end, adaptor, factory, n_images, fmax, steps, climb,
     for image in images:
         image.calc = factory()
 
-    band = NEB(images, k=spring, climb=climb)
+    # 'improvedtangent' rather than ASE's default 'aseneb'. ASE's own warning
+    # calls that default "an unpublished, custom implementation that is not
+    # recommended as it frequently results in very poor bands" — which is not
+    # something to leave on and hope for. The improved-tangent formulation is
+    # Henkelman and Jonsson (2000), doi:10.1063/1.1323224, and it is what the
+    # barriers quoted in the documentation were computed with.
+    try:
+        band = NEB(images, k=spring, climb=climb, method="improvedtangent")
+    except TypeError:                   # older ASE without the keyword
+        band = NEB(images, k=spring, climb=climb)
     try:
         band.interpolate(method=interpolation)
     except Exception:

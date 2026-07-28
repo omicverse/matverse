@@ -1,5 +1,110 @@
 # Release notes
 
+## v0.1.14
+
+### Every registered function is called in a notebook
+
+The registry had 121 entries and the tutorials exercised 82 of them. A registry
+entry is a promise that a function is part of the public surface; if the
+documentation never calls it, nothing checks the promise still holds — the
+signature drifts, the slot it writes gets renamed, and the first person to find
+out is a user.
+
+So it is now **enforced**: `_scripts/build_notebooks.py` fails the build if any
+registered function appears in no notebook, and the docs CI job runs it. 121 of
+121, across 11 executed notebooks — 227 code cells and 36 figures.
+
+Two new tutorials carry most of the remainder:
+
+- **[Getting data in and out](tutorials/data_io.ipynb)** — every door into the
+  object and back out, against a **live** OQMD over OPTIMADE rather than a
+  described one. It queries all 15 binary Al–Ni entries and finds that 7 are
+  duplicates, which is a better argument for `mv.pp.dedup` than any fixture.
+- **[Infrastructure](tutorials/infrastructure.ipynb)** — units, checkpoints,
+  corpora larger than memory, Slurm scripts, and the DFT hand-off.
+
+The rest went where they belong: `free_energy` after the phonons,
+`calc.committee` next to model uncertainty, `screen.rank` and `thermo.reaction`
+into screening, `feat.embed` into chemical space, `pp.supercell`/`pp.strain`
+into defects, batched MD engines into dynamics.
+
+### Bugs this found
+
+**You could not continue working on a saved object.** h5ad stores
+`uns['provenance']` as a list of strings and reads it back as a numpy array,
+which has no `.append` — so the *first operation* on any reloaded object raised
+`AttributeError`. Every tutorial ended by saying the object survives a round
+trip; it did, and then broke. `record()` now normalises whatever it finds, and
+a test loads a written object and keeps working on it.
+
+**`mv.data.from_optimade` failed on machines with working network.** It used
+`urllib`, which verifies TLS against the interpreter's system certificate
+bundle. On a cluster that bundle is routinely stale, and every HTTPS call died
+with `CERTIFICATE_VERIFY_FAILED` on a node whose network was fine. It now
+prefers `requests`, which ships `certifi` — and which arrives with pymatgen, so
+it is always present.
+
+**An unreadable cache entry was fatal.** `mv.datasets.fetch` let a cache file
+written by a different anndata version take down the call. A cache exists to
+make things faster; one that can make a working call fail is worse than none.
+It now warns and re-fetches.
+
+**"Check your filter" was the wrong advice.** Materials Project's OPTIMADE
+mirror answers `200` with `data_returned=0` to *any* query, including an empty
+one. A user sent to debug their filter will not find the problem there, so the
+error now distinguishes a provider serving nothing from a filter matching
+nothing.
+
+## v0.1.13
+
+### Four tutorials for the physics
+
+The tutorials covered 46% of the public API and skipped four namespaces
+entirely — `mv.md`, `mv.neb`, `mv.surf` and `mv.mag` — which between them are
+diffusion, catalysis, dynamics and magnetism. The library could do all of it,
+validated against literature in the test suite, and the documentation showed
+none of it.
+
+- **[Defects and diffusion](tutorials/defects_and_diffusion.ipynb)** — vacancy
+  enumeration, formation energy against Fermi level, and a migration barrier of
+  **0.754 eV** against a literature ~0.70 for fcc copper. Ends by combining
+  formation and migration into a diffusion coefficient and reading the
+  Arrhenius slope.
+- **[Surfaces and adsorption](tutorials/surfaces_and_adsorption.ipynb)** —
+  slabs, surface energies in the literature ordering **(111) < (100) < (110)**,
+  the Wulff shape, and oxygen binding 170 meV more strongly in the hollow site
+  than on top of an atom.
+- **[Dynamics](tutorials/dynamics.ipynb)** — equilibration you can see, thermal
+  expansion from motion alone, and a melt-quench with the failure mode that
+  caught eight universal potentials in 2026.
+- **[Magnetic ordering](tutorials/magnetic_ordering.ipynb)** — enumerate the
+  spin states before the hull. It ends by refusing to name a ground state,
+  because `magnetic_spread` comes out at exactly zero: EMT has no notion of
+  spin, and the object says so in a number rather than producing a confident
+  arbitrary answer.
+
+### `mv.md.run` keeps the temperature trace
+
+It sampled the instantaneous temperature every `sample_every` steps and threw
+all of it away except the mean. A mean cannot distinguish a run that
+equilibrated from one still drifting at the last step, and that distinction is
+the difference between a result and an artefact — so the trace is now deposited
+as `obsm['md_temperature_trace_{level}']` against a time grid in picoseconds.
+
+A rerun of different length discards the earlier trace rather than failing.
+Unlike a diffraction pattern, whose axis the caller chooses, a trace axis falls
+out of `steps` and `sample_every`, so two runs of different length produce
+curves that genuinely cannot share an axis.
+
+### The NEB used a method ASE recommends against
+
+`mv.neb.barrier` built its band with ASE's default tangent estimate. ASE's own
+warning describes that default as "an unpublished, custom implementation ...
+not recommended as it frequently results in very poor bands", which is not
+something to leave on and hope for. It now uses the improved-tangent
+formulation of Henkelman and Jónsson (2000). The copper barrier is unchanged at
+0.754 eV, which is the reassuring outcome.
+
 ## v0.1.12
 
 ### The tutorials are executed notebooks

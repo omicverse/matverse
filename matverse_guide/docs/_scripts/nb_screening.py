@@ -223,6 +223,26 @@ Note the level changed. Materials Project entries are PBE+U with fitted
 corrections; putting them on a hull with EMT energies is not a hull of anything,
 and `mv.thermo.hull` raises `LevelMismatch` rather than letting you.
 
+### The hull is not the only stability question
+
+A material can sit on the solid-state hull and still dissolve the moment it
+meets water. Aqueous stability is a **separate** question, and
+`mv.thermo.pourbaix` answers it — at a stated pH and applied potential, which
+is the only way the question means anything."""),
+
+    ("code", """\
+try:
+    mv.thermo.pourbaix(md, ph=7.0, potential=0.0)
+    print(md.obs[["formula", "pourbaix_decomposition"]].round(3))
+except (ValueError, ImportError) as exc:
+    print(f"{type(exc).__name__}: {exc}")"""),
+
+    ("markdown", """\
+It refuses without a key, and the message says why rather than returning zeros.
+Aqueous ion energies are **fitted experimental data** that Materials Project
+serves; unlike a hull they cannot be computed from your candidate set, so there
+is no honest default to fall back on.
+
 ## Shortlist"""),
 
     ("markdown", """\
@@ -272,7 +292,29 @@ md.obs[["formula", "e_above_hull_emt", "density", "pareto",
 
     ("markdown", """\
 `pareto_rank` keeps the second-best trade-offs reachable instead of discarding
-everything that is not optimal."""),
+everything that is not optimal.
+
+When one column really does decide, `mv.screen.rank` is the simpler tool."""),
+
+    ("code", """\
+mv.screen.rank(md, by="e_above_hull_emt")
+md.obs[["formula", "e_above_hull_emt", "rank"]].sort_values("rank").round(4)"""),
+
+    ("markdown", """\
+## Is the reaction downhill?
+
+A hull says whether a phase survives against everything in the dataset.
+`mv.thermo.reaction` answers a narrower, more practical question: does *this*
+combination of reactants make *that* product, and by how much."""),
+
+    ("code", """\
+mv.thermo.reaction(md, reactants=["Al", "Ni"], products=["AlNi"], level="emt")"""),
+
+    ("markdown", """\
+`favourable: False` and a positive energy — EMT again saying no intermetallic is
+stable, for the reason given above. On a level of theory that can see chemical
+ordering this is the number that tells you whether a synthesis route is worth
+attempting."""),
 
     ("code", """\
 ax = mv.pl.pareto(md, "e_above_hull_emt", "density")

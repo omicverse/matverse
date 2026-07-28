@@ -73,7 +73,13 @@ jobs:
         # myst-nb runs with nb_execution_mode = "off" and renders stored
         # outputs, so nothing here would catch a tutorial whose code stopped
         # working. Running them is what makes the tutorials tested rather than
-        # merely written; the script exits non-zero if any cell raised.
+        # merely written; the script exits non-zero if any cell raised, and
+        # also if any registered function appears in no notebook at all.
+        #
+        # data_io queries OQMD over OPTIMADE, so this step needs network. If a
+        # provider is down the step fails, which is noisy but honest — the
+        # alternative is a tutorial that claims to query a live database and
+        # quietly does not.
         working-directory: matverse_guide/docs
         run: |
           pip install matplotlib scikit-learn

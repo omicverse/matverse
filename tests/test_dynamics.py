@@ -40,6 +40,36 @@ class TestMolecularDynamics:
         cell.make_supercell([2, 2, 2])
         return mv.data.from_structures([cell])
 
+    def test_the_temperature_trace_is_kept_not_just_its_mean(self, big):
+        """A mean cannot distinguish a run that equilibrated from one still
+        drifting at the last step, and that is the difference between a result
+        and an artefact."""
+        mv.md.run(big, level="emt", temperature=300.0, steps=400,
+                  sample_every=20)
+        trace = big.obsm["md_temperature_trace_emt"]
+        assert trace.shape == (1, 20)
+        assert float(trace[0].mean()) == pytest.approx(
+            float(big.obs["md_temperature_emt"].iloc[0]), rel=1e-9)
+
+    def test_a_second_run_replaces_an_incomparable_trace(self, big):
+        """The trace axis is not chosen by the caller — its length falls out of
+        steps and sample_every — so a rerun of different length produces a
+        curve that cannot share the stored axis. The stale one goes rather than
+        the deposit failing."""
+        mv.md.run(big, level="emt", temperature=300.0, steps=400,
+                  sample_every=20)
+        mv.md.run(big, level="emt", temperature=300.0, steps=200,
+                  sample_every=20)
+        assert big.obsm["md_temperature_trace_emt"].shape == (1, 10)
+        assert len(mv.grid_of(big, "md_temperature_trace")) == 10
+
+    def test_a_sweep_after_a_run_is_not_blocked_by_the_trace(self, big):
+        mv.md.run(big, level="emt", temperature=300.0, steps=400,
+                  sample_every=20)
+        mv.md.sweep(big, level="emt", temperatures=(300.0, 500.0), steps=200,
+                    sample_every=20)
+        assert big.obsm["md_volume_emt"].shape == (1, 2)
+
     def test_a_run_deposits_its_observables(self, big):
         mv.md.run(big, level="emt", temperature=300.0, steps=300,
                   sample_every=20)

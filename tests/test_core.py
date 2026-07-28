@@ -141,6 +141,27 @@ class TestRoundTrip:
         assert "X_element_stats" in back.obsm
         assert back.uns["provenance"][0] == "data.from_structures"
 
+    def test_work_continues_on_a_reloaded_object(self, md, tmp_path):
+        """h5ad stores a list of strings and reads it back as a numpy array,
+        which has no .append — so every operation on a saved-and-reloaded
+        object failed on its own provenance write. Saving is only useful if
+        you can pick the object back up.
+        """
+        import anndata
+
+        mv.pp.describe(md)
+        path = tmp_path / "md.h5ad"
+        md.write_h5ad(path)
+        back = anndata.read_h5ad(path)
+
+        mv.pp.qc(back)                       # would raise AttributeError
+        mv.prop.xrd(back, two_theta=(10, 40), step=0.5)
+
+        history = mv.provenance(back)
+        assert history[0] == "data.from_structures"
+        assert any(step.startswith("pp.qc") for step in history)
+        assert any(step.startswith("prop.xrd") for step in history)
+
     def test_ase_per_atom_arrays_stay_aligned(self):
         """Per-atom data belongs to a material, so it cannot live in uns.
 

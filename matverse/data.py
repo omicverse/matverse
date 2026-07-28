@@ -373,10 +373,6 @@ def from_optimade(filter: str, provider: str = "mp",
                   base_url: str | None = None, max_n: int = 100,
                   timeout: float = 60.0) -> AnnData:
     """Query an OPTIMADE endpoint. Needs network access."""
-    import json
-    import urllib.parse
-    import urllib.request
-
     url = base_url or OPTIMADE_PROVIDERS.get(provider)
     if url is None:
         raise ValueError(
@@ -384,14 +380,11 @@ def from_optimade(filter: str, provider: str = "mp",
             f"{sorted(OPTIMADE_PROVIDERS)}. Any OPTIMADE endpoint works — pass "
             f"base_url= directly.")
 
-    query = urllib.parse.urlencode({"filter": filter,
-                                    "page_limit": min(int(max_n), 100)})
-    request = urllib.request.Request(
-        f"{url.rstrip('/')}/structures?{query}",
-        headers={"User-Agent": "matverse", "Accept": "application/json"})
+    params = {"filter": filter, "page_limit": min(int(max_n), 100)}
+    endpoint = f"{url.rstrip('/')}/structures"
+    headers = {"User-Agent": "matverse", "Accept": "application/json"}
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            payload = json.loads(response.read().decode("utf-8"))
+        payload = _get_json(endpoint, params, headers, timeout)
     except Exception as exc:
         raise RuntimeError(
             f"OPTIMADE query to {url} failed: {type(exc).__name__}: {exc}"
@@ -423,6 +416,18 @@ def from_optimade_response(payload: dict, provider: str = "optimade",
     if max_n is not None:
         entries = entries[:max_n]
     if not entries:
+        # "check the filter" is the wrong advice when the provider returned
+        # nothing for any query at all — Materials Project's OPTIMADE mirror
+        # answers 200 with data_returned=0 to an *empty* filter, and a user
+        # sent to debug their filter will not find the problem there.
+        available = payload.get("meta", {}).get("data_returned")
+        if available == 0:
+            raise ValueError(
+                "the OPTIMADE endpoint returned no structures and reports "
+                "data_returned=0, which means the provider itself is serving "
+                "nothing rather than your filter matching nothing. Try another "
+                "provider — mv.data.optimade_providers() lists them — or pass "
+                "base_url= for an endpoint you trust.")
         raise ValueError("the OPTIMADE response contains no structures; check "
                          "the filter")
 
@@ -487,6 +492,37 @@ def _structure_from_optimade(attributes: dict):
     return Structure(Lattice(np.asarray(lattice, dtype=float)),
                      occupancies, np.asarray(positions, dtype=float),
                      coords_are_cartesian=True)
+
+
+def _get_json(endpoint: str, params: dict, headers: dict, timeout: float):
+    """Fetch JSON, preferring requests over urllib.
+
+    Not a style preference. ``urllib`` verifies TLS against the interpreter's
+    system certificate bundle, and on a cluster that bundle is frequently
+    stale or absent — every HTTPS call then dies with
+    ``CERTIFICATE_VERIFY_FAILED`` on a machine whose network is perfectly fine.
+    ``requests`` ships ``certifi`` and verifies against that instead, so it
+    works where urllib does not. It arrives with pymatgen, so it is present
+    wherever matverse is; urllib remains the fallback for the case where it is
+    somehow not.
+    """
+    import json
+
+    try:
+        import requests
+    except ImportError:                                  # pragma: no cover
+        import urllib.parse
+        import urllib.request
+
+        query = urllib.parse.urlencode(params)
+        request = urllib.request.Request(f"{endpoint}?{query}", headers=headers)
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return json.loads(response.read().decode("utf-8"))
+
+    response = requests.get(endpoint, params=params, headers=headers,
+                            timeout=timeout)
+    response.raise_for_status()
+    return response.json()
 
 
 @register_function(

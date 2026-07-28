@@ -153,6 +153,29 @@ mv.model.fit(md, target="energy_per_atom_emt", model="extra", level="et_pred")
 md.uns["model"]["et_pred"]["test_scores"]"""),
 
     ("markdown", """\
+### Uncertainty from a committee instead
+
+A random forest hands you a spread for free. A machine-learned potential does
+not — so the field trains several with different seeds and reads the
+disagreement between them as the uncertainty. `mv.calc.committee` does that
+across any set of levels."""),
+
+    ("code", """\
+md.obs["energy_per_atom_emt2"] = (
+    md.obs["energy_per_atom_emt"].to_numpy(dtype=float) + 0.03)
+mv.set_level(md, "emt2", kind="classical", method="EMT, shifted",
+             surrogate=True)
+
+mv.calc.committee(md, levels=["emt", "emt2"])
+md.obs[["formula", "energy_per_atom_ensemble",
+        "energy_per_atom_ensemble_std"]].head(6).round(4)"""),
+
+    ("markdown", """\
+The two members here differ by a constant, so the spread is the same everywhere
+— which is what a committee of one model plus an offset deserves. With
+genuinely independent members the spread varies, and where it is largest is
+where the potential is extrapolating.
+
 ## How much was the random split flattering you?
 
 This is the function worth running before reporting any number."""),
