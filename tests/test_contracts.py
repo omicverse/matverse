@@ -63,7 +63,7 @@ class TestRegistryIntegrity:
 
     def test_describe_renders_the_slot_convention(self):
         text = mv.describe("mv.calc.relax")
-        assert "obsm['structures']['relaxed_{level}']" in text
+        assert "obsm['structures']['{key_added}']" in text
         assert "obs['energy_{level}']" in text
 
 
@@ -168,7 +168,8 @@ def _probe_everything(make_md) -> ProbeReport:
         (mv.feat.similarity, featured, (), {}),
         (mv.calc.energy, make_md, (), {"level": "emt"}),
         (mv.calc.relax, make_md, (), {"level": "emt", "fmax": 0.2,
-                                      "steps": 20}),
+                                      "steps": 20,
+                                      "key_added": "relaxed_emt"}),
         (mv.thermo.hull, energised, (), {"level": "emt"}),
         (mv.screen.rank, grouped, (), {"by": "volume"}),
         (mv.tl.pca, make_md, (), {"n_comps": 2}),

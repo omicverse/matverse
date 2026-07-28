@@ -1,5 +1,98 @@
 # Release notes
 
+## v0.1.8
+
+The three capabilities a 2026 survey of the field named as must-haves and this
+library did not have. **107 functions across 19 namespaces.**
+
+### `mv.md` — molecular dynamics
+
+Everything before this described a structure sitting still at zero kelvin.
+Diffusion, ionic conductivity, thermal expansion, melting and the structure of a
+glass are all properties of a system that is moving, which is why this is the
+module the rest of the missing half hangs off.
+
+- `run` — NVT or NPT at one temperature, depositing mean energy, mean
+  temperature, MSD and diffusivity. **Trajectories are not stored**: observables
+  are computed as the run goes, because a library that materialises a trajectory
+  per candidate stops working at a few hundred materials.
+- Per-element diffusivity goes to a **layer**, since it is materials × elements
+  — the same shape as `X`. For an ionic conductor the number that matters is the
+  mobile species' diffusivity; averaging lithium with its framework describes
+  nothing.
+- `sweep` — a temperature series stored on the **condition axis**, using the same
+  grid mechanism as a diffraction pattern. Nothing new was needed to express
+  "the same property at different conditions". Gives thermal expansion and an
+  Arrhenius activation energy.
+- `conductivity` — Nernst–Einstein, with its assumption stated.
+- `melt_quench` — with the fixed-volume quench that survives the 2026 finding
+  that all eight tested universal potentials produce catastrophically
+  under-dense amorphous structures under a naive NPT quench.
+
+**The thermostat now tells you when it failed.** A weakly coupled thermostat
+takes tens of picoseconds to reach its target, so a short run samples a
+temperature that is not the one requested — 69 K for a requested 300 K in one
+test. The achieved temperature was always recorded; a run that misses by more
+than 20% now warns, because every observable belongs to the temperature actually
+reached.
+
+### `mv.neb` — migration barriers
+
+`hop_endpoints` builds the endpoints for a vacancy-mediated hop; `barrier` runs
+climbing-image NEB and records the forward and reverse barriers, the reaction
+energy, and the energy profile on the grid axis.
+
+Validated against physics: vacancy migration in fcc copper comes out at
+**0.762 eV against a literature ~0.70**, the forward and reverse barriers match
+for a symmetric hop, and the profile is a clean symmetric arc.
+
+Two things had to be right for that, and both were wrong first:
+
+- **The destination must be the nearest periodic image of the vacancy**, not its
+  stored coordinates. Those differ whenever the shortest hop crosses a cell
+  boundary, and using the stored ones sent the atom the long way round — a
+  2.55 Å hop became a 7.66 Å traverse, and the NEB measured the cost of dragging
+  an atom through the lattice. `hop_endpoints` now verifies the displacement it
+  built matches the hop it reported.
+- **Interpolation defaults to IDPP, not linear.** A straight-line path drives the
+  hopping atom through its neighbours; the band starts with overlapping atoms and
+  converges, if at all, on several eV of repulsion.
+
+Every surrogate level records the caveat that machine-learned potentials soften
+the potential energy surface and under-predict barriers — roughly 0.07–0.08 eV
+MAE without transition metals, about 0.20 eV with them. The error has a sign, so
+a screen ranked on these promotes candidates DFT would reject.
+
+### `mv.surf` — surfaces, shapes and adsorption
+
+This used to sit outside a screening library because a surface energy meant a
+DFT slab per facet. Universal potentials changed the arithmetic.
+
+- `slabs` — every distinct low-index facet and termination, returned as a new
+  dataset with `obs['parent']` back to the material.
+- `surface_energy` — requires the bulk object rather than guessing it, because
+  a wrong reference shifts every value by a constant: invisible in a ranking,
+  fatal in a Wulff construction. Recovers the literature ordering for copper,
+  (111) < (100) < (110).
+- `wulff` — the equilibrium crystal shape, with per-facet area fractions on the
+  facets and the shape summary on the material.
+- `adsorption_sites` / `adsorption_energy` — enumerate atop, bridge and hollow
+  rather than guessing one, relax all, keep the minimum. That is the AdsorbML
+  protocol, and it reproduces hollow-binds-strongest for oxygen on Cu(111). The
+  adsorbate reference is a required argument with no default, since an energy
+  against half an H₂ and one against an isolated H atom differ by about 2.3 eV
+  and both conventions are in use.
+
+### Fixed
+
+`mv.calc.relax` always wrote `relaxed_<level>`, the same name every time, so
+relaxing two variants at one level silently overwrote the first. NEB needs two
+relaxed endpoints, which is how it surfaced. `key_added` now names the output.
+
+Miller indices were spelled two ways inside `mv.surf` — `'111'` on the facets and
+`'1.1.1'` in the Wulff summary. Both are now `'1_1_1'`, with underscores because
+a bare join makes `(1, -1, 1)` into `'1-11'`.
+
 ## v0.1.7
 
 ### Fixed

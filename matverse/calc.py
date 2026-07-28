@@ -228,21 +228,34 @@ def energy(md: AnnData, level: str = "emt", source: str = "input",
                 "relaxed geometry as its own structure variant alongside the "
                 "final energy and whether the optimiser converged.",
     requires={"structures": ["{source}"]},
-    produces={"structures": ["relaxed_{level}"],
+    produces={"structures": ["{key_added}"],
               "obs": ["energy_{level}", "energy_per_atom_{level}",
                       "relax_converged_{level}", "max_force_{level}"],
               "levels": ["{level}"]},
     dispatch="level= selects the calculator, as for mv.calc.energy",
     examples=["mv.calc.relax(md, level='emt')",
-              "mv.calc.relax(md, level='mace-mpa', fmax=0.02)"],
+              "mv.calc.relax(md, level='emt', source='hop_final', "
+              "key_added='relaxed_final')"],
     related=["mv.calc.energy", "mv.thermo.hull"],
     notes="The relaxed geometry becomes a named variant rather than replacing "
           "the input, so 'which structure was this energy computed on' stays "
-          "answerable from the object alone.",
+          "answerable from the object alone.\n\n"
+          "key_added defaults to 'relaxed_<level>', which is the same name "
+          "every time — so relaxing two variants at one level in sequence "
+          "overwrites the first. Anything needing two relaxed geometries, such "
+          "as the endpoints of an NEB, must name them apart.",
 )
 def relax(md: AnnData, level: str = "emt", source: str = "input",
-          fmax: float = 0.05, steps: int = 200, **params) -> None:
-    """Relax every structure and deposit the result as its own variant."""
+          fmax: float = 0.05, steps: int = 200,
+          key_added: str | None = None, **params) -> None:
+    """Relax every structure and deposit the result as its own variant.
+
+    ``key_added`` names the output variant, which matters whenever more than one
+    variant is relaxed at the same level: the default ``relaxed_<level>`` is the
+    same name each time, so relaxing two variants in sequence silently
+    overwrites the first. Anything needing two relaxed geometries — an NEB
+    between endpoints, a slab against its bulk — must name them apart.
+    """
     from ase.optimize import BFGS
     from pymatgen.io.ase import AseAtomsAdaptor
 
@@ -270,14 +283,16 @@ def relax(md: AnnData, level: str = "emt", source: str = "input",
         epa.append(val / len(s) if val == val else float("nan"))
         conv.append(ok)
 
-    deposit_structures(md, f"relaxed_{level}", out)
+    variant = key_added or f"relaxed_{level}"
+    deposit_structures(md, variant, out)
     md.obs[f"energy_{level}"] = e
     md.obs[f"energy_per_atom_{level}"] = epa
     md.obs[f"relax_converged_{level}"] = conv
     md.obs[f"max_force_{level}"] = maxf
     set_level(md, level, **meta, source=source, fmax=fmax, steps=steps,
               n_failed=failed, **params)
-    record(md, "calc.relax", level=level, source=source, fmax=fmax)
+    record(md, "calc.relax", level=level, source=source, fmax=fmax,
+           key_added=variant)
 
 
 @register_function(

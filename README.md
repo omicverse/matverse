@@ -85,6 +85,9 @@ not single compositions.
 | `mv.tl` | ordination, clustering, element enrichment, novelty |
 | `mv.calc` | energies, forces and relaxation, tagged by level of theory |
 | `mv.prop` | derived properties — elastic moduli, phonons, and curves on a shared grid |
+| `mv.md` | molecular dynamics — diffusivity, thermal expansion, amorphous structures |
+| `mv.neb` | migration barriers by nudged elastic band |
+| `mv.surf` | slabs, surface energies, Wulff shapes, adsorption |
 | `mv.thermo` | convex hull, reactions, chemical potential windows |
 | `mv.dft` | first-principles inputs out, results back in |
 | `mv.multi` | the sites axis — one row per atom |
@@ -271,7 +274,7 @@ exactly `obs` versus `obsm`.
 
 ## Status
 
-v0.1.6. **96 functions across 16 namespaces**, every one carrying a registry
+v0.1.8. **107 functions across 19 namespaces**, every one carrying a registry
 entry whose claims are verified by execution — currently **142/142**. See
 [DESIGN.md](DESIGN.md) for the full plan and
 [Release notes](matverse_guide/docs/Release_notes.md) for what changed.

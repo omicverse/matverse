@@ -12,7 +12,7 @@ agent. Every entry names the state it reads and the state it writes, and each of
 those claims is verified by execution in `tests/test_contracts.py` rather than
 asserted.
 
-Public registry entries listed here: 96
+Public registry entries listed here: 107
 
 Look a function up by intent rather than by name:
 
@@ -145,6 +145,53 @@ Derived properties, including curves stored on a shared grid.
    prop.phonon
    prop.rdf
    prop.xrd
+```
+
+
+## Molecular dynamics
+
+Motion, and the properties only motion gives you.
+
+```{eval-rst}
+.. autosummary::
+   :toctree: reference/
+   :nosignatures:
+
+   md.conductivity
+   md.melt_quench
+   md.run
+   md.sweep
+```
+
+
+## Migration barriers
+
+Nudged elastic band, and building the endpoints for it.
+
+```{eval-rst}
+.. autosummary::
+   :toctree: reference/
+   :nosignatures:
+
+   neb.barrier
+   neb.hop_endpoints
+```
+
+
+## Surfaces
+
+Slabs, surface energies, equilibrium shapes and adsorption.
+
+```{eval-rst}
+.. autosummary::
+   :toctree: reference/
+   :nosignatures:
+
+   surf.adsorption_energy
+   surf.adsorption_sites
+   surf.slabs
+   surf.surface_energy
+   surf.wulff
 ```
 
 
@@ -355,13 +402,22 @@ arguments — `obs['energy_{level}']` becomes `obs['energy_emt']` when you pass
 | `mv.calc.committee` | `obs['energy_per_atom_{key}']`, `obs['energy_per_atom_{key}_std']`, `uns['levels']['{key}']` |
 | `mv.calc.energy` | `obs['energy_{level}']`, `obs['energy_per_atom_{level}']`, `uns['levels']['{level}']` |
 | `mv.calc.forces` | `uns['levels']['{level}']` |
-| `mv.calc.relax` | `obsm['structures']['relaxed_{level}']`, `obs['energy_{level}']`, `obs['energy_per_atom_{level}']`, `obs['relax_converged_{level}']`, `obs['max_force_{level}']`, `uns['levels']['{level}']` |
+| `mv.calc.relax` | `obsm['structures']['{key_added}']`, `obs['energy_{level}']`, `obs['energy_per_atom_{level}']`, `obs['relax_converged_{level}']`, `obs['max_force_{level}']`, `uns['levels']['{level}']` |
 | `mv.prop.compare_grids` | `obs['{quantity}_cosine_{a}_vs_{b}']`, `obs['{quantity}_rmse_{a}_vs_{b}']`, `obs['{quantity}_overlap_{a}_vs_{b}']` |
 | `mv.prop.elastic` | `obs['bulk_modulus_{level}']`, `obs['shear_modulus_{level}']`, `obs['youngs_modulus_{level}']`, `obs['poisson_ratio_{level}']`, `obs['elastic_stable_{level}']`, `obsm['elastic_tensor_{level}']`, `uns['levels']['{level}']` |
 | `mv.prop.free_energy` | `obs['vibrational_free_energy_{level}']`, `obs['vibrational_entropy_{level}']`, `obs['heat_capacity_{level}']` |
 | `mv.prop.phonon` | `obsm['phonon_dos_{level}']`, `obs['n_imaginary_modes_{level}']`, `obs['dynamically_stable_{level}']`, `obs['zero_point_energy_{level}']`, `uns['grids']`, `uns['levels']['{level}']` |
 | `mv.prop.rdf` | `obsm['rdf_{level}']`, `uns['grids']`, `uns['levels']['{level}']` |
 | `mv.prop.xrd` | `obsm['xrd_{level}']`, `uns['grids']`, `uns['levels']['{level}']` |
+| `mv.md.conductivity` | `obs['conductivity_{species}_{level}']` |
+| `mv.md.melt_quench` | `obsm['structures']['amorphous_{level}']`, `obs['amorphous_density_{level}']`, `obs['amorphous_density_ratio_{level}']`, `uns['levels']['{level}']` |
+| `mv.md.run` | `obs['md_energy_{level}']`, `obs['md_temperature_{level}']`, `obs['msd_{level}']`, `obs['diffusivity_{level}']`, `obs['md_volume_{level}']`, `layers['diffusivity_{level}']`, `obsm['structures']['md_{level}']`, `uns['levels']['{level}']` |
+| `mv.md.sweep` | `obsm['md_volume_{level}']`, `obsm['md_energy_{level}']`, `obsm['md_diffusivity_{level}']`, `obs['thermal_expansion_{level}']`, `obs['activation_energy_{level}']`, `uns['grids']`, `uns['levels']['{level}']` |
+| `mv.neb.barrier` | `obs['barrier_{level}']`, `obs['barrier_reverse_{level}']`, `obs['reaction_energy_{level}']`, `obs['neb_converged_{level}']`, `obsm['neb_profile_{level}']`, `uns['grids']`, `uns['levels']['{level}']` |
+| `mv.neb.hop_endpoints` | `obsm['structures']['{key_added}_initial']`, `obsm['structures']['{key_added}_final']`, `obs['hop_distance']`, `obs['hop_species']` |
+| `mv.surf.adsorption_energy` | `obs['adsorption_energy_{level}']`, `obs['is_best_site_{level}']` |
+| `mv.surf.surface_energy` | `obs['surface_energy_{level}']` |
+| `mv.surf.wulff` | `obs['wulff_area_fraction_{level}']`, `obs['wulff_effective_radius_{level}']`, `obs['wulff_shape_factor_{level}']`, `uns['wulff']` |
 | `mv.thermo.chempot_limits` | `uns['chempot_limits']` |
 | `mv.thermo.hull` | `obs['e_above_hull_{level}']`, `obs['is_stable_{level}']`, `obs['formation_energy_{level}']`, `obs['decomposes_to_{level}']`, `uns['phase_diagram']` |
 | `mv.thermo.pourbaix` | `obs['pourbaix_decomposition']`, `uns['pourbaix']` |
