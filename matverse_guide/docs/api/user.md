@@ -12,7 +12,7 @@ agent. Every entry names the state it reads and the state it writes, and each of
 those claims is verified by execution in `tests/test_contracts.py` rather than
 asserted.
 
-Public registry entries listed here: 115
+Public registry entries listed here: 120
 
 Look a function up by intent rather than by name:
 
@@ -23,6 +23,23 @@ print(mv.describe('convex hull'))       # signature, contract, examples
 
 ```{eval-rst}
 .. currentmodule:: matverse
+```
+
+
+## Datasets
+
+Real published structures to work on, bundled or fetched.
+
+```{eval-rst}
+.. autosummary::
+   :toctree: reference/
+   :nosignatures:
+
+   datasets.available
+   datasets.cached
+   datasets.fetch
+   datasets.load
+   datasets.metals
 ```
 
 
@@ -390,6 +407,9 @@ arguments — `obs['energy_{level}']` becomes `obs['energy_emt']` when you pass
 
 | Function | Writes |
 |---|---|
+| `mv.datasets.fetch` | `obsm['structures']['input']`, `X` |
+| `mv.datasets.load` | `obsm['structures']['input']`, `X`, `obs['name']`, `obs['spacegroup']`, `obs['dataset']` |
+| `mv.datasets.metals` | `obsm['structures']['input']`, `X`, `obs['name']`, `obs['lattice_parameter']` |
 | `mv.data.from_ase` | `obsm['structures']['input']`, `X` |
 | `mv.data.from_ase_file` | `obsm['structures']['input']`, `X` |
 | `mv.data.from_cif` | `obsm['structures']['input']`, `obs['source_file']`, `X` |

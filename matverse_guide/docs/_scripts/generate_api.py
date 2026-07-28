@@ -27,6 +27,8 @@ import matverse as mv  # noqa: E402
 
 #: Section order and heading for each registry category.
 SECTIONS = [
+    ("datasets", "Datasets",
+     "Real published structures to work on, bundled or fetched."),
     ("data", "Data IO", "Build a dataset, and get it back out again."),
     ("pp", "Preprocessing",
      "Structure standardisation, quality control, filtering, deduplication and "
