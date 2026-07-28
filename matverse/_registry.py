@@ -87,6 +87,8 @@ class FunctionRegistry:
     def __init__(self) -> None:
         self._entries: Dict[str, Dict[str, Any]] = {}   # full_name -> entry
         self._index: Dict[str, str] = {}                # alias/short -> full_name
+        self._derived: set[str] = set()                 # keys from function names
+        self._ambiguous: set[str] = set()               # derived names, >1 owner
         self._categories: Dict[str, List[str]] = {}
 
     # -- registration --------------------------------------------------
@@ -125,15 +127,45 @@ class FunctionRegistry:
             signature = "(...)"
 
         public_name = _public_name(func)
-        keys = [a.strip().lower() for a in aliases] + [short_name.lower(),
-                                                       full_name.lower(),
-                                                       public_name.lower()]
-        for key in keys:
+
+        # Two kinds of key, with different rules.
+        #
+        # An **explicit alias** is a claim: two functions claiming one raises,
+        # because a silent overwrite makes one of them unreachable through the
+        # exact channel the registry exists to provide.
+        #
+        # A **derived name** — the bare function name — is not a claim.
+        # `mv.pl.hull` mirroring `mv.thermo.hull` is a convention worth keeping,
+        # the way scanpy pairs `pl` with `tl`. So an explicit alias outranks a
+        # derived name and takes the key from it, and two derived names that
+        # collide withdraw the key from exact lookup rather than award it to
+        # whichever module happened to import first. Searching for a withdrawn
+        # name ranks every candidate, which is the honest answer to an
+        # ambiguous question.
+        claimed = [a.strip().lower() for a in aliases]
+        for key in claimed:
             owner = self._index.get(key)
             if owner is not None and owner != full_name:
+                if key in self._derived:
+                    self._derived.discard(key)      # an alias outranks it
+                    continue
                 raise AliasCollision(
                     f"alias {key!r} is already registered to {owner}; "
                     f"{full_name} cannot also claim it")
+
+        derived_keys = []
+        for key in (short_name.lower(),):
+            owner = self._index.get(key)
+            if owner is None or owner == full_name:
+                if key not in self._ambiguous:
+                    derived_keys.append(key)
+            elif key in self._derived:
+                self._index.pop(key, None)          # neither owns the bare word
+                self._derived.discard(key)
+                self._ambiguous.add(key)
+
+        keys = claimed + [full_name.lower(), public_name.lower()] + derived_keys
+        self._derived.update(derived_keys)
 
         entry = {
             "function": func,
@@ -167,6 +199,14 @@ class FunctionRegistry:
     def get(self, name: str) -> Optional[Dict[str, Any]]:
         full = self._index.get(name.strip().lower())
         return self._entries.get(full) if full else None
+
+    def is_ambiguous(self, name: str) -> bool:
+        """Whether a bare name is shared by more than one function.
+
+        ``pareto`` is, because ``mv.screen.pareto`` computes the front and
+        ``mv.pl.pareto`` draws it. Neither owns the bare word.
+        """
+        return name.strip().lower() in self._ambiguous
 
     def find(self, query: str, limit: int = 5) -> List[Dict[str, Any]]:
         """Rank entries against a free-text intent."""
@@ -233,7 +273,11 @@ class FunctionRegistry:
         entry = self.get(name)
         if entry is None:
             near = ", ".join(e["public_name"] for e in self.find(name, limit=3))
-            return f"no entry for {name!r}" + (f"; did you mean: {near}" if near else "")
+            if self.is_ambiguous(name):
+                return (f"{name!r} names more than one function; say which: "
+                        f"{near}")
+            return f"no entry for {name!r}" + (f"; did you mean: {near}"
+                                               if near else "")
         lines = [f"{entry['public_name']}{entry['signature']}", "",
                  entry["description"]]
         if entry["dispatch"]:

@@ -1,5 +1,123 @@
 # Release notes
 
+## v0.1.3
+
+The namespaces the design named and the library did not have: plotting,
+supervised models, design campaigns, and the infrastructure underneath them.
+**80 functions across 15 namespaces**, all decorated, all probed.
+
+### `mv.pl` — plotting
+
+Every function draws onto an axis and returns it, and none calls `plt.show`; a
+library that shows figures cannot be used to build one.
+
+- **`periodic_table`** — the display for `rank_elements_groups`, in the way a dot
+  plot is the display for differential expression. A bar chart of 118 categories
+  is unreadable and throws away the structure a chemist reads a periodic table
+  for.
+- `rank_elements_groups`, `hull` (which labels itself when the hull is closed),
+  `parity` (with error bars when an uncertainty is recorded, and a warning on the
+  plot when the two levels reproduce different methods), `pareto`, `embedding`,
+  `spectra`, `provenance`.
+
+### `mv.model` — supervised prediction, honestly split
+
+A prediction is a level of theory: it gets a record saying what it was trained
+on and how it was split, so a predicted number and a DFT number cannot be
+averaged together by accident.
+
+**`mv.model.split` defaults to grouping by composition.** Random train/test
+splits are the field's most common silent methodological failure — a materials
+dataset is full of near-duplicates, so a random split puts relatives on both
+sides and reports a number that will not survive a genuinely new material.
+Strategies: `composition`, `prototype` (anonymised formula plus space group),
+`element` (hold out everything containing one element), and `random`, which is
+recorded as `leaky: True`.
+
+**`mv.model.cross_validate`** scores under several strategies at once and reports
+`leakage_mae` — the gap between the grouped number and the random one. On the
+test library that gap is 1.7, which is the size of the leak a random split would
+have hidden.
+
+### `mv.opt` — design campaigns
+
+Pool-based active learning, which is the right shape for materials: the search
+space is a list of structures, not a box of real numbers.
+
+`start` / `suggest` / `observe` / `history`, with greedy, uncertainty, UCB,
+expected-improvement and random acquisition. Batches can be diversified by
+farthest-point selection, because ten highest-scoring candidates are often ten
+variations on one idea and computing all ten answers one question.
+
+Methods needing an uncertainty **refuse** when none exists rather than pretending
+sigma is zero.
+
+### `mv.utils` — units, checkpoints, cluster
+
+- `convert` / `set_units` / `check_units`. eV, meV, kJ/mol, kcal/mol, Rydberg,
+  Hartree; angstrom, nm, pm, bohr. Conversions deposit beside the original
+  rather than overwriting, and `check_units` fills in what matverse itself
+  produced.
+- `resume` reports which rows an operation has not filled, so a screen killed by
+  a walltime limit continues rather than restarts. `checkpoint` writes and
+  records.
+- `slurm_script` writes a batch script rather than submitting it — submitting is
+  a side effect on a shared machine.
+- `summary` renders what an object contains, including warnings about a closed
+  hull or a non-commercial level.
+
+### `mv.prop.elastic`
+
+Elastic stiffness by finite strains at any level, with Voigt–Reuss–Hill bulk,
+shear and Young's moduli, Poisson ratio, and a Born stability flag. On relaxed
+EMT metals it recovers the right ordering (Ni > Cu > Al).
+
+### `mv.data` — OPTIMADE
+
+`from_optimade` queries any OPTIMADE-compliant provider with one filter
+expression; eight base URLs ship, and any endpoint works via `base_url=`. One
+protocol against roughly twenty providers beats twenty bespoke clients, which is
+why this is now the primary connector.
+
+`from_optimade_response` parses an already-fetched payload — separate on purpose,
+because parsing is deterministic and testable while fetching is neither.
+
+### Registry: derived names versus claimed ones
+
+Adding `mv.pl` surfaced a real distinction the registry had collapsed.
+`mv.pl.hull` mirroring `mv.thermo.hull` is a convention worth keeping, the way
+scanpy pairs `pl` with `tl` — but both derive the bare name `hull`.
+
+The rule is now:
+
+- an **explicit alias** is a claim, and two functions claiming one still raises;
+- a **derived name** is not, so an explicit alias outranks it, and two derived
+  names that collide **withdraw** the key from exact lookup rather than awarding
+  it to whichever module imported first.
+
+`mv.describe('rank_elements_groups')` now answers "names more than one function;
+say which", which is the honest response to an ambiguous question.
+
+### Fixed
+
+- A list of dicts in `uns` cannot be written to `h5ad` — anndata turns it into an
+  object array and h5py refuses it. `uns['checkpoints']` and the campaign's
+  rounds now use an ordered, writable record store. This is the same class of
+  failure as structures in `uns` in v0.1.1, found the same way: by trying to
+  save.
+- `mv.model.cross_validate` swallowed fit failures and returned an empty table,
+  which reads as "the model scored nothing" rather than "nothing was fitted". It
+  now re-raises the underlying error.
+- `mv.prop.compare_grids` gained an overlap count alongside cosine and RMSE.
+
+### Registry
+
+**80 entries, 223 contract claims, contract-verified rate 128/128.** Four claims
+were adjusted rather than kept when probing showed them unresolvable or untrue,
+including two on `mv.opt` whose slot names are chosen at `mv.opt.start` and so
+have nothing in a later call's arguments to resolve against — recorded in the
+function's notes as a third place the contract vocabulary runs out.
+
 ## v0.1.2
 
 The second and third axes, measured data on the same footing as computed data,

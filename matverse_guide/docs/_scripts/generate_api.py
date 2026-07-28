@@ -29,7 +29,8 @@ import matverse as mv  # noqa: E402
 SECTIONS = [
     ("data", "Data IO", "Build a dataset, and get it back out again."),
     ("pp", "Preprocessing",
-     "Structure standardisation, quality control, filtering and deduplication."),
+     "Structure standardisation, quality control, filtering, deduplication and "
+     "cross-database harmonisation."),
     ("feat", "Featurisation", "Descriptors into `obsm`."),
     ("tl", "Tools",
      "Analysis on the composition matrix — ordination, clustering, element "
@@ -40,14 +41,22 @@ SECTIONS = [
      "Derived properties, including curves stored on a shared grid."),
     ("thermo", "Thermodynamics",
      "Convex hull, energy above hull, decomposition products."),
-    ("screen", "Screening",
-     "Filtering, ranking and Pareto fronts that leave a record."),
     ("multi", "Sites axis",
      "Per-atom results, on a companion object whose rows are atoms."),
     ("exp", "Experiment",
      "Measured data, carried as a level of theory like any other."),
+    ("screen", "Screening",
+     "Filtering, ranking and Pareto fronts that leave a record."),
     ("gen", "Generated candidates",
      "Scoring generated structures, and enumerating substitutions."),
+    ("model", "Machine learning",
+     "Property prediction, with splits that do not leak."),
+    ("opt", "Design campaigns",
+     "Choosing what to compute next, and recording each round."),
+    ("pl", "Plotting",
+     "Publication defaults; every function draws onto an axis and returns it."),
+    ("utils", "Infrastructure",
+     "Units, checkpointing, cluster submission and object summaries."),
 ]
 
 HEADER = """# User API

@@ -135,6 +135,136 @@ def rdf(md: AnnData, source: str = "input", level: str = "calc",
 
 
 @register_function(
+    aliases=["elastic", "elastic constants", "bulk modulus", "shear modulus",
+             "stiffness tensor", "elastic moduli", "mechanical properties"],
+    category="prop",
+    description="Compute the elastic stiffness tensor of every structure by "
+                "finite strains at one level of theory, and derive the Voigt-"
+                "Reuss-Hill bulk and shear moduli from it.",
+    requires={"structures": ["{source}"]},
+    produces={"obs": ["bulk_modulus_{level}", "shear_modulus_{level}",
+                      "youngs_modulus_{level}", "poisson_ratio_{level}",
+                      "elastic_stable_{level}"],
+              "obsm": ["elastic_tensor_{level}"], "levels": ["{level}"]},
+    prerequisites=["mv.calc.relax"],
+    dispatch="level= selects the calculator, as for mv.calc.energy",
+    examples=["mv.prop.elastic(md, level='emt', source='relaxed_emt')"],
+    related=["mv.calc.relax", "mv.screen.filter"],
+    notes="Run this on a relaxed structure. An elastic constant is the second "
+          "derivative of energy about a minimum, and taking it about a "
+          "geometry that is not one gives a number with residual stress folded "
+          "in — which is why elastic_stable is reported: a negative eigenvalue "
+          "of the stiffness tensor usually means the input was not relaxed "
+          "rather than that the material is unstable.",
+)
+def elastic(md: AnnData, level: str = "emt", source: str = "input",
+            strain: float = 0.01, key_added: str | None = None) -> None:
+    """Elastic stiffness tensor and the moduli derived from it, in GPa."""
+    from pymatgen.io.ase import AseAtomsAdaptor
+
+    from .calc import _get
+
+    factory, meta = _get(level)
+    adaptor = AseAtomsAdaptor()
+    calculator = factory()
+    block = key_added or f"elastic_tensor_{level}"
+
+    tensors, failed = [], 0
+    for structure in structures(md, source):
+        try:
+            tensors.append(_stiffness(structure, adaptor, calculator, strain))
+        except Exception:
+            tensors.append(np.full((6, 6), np.nan))
+            failed += 1
+
+    stacked = np.stack(tensors)
+    md.obsm[block] = stacked.reshape(len(stacked), 36)
+
+    bulk, shear, young, poisson, stable = [], [], [], [], []
+    for C in stacked:
+        k, g, e, nu, ok = _moduli(C)
+        bulk.append(k); shear.append(g); young.append(e)
+        poisson.append(nu); stable.append(ok)
+
+    md.obs[f"bulk_modulus_{level}"] = bulk
+    md.obs[f"shear_modulus_{level}"] = shear
+    md.obs[f"youngs_modulus_{level}"] = young
+    md.obs[f"poisson_ratio_{level}"] = poisson
+    md.obs[f"elastic_stable_{level}"] = stable
+    set_level(md, level, **meta, source=source, strain=strain, n_failed=failed)
+    record(md, "prop.elastic", level=level, source=source, strain=strain)
+
+
+#: eV/angstrom^3 -> GPa
+_EV_PER_A3_TO_GPA = 160.21766208
+
+#: Voigt order: xx, yy, zz, yz, xz, xy.
+_VOIGT = ((0, 0), (1, 1), (2, 2), (1, 2), (0, 2), (0, 1))
+
+
+def _stiffness(structure, adaptor, calculator, amount: float) -> np.ndarray:
+    """Stiffness by central differences of stress with respect to strain."""
+    C = np.zeros((6, 6))
+    for j, (a, b) in enumerate(_VOIGT):
+        plus = _stress(structure, adaptor, calculator,
+                       _deformation(a, b, amount))
+        minus = _stress(structure, adaptor, calculator,
+                        _deformation(a, b, -amount))
+        C[:, j] = (plus - minus) / (2.0 * amount)
+    return 0.5 * (C + C.T) * _EV_PER_A3_TO_GPA
+
+
+def _deformation(a: int, b: int, amount: float) -> np.ndarray:
+    """Deformation gradient for one Voigt strain component."""
+    epsilon = np.zeros((3, 3))
+    if a == b:
+        epsilon[a, a] = amount
+    else:
+        epsilon[a, b] = epsilon[b, a] = amount / 2.0
+    return np.eye(3) + epsilon
+
+
+def _stress(structure, adaptor, calculator, F: np.ndarray) -> np.ndarray:
+    """Stress in Voigt order, in eV/angstrom^3, under a deformation."""
+    deformed = structure.copy()
+    deformed.lattice = deformed.lattice.__class__(
+        np.asarray(deformed.lattice.matrix) @ F.T)
+    atoms = adaptor.get_atoms(deformed)
+    atoms.calc = calculator
+    return np.asarray(atoms.get_stress(voigt=True), dtype=float)
+
+
+def _moduli(C: np.ndarray):
+    """Voigt-Reuss-Hill averages from a stiffness tensor."""
+    if not np.isfinite(C).all():
+        return (np.nan,) * 4 + (False,)
+    try:
+        eigenvalues = np.linalg.eigvalsh(C)
+        stable = bool((eigenvalues > 0).all())          # Born stability
+        S = np.linalg.inv(C)
+    except np.linalg.LinAlgError:
+        return (np.nan,) * 4 + (False,)
+
+    kv = (C[:3, :3].sum()) / 9.0
+    gv = ((C[0, 0] + C[1, 1] + C[2, 2]) - (C[0, 1] + C[0, 2] + C[1, 2])
+          + 3.0 * (C[3, 3] + C[4, 4] + C[5, 5])) / 15.0
+    kr_denominator = S[:3, :3].sum()
+    gr_denominator = (4.0 * (S[0, 0] + S[1, 1] + S[2, 2])
+                      - 4.0 * (S[0, 1] + S[0, 2] + S[1, 2])
+                      + 3.0 * (S[3, 3] + S[4, 4] + S[5, 5]))
+    kr = 1.0 / kr_denominator if abs(kr_denominator) > 1e-12 else np.nan
+    gr = 15.0 / gr_denominator if abs(gr_denominator) > 1e-12 else np.nan
+
+    k = float(np.nanmean([kv, kr]))
+    g = float(np.nanmean([gv, gr]))
+    if not np.isfinite(k) or not np.isfinite(g) or (3.0 * k + g) == 0:
+        return k, g, np.nan, np.nan, stable
+    young = 9.0 * k * g / (3.0 * k + g)
+    poisson = (3.0 * k - 2.0 * g) / (2.0 * (3.0 * k + g))
+    return k, g, float(young), float(poisson), stable
+
+
+@register_function(
     aliases=["compare grids", "compare spectra", "spectrum difference",
              "computed versus measured"],
     category="prop",
@@ -183,4 +313,4 @@ def compare_grids(md: AnnData, quantity: str, a: str, b: str) -> None:
     record(md, "prop.compare_grids", quantity=quantity, a=a, b=b)
 
 
-__all__ = ["xrd", "rdf", "compare_grids"]
+__all__ = ["xrd", "rdf", "elastic", "compare_grids"]

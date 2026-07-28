@@ -10,6 +10,7 @@ no object yet to deposit into.
 
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 from anndata import AnnData
 
@@ -216,6 +217,172 @@ def to_cif(md: AnnData, directory, variant: str = "input") -> list:
     return written
 
 
+#: OPTIMADE providers matverse knows a base URL for. The protocol is the point —
+#: any provider implementing it works by passing base_url directly.
+OPTIMADE_PROVIDERS = {
+    "mp": "https://optimade.materialsproject.org/v1",
+    "oqmd": "https://oqmd.org/optimade/v1",
+    "alexandria": "https://alexandria.icams.rub.de/pbe/v1",
+    "cod": "https://www.crystallography.net/cod/optimade/v1",
+    "mpds": "https://api.mpds.io/v1",
+    "nmd": "https://nomad-lab.eu/prod/rae/optimade/v1",
+    "jarvis": "https://jarvis.nist.gov/optimade/jarvisdft/v1",
+    "odbx": "https://optimade.odbx.science/v1",
+}
+
+
+@register_function(
+    aliases=["optimade", "from optimade", "query optimade", "federated query",
+             "search databases"],
+    category="data",
+    description="Query any OPTIMADE-compliant materials database with one "
+                "filter expression and build a dataset from the result.",
+    produces={"structures": ["input"], "obs": ["optimade_id", "provider"],
+              "X": ["composition"], "levels": ["{provider}"]},
+    examples=["md = mv.data.from_optimade('elements HAS ALL \"Al\",\"Ni\"', "
+              "provider='mp')",
+              "md = mv.data.from_optimade('nelements=2', "
+              "base_url='https://optimade.example.org/v1')"],
+    related=["mv.data.from_mp", "mv.data.optimade_providers"],
+    notes="One protocol against roughly twenty providers beats twenty bespoke "
+          "API clients, and is the reason this is the primary connector rather "
+          "than mv.data.from_mp. A provider's own client is worth reaching for "
+          "only when its payload is richer than OPTIMADE exposes — which for "
+          "Materials Project it is.",
+)
+def from_optimade(filter: str, provider: str = "mp",
+                  base_url: str | None = None, max_n: int = 100,
+                  timeout: float = 60.0) -> AnnData:
+    """Query an OPTIMADE endpoint. Needs network access."""
+    import json
+    import urllib.parse
+    import urllib.request
+
+    url = base_url or OPTIMADE_PROVIDERS.get(provider)
+    if url is None:
+        raise ValueError(
+            f"unknown provider {provider!r}; known: "
+            f"{sorted(OPTIMADE_PROVIDERS)}. Any OPTIMADE endpoint works — pass "
+            f"base_url= directly.")
+
+    query = urllib.parse.urlencode({"filter": filter,
+                                    "page_limit": min(int(max_n), 100)})
+    request = urllib.request.Request(
+        f"{url.rstrip('/')}/structures?{query}",
+        headers={"User-Agent": "matverse", "Accept": "application/json"})
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except Exception as exc:
+        raise RuntimeError(
+            f"OPTIMADE query to {url} failed: {type(exc).__name__}: {exc}"
+        ) from exc
+
+    return from_optimade_response(payload, provider=provider, max_n=max_n)
+
+
+@register_function(
+    aliases=["parse optimade", "optimade response", "from optimade json",
+             "adopt optimade"],
+    category="data",
+    description="Build a dataset from an already-fetched OPTIMADE response, "
+                "for cached payloads and for tests that must not hit a network.",
+    produces={"structures": ["input"], "obs": ["optimade_id", "provider"],
+              "X": ["composition"], "levels": ["{provider}"]},
+    examples=["md = mv.data.from_optimade_response(payload)"],
+    related=["mv.data.from_optimade"],
+    notes="Separate from the query on purpose. Parsing is deterministic and "
+          "testable; fetching is neither, and a function that does both can "
+          "only be tested against a live server.",
+)
+def from_optimade_response(payload: dict, provider: str = "optimade",
+                           max_n: int | None = None) -> AnnData:
+    """Parse an OPTIMADE ``/structures`` response into a dataset."""
+    from ._core import set_level
+
+    entries = payload.get("data", [])
+    if max_n is not None:
+        entries = entries[:max_n]
+    if not entries:
+        raise ValueError("the OPTIMADE response contains no structures; check "
+                         "the filter")
+
+    built, rows, failed = [], [], []
+    for entry in entries:
+        attributes = entry.get("attributes", {})
+        try:
+            built.append(_structure_from_optimade(attributes))
+        except Exception as exc:
+            failed.append(f"{entry.get('id')}: {type(exc).__name__}: {exc}")
+            continue
+        rows.append({
+            "optimade_id": str(entry.get("id", "")),
+            "provider": provider,
+            "formula": str(attributes.get("chemical_formula_reduced", "")),
+            "nelements": attributes.get("nelements", np.nan),
+        })
+
+    if not built:
+        raise ValueError(f"no structure parsed; {len(failed)} failed: "
+                         f"{failed[:3]}")
+
+    md = new(built, pd.DataFrame(rows), source="data.from_optimade")
+    set_level(md, provider, kind="dft", method=f"OPTIMADE provider {provider}",
+              reference=None, surrogate=False, license=None, uncertainty=None,
+              n_returned=len(entries))
+    if failed:
+        md.uns["read_errors"] = failed
+    return md
+
+
+def _structure_from_optimade(attributes: dict):
+    """A pymatgen Structure from OPTIMADE structure attributes.
+
+    OPTIMADE gives cartesian positions and lattice vectors in angstrom, which is
+    what pymatgen wants; the conversion is naming rather than arithmetic. Partial
+    occupancy arrives as a species list, and is kept rather than silently
+    collapsed to the majority element.
+    """
+    from pymatgen.core import Lattice, Structure
+
+    lattice = attributes.get("lattice_vectors")
+    positions = attributes.get("cartesian_site_positions")
+    species_at_sites = attributes.get("species_at_sites")
+    if lattice is None or positions is None or species_at_sites is None:
+        raise ValueError("response lacks lattice_vectors, "
+                         "cartesian_site_positions or species_at_sites; the "
+                         "provider may need response_fields set")
+
+    definitions = {s["name"]: s for s in attributes.get("species", [])}
+    occupancies = []
+    for name in species_at_sites:
+        definition = definitions.get(name)
+        if definition is None:
+            occupancies.append({name: 1.0})
+            continue
+        elements = definition.get("chemical_symbols", [name])
+        fractions = definition.get("concentration", [1.0] * len(elements))
+        occupancies.append({e: float(f) for e, f in zip(elements, fractions)
+                            if e != "vacancy"})
+
+    return Structure(Lattice(np.asarray(lattice, dtype=float)),
+                     occupancies, np.asarray(positions, dtype=float),
+                     coords_are_cartesian=True)
+
+
+@register_function(
+    aliases=["optimade providers", "which databases", "list providers",
+             "available databases"],
+    category="data",
+    description="List the OPTIMADE providers matverse knows a base URL for.",
+    examples=["mv.data.optimade_providers()"],
+    related=["mv.data.from_optimade"],
+)
+def optimade_providers() -> dict:
+    """Known provider names mapped to their OPTIMADE base URLs."""
+    return dict(OPTIMADE_PROVIDERS)
+
+
 @register_function(
     aliases=["from materials project", "from mp", "query materials project",
              "mp api", "download materials"],
@@ -264,4 +431,6 @@ def from_mp(criteria: dict, api_key: str | None = None,
 
 
 __all__ = ["from_structures", "from_cif", "from_matminer", "to_matminer",
+           "from_optimade", "from_optimade_response", "optimade_providers",
+           "OPTIMADE_PROVIDERS",
            "from_ase", "to_ase", "to_pymatgen", "to_cif", "from_mp"]

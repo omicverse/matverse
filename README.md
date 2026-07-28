@@ -79,17 +79,21 @@ not single compositions.
 
 | | |
 |---|---|
-| `mv.data` | build a dataset — CIF, Materials Project, matminer, ASE, pymatgen |
+| `mv.data` | build a dataset — OPTIMADE, Materials Project, CIF, matminer, ASE, pymatgen |
 | `mv.pp` | standardisation, symmetry, quality control, filtering, deduplication, cross-database harmonisation |
 | `mv.feat` | descriptors into `obsm` |
 | `mv.tl` | ordination, clustering, element enrichment, novelty |
 | `mv.calc` | energies, forces and relaxation, tagged by level of theory |
-| `mv.prop` | derived properties, including curves on a shared grid |
+| `mv.prop` | derived properties — elastic moduli, and curves on a shared grid |
 | `mv.thermo` | convex hull, energy above hull, decomposition products |
-| `mv.screen` | filtering, ranking and Pareto fronts that leave a record |
 | `mv.multi` | the sites axis — one row per atom |
 | `mv.exp` | measured data, on the same footing as computed data |
+| `mv.screen` | filtering, ranking and Pareto fronts that leave a record |
 | `mv.gen` | scoring generated candidates, and enumerating substitutions |
+| `mv.model` | property prediction, with splits that do not leak |
+| `mv.opt` | design campaigns — what to compute next, and what came back |
+| `mv.pl` | plotting, including the periodic-table heatmap |
+| `mv.utils` | units, checkpointing, cluster submission, object summaries |
 
 `mv.struct` is the v0.1 name for the structure half of `mv.pp`, kept as
 re-exports.
@@ -266,10 +270,10 @@ exactly `obs` versus `obsm`.
 
 ## Status
 
-v0.1.2. A screening pipeline that works end to end, three axes for the data that
-does not fit on one, and measured data on the same footing as computed data. See
-[DESIGN.md](DESIGN.md) for the full plan and
-[Release notes](matverse_guide/docs/Release_notes.md) for what changed.
+v0.1.3. **80 functions across 15 namespaces**, every one carrying a registry
+entry whose claims are verified by execution. See [DESIGN.md](DESIGN.md) for the
+full plan and [Release notes](matverse_guide/docs/Release_notes.md) for what
+changed.
 
 Landed:
 
@@ -284,23 +288,32 @@ Landed:
 - `mv.exp` — experiment as a level, needing no new machinery
 - `mv.pp.harmonize` — cross-database energies as a batch effect
 - `mv.gen.validate` on LeMat-GenBench's definitions rather than a variant
-- the registry and the probe harness that verifies it: 101/101 claims
+- `mv.model` with splits that group by composition, prototype or held-out
+  element, and report how much a random split was flattering the model
+- `mv.opt` — pool-based campaigns that record every round
+- `mv.pl`, including the periodic-table heatmap
+- `mv.utils` — units, checkpoints, Slurm scripts, object summaries
+- OPTIMADE as the primary connector: one protocol, ~20 providers
+- the registry and the probe harness that verifies it: **128/128 claims**
 
 Still open:
 
 - **Scale.** Everything here assumes the dataset fits in memory. Alexandria is
   5.06M entries and OMat24 is ~110M calculations; the lazy zarr-backed path is
   the next structural priority and the one capability no competing package has.
-- **No plotting.** `mv.pl` is missing and is worth more than a twelfth namespace
-  — the periodic-table heatmap in particular, which is the natural display for
-  `rank_elements_groups`.
 - **`harmonize` is fitted, not validated.** It recovers an injected offset
   exactly on synthetic anchors. Whether it improves a real
   MP-versus-OQMD-versus-Alexandria hull is unmeasured.
+- **No DFT input/output.** Generating VASP or Quantum ESPRESSO inputs and
+  parsing their outputs is the obvious next namespace; workflow *submission*
+  stays delegated to atomate2 and quacc.
+- **No graph-network or fine-tuned-potential backends.** `mv.model` wires
+  scikit-learn only. Those belong behind `register_model` rather than vendored.
 - **The materials axis still suits single-system depth badly.** The sites axis
   and grid blocks help; they do not make this the right object for one material's
   full phonon band structure.
-- No DFT I/O, no property prediction models, no leakage-aware splits.
+- **No benchmark.** `matverse-bench` — goal-not-API prompts graded on end state —
+  is designed but unwritten.
 
 Design disagreement is welcome, particularly on the axis choice and on whether
 `X` as composition earns its coupling. The test that would kill it is in the

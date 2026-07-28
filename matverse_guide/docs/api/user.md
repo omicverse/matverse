@@ -12,7 +12,7 @@ agent. Every entry names the state it reads and the state it writes, and each of
 those claims is verified by execution in `tests/test_contracts.py` rather than
 asserted.
 
-Public registry entries listed here: 52
+Public registry entries listed here: 80
 
 Look a function up by intent rather than by name:
 
@@ -39,7 +39,10 @@ Build a dataset, and get it back out again.
    data.from_cif
    data.from_matminer
    data.from_mp
+   data.from_optimade
+   data.from_optimade_response
    data.from_structures
+   data.optimade_providers
    data.to_ase
    data.to_cif
    data.to_matminer
@@ -49,7 +52,7 @@ Build a dataset, and get it back out again.
 
 ## Preprocessing
 
-Structure standardisation, quality control, filtering and deduplication.
+Structure standardisation, quality control, filtering, deduplication and cross-database harmonisation.
 
 ```{eval-rst}
 .. autosummary::
@@ -132,6 +135,7 @@ Derived properties, including curves stored on a shared grid.
    :nosignatures:
 
    prop.compare_grids
+   prop.elastic
    prop.rdf
    prop.xrd
 ```
@@ -148,21 +152,6 @@ Convex hull, energy above hull, decomposition products.
 
    thermo.hull
    thermo.references_from_mp
-```
-
-
-## Screening
-
-Filtering, ranking and Pareto fronts that leave a record.
-
-```{eval-rst}
-.. autosummary::
-   :toctree: reference/
-   :nosignatures:
-
-   screen.filter
-   screen.pareto
-   screen.rank
 ```
 
 
@@ -196,6 +185,21 @@ Measured data, carried as a level of theory like any other.
 ```
 
 
+## Screening
+
+Filtering, ranking and Pareto fronts that leave a record.
+
+```{eval-rst}
+.. autosummary::
+   :toctree: reference/
+   :nosignatures:
+
+   screen.filter
+   screen.pareto
+   screen.rank
+```
+
+
 ## Generated candidates
 
 Scoring generated structures, and enumerating substitutions.
@@ -207,6 +211,78 @@ Scoring generated structures, and enumerating substitutions.
 
    gen.substitute
    gen.validate
+```
+
+
+## Machine learning
+
+Property prediction, with splits that do not leak.
+
+```{eval-rst}
+.. autosummary::
+   :toctree: reference/
+   :nosignatures:
+
+   model.available
+   model.cross_validate
+   model.fit
+   model.register_model
+   model.split
+```
+
+
+## Design campaigns
+
+Choosing what to compute next, and recording each round.
+
+```{eval-rst}
+.. autosummary::
+   :toctree: reference/
+   :nosignatures:
+
+   opt.history
+   opt.observe
+   opt.start
+   opt.suggest
+```
+
+
+## Plotting
+
+Publication defaults; every function draws onto an axis and returns it.
+
+```{eval-rst}
+.. autosummary::
+   :toctree: reference/
+   :nosignatures:
+
+   pl.embedding
+   pl.hull
+   pl.pareto
+   pl.parity
+   pl.periodic_table
+   pl.provenance
+   pl.rank_elements_groups
+   pl.spectra
+```
+
+
+## Infrastructure
+
+Units, checkpointing, cluster submission and object summaries.
+
+```{eval-rst}
+.. autosummary::
+   :toctree: reference/
+   :nosignatures:
+
+   utils.check_units
+   utils.checkpoint
+   utils.convert
+   utils.resume
+   utils.set_units
+   utils.slurm_script
+   utils.summary
 ```
 
 
@@ -223,6 +299,8 @@ arguments — `obs['energy_{level}']` becomes `obs['energy_emt']` when you pass
 | `mv.data.from_cif` | `obsm['structures']['input']`, `obs['source_file']`, `X` |
 | `mv.data.from_matminer` | `obsm['structures']['input']`, `obsm['X_matminer']`, `X` |
 | `mv.data.from_mp` | `obsm['structures']['input']`, `obs['material_id']`, `obs['formula']`, `uns['levels']['mp']`, `X` |
+| `mv.data.from_optimade` | `obsm['structures']['input']`, `obs['optimade_id']`, `obs['provider']`, `X`, `uns['levels']['{provider}']` |
+| `mv.data.from_optimade_response` | `obsm['structures']['input']`, `obs['optimade_id']`, `obs['provider']`, `X`, `uns['levels']['{provider}']` |
 | `mv.data.from_structures` | `obsm['structures']['input']`, `X`, `var['Z']` |
 | `mv.data.to_cif` | `written to disk` |
 | `mv.pp.dedup` | `obs['duplicate_of']`, `obs['is_duplicate']`, `uns['dedup']` |
@@ -248,14 +326,25 @@ arguments — `obs['energy_{level}']` becomes `obs['energy_emt']` when you pass
 | `mv.calc.forces` | `uns['levels']['{level}']` |
 | `mv.calc.relax` | `obsm['structures']['relaxed_{level}']`, `obs['energy_{level}']`, `obs['energy_per_atom_{level}']`, `obs['relax_converged_{level}']`, `obs['max_force_{level}']`, `uns['levels']['{level}']` |
 | `mv.prop.compare_grids` | `obs['{quantity}_cosine_{a}_vs_{b}']`, `obs['{quantity}_rmse_{a}_vs_{b}']`, `obs['{quantity}_overlap_{a}_vs_{b}']` |
+| `mv.prop.elastic` | `obs['bulk_modulus_{level}']`, `obs['shear_modulus_{level}']`, `obs['youngs_modulus_{level}']`, `obs['poisson_ratio_{level}']`, `obs['elastic_stable_{level}']`, `obsm['elastic_tensor_{level}']`, `uns['levels']['{level}']` |
 | `mv.prop.rdf` | `obsm['rdf_{level}']`, `uns['grids']`, `uns['levels']['{level}']` |
 | `mv.prop.xrd` | `obsm['xrd_{level}']`, `uns['grids']`, `uns['levels']['{level}']` |
 | `mv.thermo.hull` | `obs['e_above_hull_{level}']`, `obs['is_stable_{level}']`, `obs['formation_energy_{level}']`, `obs['decomposes_to_{level}']`, `uns['phase_diagram']` |
-| `mv.screen.filter` | `obs['{name}']`, `uns['screens']` |
-| `mv.screen.pareto` | `obs['{name}']`, `obs['{name}_rank']`, `uns['pareto']` |
-| `mv.screen.rank` | `obs['{name}']` |
 | `mv.multi.aggregate` | `obs['{key_added}']` |
 | `mv.exp.attach` | `obsm['{quantity}_{level}']`, `uns['levels']['{level}']` |
 | `mv.exp.match_xrd` | `obs['xrd_match']`, `obs['xrd_match_rank']`, `uns['xrd_match']` |
 | `mv.exp.measure` | `obs['{quantity}_{level}']`, `uns['levels']['{level}']` |
+| `mv.screen.filter` | `obs['{name}']`, `uns['screens']` |
+| `mv.screen.pareto` | `obs['{name}']`, `obs['{name}_rank']`, `uns['pareto']` |
+| `mv.screen.rank` | `obs['{name}']` |
 | `mv.gen.validate` | `obs['gen_valid']`, `obs['gen_unique']`, `obs['gen_novel']`, `obs['gen_stable']`, `obs['gen_metastable']`, `obs['gen_sun']`, `obs['gen_msun']`, `uns['gen_validate']` |
+| `mv.model.cross_validate` | `uns['cross_validate']` |
+| `mv.model.fit` | `obs['{target}_{level}']`, `uns['levels']['{level}']`, `uns['model']` |
+| `mv.model.split` | `obs['{key_added}']`, `uns['split']` |
+| `mv.opt.observe` | `obs['campaign_round']`, `obs['selected']`, `uns['{name}']` |
+| `mv.opt.start` | `obs['{observed_key}']`, `obs['campaign_round']`, `uns['campaign']` |
+| `mv.opt.suggest` | `obs['acquisition']`, `obs['selected']`, `uns['{name}']` |
+| `mv.utils.checkpoint` | `written to disk`, `uns['checkpoints']` |
+| `mv.utils.convert` | `obs['{key_added}']`, `uns['units']` |
+| `mv.utils.set_units` | `uns['units']` |
+| `mv.utils.slurm_script` | `written to disk` |

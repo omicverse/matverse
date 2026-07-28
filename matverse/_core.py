@@ -415,6 +415,29 @@ def grid_of(md: AnnData, quantity: str):
     return np.asarray(grids[quantity]["values"], dtype=float)
 
 
+def append_record(holder: dict, key: str, entry: dict) -> None:
+    """Append a record to an ordered, ``h5ad``-writable list in ``uns``.
+
+    A plain list of dicts cannot be written: anndata turns it into an object
+    array and h5py refuses it. A dict keyed by a zero-padded index writes as a
+    nested group and still reads back in order, so the same information survives
+    a save without the caller having to know why.
+    """
+    store = holder.setdefault(key, {})
+    if isinstance(store, list):                  # tolerate an older object
+        store = {f"{i:04d}": v for i, v in enumerate(store)}
+        holder[key] = store
+    store[f"{len(store):04d}"] = entry
+
+
+def records(holder: dict, key: str) -> list:
+    """Read back what :func:`append_record` stored, in order."""
+    store = holder.get(key, {})
+    if isinstance(store, list):
+        return list(store)
+    return [store[k] for k in sorted(store)]
+
+
 def record(md: AnnData, op: str, **params: Any) -> None:
     """Append an operation to ``uns['provenance']``.
 
@@ -432,6 +455,7 @@ def provenance(md: AnnData) -> list[str]:
 
 
 __all__ = ["new", "structures", "deposit_structures", "variants", "require",
+           "append_record", "records",
            "record", "provenance", "set_level", "level_info", "levels_used",
            "compare_levels", "check_commercial_use", "composition_matrix",
            "deposit_grid", "grid_of", "CONTAINERS", "LEVEL_FIELDS",

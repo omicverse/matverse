@@ -99,6 +99,34 @@ def _probe_everything(make_md) -> ProbeReport:
             }))
         return doubled
 
+    def relaxed():
+        md = make_md()
+        mv.calc.relax(md, level="emt", fmax=0.2, steps=20)
+        return md
+
+    def targeted():
+        md = make_md()
+        mv.pp.describe(md)
+        mv.feat.element_stats(md)
+        return md
+
+    def splittable():
+        md = targeted()
+        mv.model.split(md, strategy="composition")
+        return md
+
+    def campaigning():
+        md = targeted()
+        known = np.zeros(md.n_obs, dtype=bool)
+        known[:2] = True                       # leave a pool to suggest from
+        mv.opt.start(md, objective="volume", observed=known)
+        return md
+
+    def suggested():
+        md = campaigning()
+        mv.opt.suggest(md, n=2, method="greedy", predicted="volume")
+        return md
+
     def featured():
         md = make_md()
         mv.feat.element_stats(md)
@@ -145,7 +173,26 @@ def _probe_everything(make_md) -> ProbeReport:
         (mv.exp.measure, make_md, ("band_gap", [0.0] * 6), {}),
         (mv.exp.match_xrd, patterned, ([1.0] * 10, list(range(10, 20))), {}),
         (mv.gen.validate, make_md, (), {}),
+        (mv.prop.elastic, relaxed, (), {"level": "emt",
+                                        "source": "relaxed_emt"}),
+        (mv.model.split, featured, (), {"strategy": "composition"}),
+        (mv.model.fit, splittable, (), {"target": "volume",
+                                       "level": "rf_pred"}),
+        (mv.model.cross_validate, targeted, (), {"target": "volume",
+                                                 "seeds": (0,),
+                                                 "strategies": ("random",)}),
+        (mv.opt.start, targeted, (), {"objective": "volume"}),
+        (mv.opt.suggest, campaigning, (), {"n": 2, "method": "greedy",
+                                           "predicted": "volume"}),
+        (mv.opt.observe, suggested, (), {}),
+        (mv.utils.set_units, targeted, (), {"column": "volume",
+                                            "unit": "angstrom^3"}),
+        (mv.utils.convert, targeted, (), {"column": "volume",
+                                          "unit": "eV",
+                                          "key_added": "volume_ev"}),
+        (mv.multi.aggregate, None, (), {}),          # placeholder, see below
     ]
+    cases = [case for case in cases if case[1] is not None]
     for func, factory, args, kwargs in cases:
         import warnings
         with warnings.catch_warnings():
