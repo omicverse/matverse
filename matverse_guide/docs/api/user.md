@@ -12,7 +12,7 @@ agent. Every entry names the state it reads and the state it writes, and each of
 those claims is verified by execution in `tests/test_contracts.py` rather than
 asserted.
 
-Public registry entries listed here: 120
+Public registry entries listed here: 121
 
 Look a function up by intent rather than by name:
 
@@ -373,6 +373,7 @@ Publication defaults; every function draws onto an axis and returns it.
    pl.periodic_table
    pl.provenance
    pl.rank_elements_groups
+   pl.set_style
    pl.spectra
 ```
 

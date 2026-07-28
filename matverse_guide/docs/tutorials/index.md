@@ -11,8 +11,8 @@ execute them before deciding whether to install a machine-learned potential.
 :link: getting_started
 :link-type: doc
 
-A runnable notebook on published structures — LiFePO₄, Li₁₀GeP₂S₁₂ — with no
-network, no API key and no downloaded model.
+A runnable notebook on published structures — LiFePO₄, NaFePO₄ and the fcc
+metals — with no network, no API key and no downloaded model.
 :::
 
 :::{grid-item-card} Screening, end to end {octicon}`beaker;1em;`

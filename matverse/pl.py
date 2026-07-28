@@ -40,6 +40,50 @@ def _axis(ax, figsize=(6.0, 4.0)):
 
 
 @register_function(
+    aliases=["set style", "plot set", "plotting defaults", "figure style"],
+    category="pl",
+    description="Set matplotlib defaults for the session — resolution, font "
+                "size, spines — so every later plot matches without being "
+                "styled one at a time.",
+    examples=["mv.pl.set_style()",
+              "mv.pl.set_style(dpi=150, fontsize=10)"],
+    related=["mv.pl.spectra", "mv.pl.periodic_table"],
+    notes="Call once at the top of a notebook. It touches only rcParams, so "
+          "anything set afterwards still wins, and a figure built by hand is "
+          "unaffected.",
+)
+def set_style(dpi: int = 100, dpi_save: int = 300, fontsize: int = 11,
+              figsize: tuple[float, float] = (6.0, 4.0),
+              facecolor: str = "white", grid: bool = False,
+              quiet: bool = False) -> None:
+    """Apply matverse's plotting defaults. Returns ``None``."""
+    plt = _plt()
+    plt.rcParams.update({
+        "figure.dpi": dpi,
+        "savefig.dpi": dpi_save,
+        "figure.figsize": figsize,
+        "figure.facecolor": facecolor,
+        "axes.facecolor": facecolor,
+        "savefig.bbox": "tight",
+        "font.size": fontsize,
+        "axes.titlesize": fontsize + 1,
+        "axes.labelsize": fontsize,
+        "xtick.labelsize": fontsize - 1,
+        "ytick.labelsize": fontsize - 1,
+        "legend.fontsize": fontsize - 1,
+        "legend.frameon": False,
+        "axes.spines.top": False,
+        "axes.spines.right": False,
+        "axes.grid": grid,
+        "grid.alpha": 0.3,
+    })
+    if not quiet:
+        from . import __version__
+        from ._registry import get_registry
+        print(f"matverse {__version__} — {len(get_registry())} functions")
+
+
+@register_function(
     aliases=["periodic table", "periodic table heatmap", "element map",
              "plot elements", "element heatmap"],
     category="pl",
@@ -460,5 +504,5 @@ def provenance(md: AnnData, ax=None):
     return ax
 
 
-__all__ = ["periodic_table", "rank_elements_groups", "hull", "parity",
-           "pareto", "embedding", "spectra", "provenance"]
+__all__ = ["set_style", "periodic_table", "rank_elements_groups", "hull",
+           "parity", "pareto", "embedding", "spectra", "provenance"]

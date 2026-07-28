@@ -1,5 +1,34 @@
 # Release notes
 
+## v0.1.11
+
+### `mv.pl.set_style`
+
+One call at the top of a notebook, and every later plot matches: resolution,
+font size, spines, figure size. It touches only `rcParams`, so anything set
+afterwards still wins and a figure built by hand is unaffected.
+
+This is the counterpart of `ov.plot_set` in omicverse, and it exists for the
+same reason — styling nine plots one at a time is how a notebook ends up with
+nine different-looking plots.
+
+### The getting-started notebook, rewritten
+
+The first version read as an essay with code in it. It now follows the shape
+omicverse's notebooks use, which readers of that ecosystem already know:
+
+- a title, then the scientific context, with the structures **cited** — the
+  olivine cathode is [Padhi et al. (1997)](https://doi.org/10.1149/1.1837571),
+  not an anonymous CIF;
+- a first cell that is imports plus `mv.pl.set_style()`;
+- an explicit *Loading a dataset* section naming where the data comes from,
+  rather than a call whose provenance the reader has to take on trust;
+- short cells, mostly one operation, ending with the object so it renders;
+- brief markdown between cells saying what the next step is for.
+
+The pipeline it runs is unchanged, and it is still executed rather than
+illustrative.
+
 ## v0.1.10
 
 ### `mv.datasets` — real materials to work on
