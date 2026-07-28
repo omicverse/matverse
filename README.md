@@ -271,8 +271,9 @@ exactly `obs` versus `obsm`.
 
 ## Status
 
-v0.1.4. **88 functions across 16 namespaces**, every one carrying a registry
-entry whose claims are verified by execution — currently **142/142**. See [DESIGN.md](DESIGN.md) for the
+v0.1.5. **92 functions across 16 namespaces**, every one carrying a registry
+entry whose claims are verified by execution — currently **142/142** — plus
+`matverse-bench`, whose grader contains no model calls. See [DESIGN.md](DESIGN.md) for the
 full plan and [Release notes](matverse_guide/docs/Release_notes.md) for what
 changed.
 
@@ -299,13 +300,19 @@ Landed:
 - phonons, and the vibrational thermodynamics that make a 0 K hull a hull at
   temperature; validated against the zero-point energy of copper and the
   Dulong-Petit limit rather than against a stored number
+- streaming construction and chunked compute, so a corpus larger than memory is
+  a loop rather than a wall
+- `matverse-bench`: goal-not-API prompts graded on end state, layered by whether
+  a task needs one call, two composed, or a full screen
 - the registry and the probe harness that verifies it: **142/142 claims**
 
 Still open:
 
-- **Scale.** Everything here assumes the dataset fits in memory. Alexandria is
-  5.06M entries and OMat24 is ~110M calculations; the lazy zarr-backed path is
-  the next structural priority and the one capability no competing package has.
+- **Scale is chunked, not lazy.** `mv.data.from_iterable` and
+  `mv.utils.map_chunks` mean a corpus larger than memory can be processed, but
+  the object itself is still materialised. A zarr-backed `obs` and on-demand
+  structure resolution are the next step, and the one capability no competing
+  package has.
 - **`harmonize` is fitted, not validated.** It recovers an injected offset
   exactly on synthetic anchors. Whether it improves a real
   MP-versus-OQMD-versus-Alexandria hull is unmeasured.

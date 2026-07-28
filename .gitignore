@@ -14,3 +14,6 @@ matverse_guide/docs/api/reference/
 
 # Jupyter
 .ipynb_checkpoints/
+
+# Benchmark scratch
+bench/_runs/

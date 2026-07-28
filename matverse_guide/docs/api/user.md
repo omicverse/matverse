@@ -12,7 +12,7 @@ agent. Every entry names the state it reads and the state it writes, and each of
 those claims is verified by execution in `tests/test_contracts.py` rather than
 asserted.
 
-Public registry entries listed here: 88
+Public registry entries listed here: 92
 
 Look a function up by intent rather than by name:
 
@@ -36,7 +36,9 @@ Build a dataset, and get it back out again.
    :nosignatures:
 
    data.from_ase
+   data.from_ase_file
    data.from_cif
+   data.from_iterable
    data.from_matminer
    data.from_mp
    data.from_optimade
@@ -298,7 +300,9 @@ Units, checkpointing, cluster submission and object summaries.
 
    utils.check_units
    utils.checkpoint
+   utils.chunks
    utils.convert
+   utils.map_chunks
    utils.resume
    utils.set_units
    utils.slurm_script
@@ -316,7 +320,9 @@ arguments — `obs['energy_{level}']` becomes `obs['energy_emt']` when you pass
 | Function | Writes |
 |---|---|
 | `mv.data.from_ase` | `obsm['structures']['input']`, `uns['sites']`, `X` |
+| `mv.data.from_ase_file` | `obsm['structures']['input']`, `X` |
 | `mv.data.from_cif` | `obsm['structures']['input']`, `obs['source_file']`, `X` |
+| `mv.data.from_iterable` | `obsm['structures']['input']`, `X` |
 | `mv.data.from_matminer` | `obsm['structures']['input']`, `obsm['X_matminer']`, `X` |
 | `mv.data.from_mp` | `obsm['structures']['input']`, `obs['material_id']`, `obs['formula']`, `uns['levels']['mp']`, `X` |
 | `mv.data.from_optimade` | `obsm['structures']['input']`, `obs['optimade_id']`, `obs['provider']`, `X`, `uns['levels']['{provider}']` |
@@ -372,5 +378,6 @@ arguments — `obs['energy_{level}']` becomes `obs['energy_emt']` when you pass
 | `mv.opt.suggest` | `obs['acquisition']`, `obs['selected']`, `uns['{name}']` |
 | `mv.utils.checkpoint` | `written to disk`, `uns['checkpoints']` |
 | `mv.utils.convert` | `obs['{key_added}']`, `uns['units']` |
+| `mv.utils.map_chunks` | `uns['chunked']` |
 | `mv.utils.set_units` | `uns['units']` |
 | `mv.utils.slurm_script` | `written to disk` |

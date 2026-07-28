@@ -217,6 +217,106 @@ def to_cif(md: AnnData, directory, variant: str = "input") -> list:
     return written
 
 
+@register_function(
+    aliases=["from iterable", "streaming", "build in chunks", "large dataset",
+             "from generator", "millions of structures"],
+    category="data",
+    description="Build a dataset from an iterable of structures in blocks, "
+                "concatenating as it goes, so a corpus larger than memory can "
+                "be read without materialising it.",
+    produces={"structures": ["input"], "X": ["composition"]},
+    examples=["md = mv.data.from_iterable(read_cifs(), chunk_size=5000)",
+              "md = mv.data.from_iterable(gen, chunk_size=1000, max_n=50000)"],
+    related=["mv.data.from_structures", "mv.utils.map_chunks"],
+    notes="Element axes are unioned across blocks by anndata's concat, so a "
+          "block containing an element no earlier block had widens the axis "
+          "rather than failing. Alexandria is 5.06M entries and OMat24 is "
+          "roughly 110M calculations; a constructor taking a list rules both "
+          "out before anything else does.",
+)
+def from_iterable(source, chunk_size: int = 5000, max_n: int | None = None,
+                  obs_source=None) -> AnnData:
+    """Build a dataset from a stream of structures, block by block."""
+    import anndata
+
+    blocks, buffer, meta, seen = [], [], [], 0
+    metadata = iter(obs_source) if obs_source is not None else None
+
+    for structure in source:
+        buffer.append(structure)
+        if metadata is not None:
+            meta.append(next(metadata, {}))
+        seen += 1
+        if len(buffer) >= chunk_size:
+            blocks.append(_block(buffer, meta))
+            buffer, meta = [], []
+        if max_n is not None and seen >= max_n:
+            break
+    if buffer:
+        blocks.append(_block(buffer, meta))
+
+    if not blocks:
+        raise ValueError("the iterable yielded no structures")
+    if len(blocks) == 1:
+        md = blocks[0]
+    else:
+        md = anndata.concat(blocks, join="outer", index_unique=None,
+                            uns_merge="first", merge="first")
+        md.obs_names = [str(i) for i in range(md.n_obs)]
+        md.X = md.X.tocsr() if hasattr(md.X, "tocsr") else md.X
+        _restore_uns(md, blocks[0])
+
+    record(md, "data.from_iterable", chunk_size=chunk_size, n=int(md.n_obs),
+           n_blocks=len(blocks))
+    return md
+
+
+def _block(structures_: list, meta: list) -> AnnData:
+    frame = pd.DataFrame(meta) if meta else None
+    return new(list(structures_), frame, source="data.from_iterable")
+
+
+def _restore_uns(md: AnnData, template: AnnData) -> None:
+    """Concat keeps only the first block's uns; the conventions must survive."""
+    md.uns.setdefault("features", {})
+    md.uns.setdefault("levels", {})
+    md.uns["provenance"] = ["data.from_iterable"]
+    md.uns["X_is"] = template.uns.get("X_is", "composition_atoms_reduced")
+
+
+@register_function(
+    aliases=["from extxyz", "read xyz", "trajectory", "from ase db",
+             "training corpus", "read extxyz"],
+    category="data",
+    description="Read structures from an extended-XYZ file or ASE database, in "
+                "blocks, which is the shape machine-learned-potential training "
+                "corpora arrive in.",
+    produces={"structures": ["input"], "X": ["composition"]},
+    examples=["md = mv.data.from_ase_file('mptrj.extxyz', max_n=10000)"],
+    related=["mv.data.from_iterable", "mv.data.from_ase"],
+    notes="Reads with ASE's own iterator rather than loading the file, so a "
+          "hundred-million-frame corpus can be sampled without being read.",
+)
+def from_ase_file(path, index: str = ":", chunk_size: int = 5000,
+                  max_n: int | None = None) -> AnnData:
+    """From an extended-XYZ file, ASE database, or anything ASE can read."""
+    try:
+        from ase.io import iread
+    except ImportError as exc:                            # pragma: no cover
+        raise ImportError("mv.data.from_ase_file needs ase") from exc
+    from pymatgen.io.ase import AseAtomsAdaptor
+
+    adaptor = AseAtomsAdaptor()
+
+    def stream():
+        for atoms in iread(str(path), index=index):
+            yield adaptor.get_structure(atoms)
+
+    md = from_iterable(stream(), chunk_size=chunk_size, max_n=max_n)
+    md.uns["source_file"] = str(path)
+    return md
+
+
 #: OPTIMADE providers matverse knows a base URL for. The protocol is the point —
 #: any provider implementing it works by passing base_url directly.
 OPTIMADE_PROVIDERS = {
@@ -431,6 +531,7 @@ def from_mp(criteria: dict, api_key: str | None = None,
 
 
 __all__ = ["from_structures", "from_cif", "from_matminer", "to_matminer",
+           "from_iterable", "from_ase_file",
            "from_optimade", "from_optimade_response", "optimade_providers",
            "OPTIMADE_PROVIDERS",
            "from_ase", "to_ase", "to_pymatgen", "to_cif", "from_mp"]

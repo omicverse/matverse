@@ -173,7 +173,7 @@ def variants(md: AnnData) -> list[str]:
     return [] if frame is None else list(frame.columns)
 
 
-def structures(md: AnnData, variant: str = "input") -> list:
+def structures(md: AnnData, variant: str = "input", rows=None) -> list:
     """Fetch a structure variant, with a useful error when it is absent.
 
     Structures are stored serialised — see :func:`deposit_structures` — and
@@ -181,6 +181,12 @@ def structures(md: AnnData, variant: str = "input") -> list:
     of ten operations pays the cost once rather than ten times. Subsetting or
     copying produces a fresh object without the cache, which is also correct
     cache invalidation.
+
+    ``rows`` decodes only the rows named, and caches nothing. Decoding is what
+    costs at scale — five million serialised structures are a few gigabytes of
+    strings, and the pymatgen objects they become are several times that — so a
+    chunked pass over a large dataset must be able to ask for a window rather
+    than for everything.
     """
     have = variants(md)
     if variant not in have:
@@ -189,6 +195,13 @@ def structures(md: AnnData, variant: str = "input") -> list:
             f"Operations deposit variants under a name — e.g. mv.pp.standardize "
             f"writes 'primitive', mv.calc.relax writes 'relaxed_<level>'.")
 
+    column = md.obsm[STRUCTURE_KEY][variant]
+    if rows is not None:
+        index = np.asarray(rows)
+        if index.dtype == bool:
+            index = np.flatnonzero(index)
+        return [_decode(column.iloc[int(i)]) for i in index]
+
     cache = getattr(md, "_mv_structure_cache", None)
     if cache is None:
         cache = {}
@@ -196,7 +209,6 @@ def structures(md: AnnData, variant: str = "input") -> list:
             object.__setattr__(md, "_mv_structure_cache", cache)
         except Exception:                                # pragma: no cover
             cache = {}
-    column = md.obsm[STRUCTURE_KEY][variant]
     token = (len(column), variant)
     hit = cache.get(variant)
     if hit is not None and hit[0] == token:

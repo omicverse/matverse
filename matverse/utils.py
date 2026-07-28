@@ -202,6 +202,145 @@ def checkpoint(md: AnnData, path, note: str = "") -> str:
 
 
 @register_function(
+    aliases=["chunks", "batches", "iterate in chunks", "split into batches",
+             "process in blocks"],
+    category="utils",
+    description="Iterate over the dataset in row blocks, so an operation that "
+                "would not fit in memory at full size runs a block at a time.",
+    examples=["for block in mv.utils.chunks(md, 500): mv.calc.relax(block)"],
+    related=["mv.utils.map_chunks", "mv.utils.checkpoint"],
+    notes="Each block is a copy, so writes land on the copy rather than on the "
+          "parent. mv.utils.map_chunks is the version that puts the results "
+          "back.",
+)
+def chunks(md: AnnData, size: int = 1000):
+    """Yield ``(start, block)`` for each row block of the dataset."""
+    if size < 1:
+        raise ValueError(f"size must be at least 1, got {size}")
+    for start in range(0, md.n_obs, int(size)):
+        stop = min(start + int(size), md.n_obs)
+        yield start, md[start:stop].copy()
+
+
+@register_function(
+    aliases=["map chunks", "apply in chunks", "chunked", "batch apply",
+             "run in blocks", "out of memory", "too big for memory"],
+    category="utils",
+    description="Apply an expensive operation block by block and merge the "
+                "results back onto the parent, optionally checkpointing after "
+                "each block so a job killed by a walltime limit resumes.",
+    produces={"uns": ["chunked"]},
+    examples=["mv.utils.map_chunks(md, lambda b: mv.calc.relax(b, "
+              "level='mace-mpa'), size=500, checkpoint_to='run.h5ad')"],
+    related=["mv.utils.chunks", "mv.utils.resume", "mv.utils.checkpoint"],
+    notes="Merges back the obs columns, obsm blocks and structure variants each "
+          "block produced. It cannot merge uns, because a per-block uns entry "
+          "is a statement about that block and quietly keeping the last one "
+          "would be wrong — a screen's criteria and a hull's reference count "
+          "both mean something different per block than they do overall.",
+)
+def map_chunks(md: AnnData, operation, size: int = 1000,
+               checkpoint_to=None, skip_if: str | None = None) -> dict:
+    """Run ``operation(block)`` over row blocks and merge what it wrote back.
+
+    ``skip_if`` names an ``obs`` column: blocks where it is already finite are
+    skipped, which is what makes a re-run after a killed job continue rather
+    than restart.
+    """
+    import pandas as pd
+
+    n_done, n_skipped, errors = 0, 0, []
+    for start, block in chunks(md, size):
+        stop = start + block.n_obs
+        if skip_if is not None and skip_if in md.obs:
+            todo = resume(md, skip_if)[start:stop]
+            if not todo.any():
+                n_skipped += block.n_obs
+                continue
+        before = _snapshot(block)
+        try:
+            operation(block)
+        except Exception as exc:
+            errors.append(f"rows {start}:{stop}: {type(exc).__name__}: {exc}")
+            continue
+        _merge_back(md, block, start, stop, before)
+        n_done += block.n_obs
+        if checkpoint_to is not None:
+            checkpoint(md, checkpoint_to,
+                       note=f"after rows {start}:{stop}")
+
+    md.uns["chunked"] = {"size": int(size), "n_processed": n_done,
+                         "n_skipped": n_skipped, "errors": errors}
+    record(md, "utils.map_chunks", size=size, n_processed=n_done,
+           n_skipped=n_skipped, n_errors=len(errors))
+    return md.uns["chunked"]
+
+
+def _snapshot(block: AnnData) -> dict:
+    """What a block held before the operation, so new slots can be told apart."""
+    from ._core import STRUCTURE_KEY, variants
+
+    return {"obs": set(block.obs.columns),
+            "obsm": set(k for k in block.obsm if k != STRUCTURE_KEY),
+            "variants": set(variants(block))}
+
+
+def _merge_back(md: AnnData, block: AnnData, start: int, stop: int,
+                before: dict) -> None:
+    """Write a block's new columns, blocks and variants into the parent rows."""
+    import pandas as pd
+
+    from ._core import STRUCTURE_KEY
+
+    for column in block.obs.columns:
+        values = block.obs[column].to_numpy()
+        if column not in md.obs:
+            md.obs[column] = _empty_like(values, md.n_obs)
+        target = md.obs[column].to_numpy(copy=True)
+        try:
+            target[start:stop] = values
+        except (ValueError, TypeError):
+            target = target.astype(object)
+            target[start:stop] = values
+        md.obs[column] = target
+
+    for key in block.obsm:
+        if key == STRUCTURE_KEY:
+            continue
+        arr = np.asarray(block.obsm[key])
+        if key not in md.obsm:
+            md.obsm[key] = np.full((md.n_obs, arr.shape[1]), np.nan,
+                                   dtype=float)
+        md.obsm[key][start:stop] = arr
+
+    frame = block.obsm.get(STRUCTURE_KEY)
+    if frame is None:
+        return
+    parent = md.obsm[STRUCTURE_KEY]
+    for variant in frame.columns:
+        if variant not in parent.columns:
+            parent[variant] = pd.Series([None] * md.n_obs,
+                                        index=md.obs_names, dtype=object)
+        parent.iloc[start:stop,
+                    parent.columns.get_loc(variant)] = frame[variant].to_numpy()
+    md.obsm[STRUCTURE_KEY] = parent
+    cache = getattr(md, "_mv_structure_cache", None)
+    if isinstance(cache, dict):
+        cache.clear()
+
+
+def _empty_like(values: np.ndarray, n: int) -> np.ndarray:
+    """A full-length column to write a block's values into."""
+    if values.dtype.kind == "f":
+        return np.full(n, np.nan)
+    if values.dtype.kind in "iu":
+        return np.full(n, np.nan)          # widened; a partial int column has holes
+    if values.dtype.kind == "b":
+        return np.zeros(n, dtype=bool)
+    return np.array([""] * n, dtype=object)
+
+
+@register_function(
     aliases=["submit", "slurm", "batch job", "run on cluster", "sbatch",
              "hpc submission"],
     category="utils",
@@ -335,4 +474,5 @@ def _noncommercial(md: AnnData) -> list[str]:
 
 
 __all__ = ["set_units", "convert", "check_units", "resume", "checkpoint",
+           "chunks", "map_chunks",
            "slurm_script", "summary", "TO_EV", "TO_ANGSTROM", "INTERNAL_UNITS"]
