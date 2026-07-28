@@ -13,6 +13,8 @@ return a subset because dropping rows cannot be done in place on an AnnData.
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 import pandas as pd
 from anndata import AnnData
@@ -265,6 +267,165 @@ def normalize_composition(md: AnnData) -> None:
 
 
 @register_function(
+    aliases=["harmonize", "harmonise", "batch correction", "cross database",
+             "reconcile energies", "database offset", "elemental corrections"],
+    category="pp",
+    description="Reconcile energies computed by different databases by fitting "
+                "a per-element offset for each one against a reference, using "
+                "the compositions they have in common.",
+    requires={"obs": ["{batch_key}", "{energy_key}"], "X": ["composition"]},
+    produces={"obs": ["{energy_key}_harmonized"], "uns": ["harmonize"]},
+    examples=["mv.pp.harmonize(md, batch_key='database', "
+              "energy_key='energy_per_atom_dft')",
+              "mv.pp.harmonize(md, batch_key='database', reference='mp')"],
+    related=["mv.thermo.hull", "mv.tl.rank_elements_groups"],
+    notes="Formation energies from Materials Project, OQMD and Alexandria carry "
+          "systematic offsets from differing pseudopotentials, cutoffs and "
+          "correction schemes. That is a batch effect with a compositional "
+          "structure, and this fits it the way the field already does by hand — "
+          "as per-element reference corrections — rather than by aligning "
+          "distributions. It cannot repair a difference that is not linear in "
+          "composition, and it says so in uns['harmonize'].",
+)
+def harmonize(md: AnnData, batch_key: str, energy_key: str,
+              reference: str | None = None, match_on: str = "formula",
+              key_added: str | None = None,
+              min_anchors_per_element: int = 1) -> None:
+    """Fit and apply per-element energy offsets between databases.
+
+    The model is the one the field already uses::
+
+        E_db(x) = E_ref(x) + sum_element  fraction_element * delta[db, element]
+
+    fitted by least squares on **anchors** — compositions present in both the
+    reference database and another one. Everything from that database is then
+    shifted by its fitted offset.
+
+    What this does not do: repair a difference that is not linear in
+    composition. Two databases that disagree because one relaxed with a
+    different functional will disagree structure by structure, and a
+    compositional offset absorbs only the average of that. The fit residual is
+    reported so the size of what is left is visible.
+    """
+    for column in (batch_key, energy_key):
+        if column not in md.obs:
+            raise ValueError(f"obs[{column!r}] absent; available: "
+                             f"{list(md.obs.columns)}")
+    if md.n_vars == 0:
+        raise ValueError("this object has no element axis (build_X=False); "
+                         "harmonize fits offsets per element")
+
+    batches = pd.Series(md.obs[batch_key].to_numpy()).astype(str).to_numpy()
+    energies = md.obs[energy_key].to_numpy(dtype=float)
+    present = list(pd.unique(batches))
+    if len(present) < 2:
+        raise ValueError(f"obs[{batch_key!r}] has only {present}; there is "
+                         f"nothing to harmonise against")
+    ref = str(reference) if reference is not None else _largest(batches)
+    if ref not in present:
+        raise ValueError(f"reference {ref!r} not in obs[{batch_key!r}] "
+                         f"({present})")
+
+    keys = _match_keys(md, match_on)
+    fractions = _fractions(md)
+
+    rows: dict[str, list] = {b: [] for b in present if b != ref}
+    targets: dict[str, list] = {b: [] for b in present if b != ref}
+    n_anchor_groups = 0
+
+    for key in pd.unique(keys):
+        group = keys == key
+        in_ref = group & (batches == ref) & ~np.isnan(energies)
+        if not in_ref.any():
+            continue
+        ref_energy = float(np.mean(energies[in_ref]))
+        anchored = False
+        for batch in rows:
+            member = group & (batches == batch) & ~np.isnan(energies)
+            if not member.any():
+                continue
+            rows[batch].append(fractions[member].mean(axis=0))
+            targets[batch].append(float(np.mean(energies[member])) - ref_energy)
+            anchored = True
+        n_anchor_groups += int(anchored)
+
+    offsets, diagnostics = {}, {}
+    for batch in rows:
+        A = np.asarray(rows[batch], dtype=float)
+        y = np.asarray(targets[batch], dtype=float)
+        if not len(y):
+            offsets[batch] = np.zeros(md.n_vars)
+            diagnostics[batch] = {"n_anchors": 0, "rmse_before": None,
+                                  "rmse_after": None,
+                                  "note": "no shared composition with the "
+                                          "reference; left uncorrected"}
+            continue
+        covered = (A > 0).sum(axis=0)
+        delta, *_ = np.linalg.lstsq(A, y, rcond=None)
+        # An element seen in too few anchors gets whatever least squares felt
+        # like; zero is the honest value for "not determined by the data".
+        delta = np.where(covered >= min_anchors_per_element, delta, 0.0)
+        offsets[batch] = delta
+        residual = y - A @ delta
+        diagnostics[batch] = {
+            "n_anchors": int(len(y)),
+            "n_elements_fitted": int((covered >= min_anchors_per_element).sum()),
+            "rmse_before": float(np.sqrt(np.mean(y ** 2))),
+            "rmse_after": float(np.sqrt(np.mean(residual ** 2))),
+            "underdetermined": bool(len(y) < (covered > 0).sum()),
+        }
+
+    corrected = energies.copy()
+    for batch, delta in offsets.items():
+        member = batches == batch
+        corrected[member] = energies[member] - fractions[member] @ delta
+
+    name = key_added or f"{energy_key}_harmonized"
+    md.obs[name] = corrected
+    md.uns["harmonize"] = {
+        "batch_key": batch_key,
+        "energy_key": energy_key,
+        "reference": ref,
+        "match_on": match_on,
+        "n_anchor_groups": int(n_anchor_groups),
+        "elements": list(map(str, md.var_names)),
+        "offsets": {b: np.asarray(d, dtype=float) for b, d in offsets.items()},
+        "diagnostics": diagnostics,
+    }
+    if not n_anchor_groups:
+        warnings.warn(
+            f"no composition is shared between {ref!r} and the other databases, "
+            f"so no offset could be fitted and obs[{name!r}] is a copy of "
+            f"obs[{energy_key!r}]. Harmonisation needs overlap.", stacklevel=2)
+    record(md, "pp.harmonize", batch_key=batch_key, energy_key=energy_key,
+           reference=ref, n_anchor_groups=n_anchor_groups)
+
+
+def _largest(batches: np.ndarray) -> str:
+    """Default reference: the database contributing the most rows."""
+    values, counts = np.unique(batches, return_counts=True)
+    return str(values[int(np.argmax(counts))])
+
+
+def _match_keys(md: AnnData, match_on: str) -> np.ndarray:
+    """What counts as 'the same material' across databases."""
+    if match_on == "formula":
+        S = structures(md, "input")
+        return np.asarray([s.composition.reduced_formula for s in S])
+    if match_on in md.obs:
+        return pd.Series(md.obs[match_on].to_numpy()).astype(str).to_numpy()
+    raise ValueError(f"match_on={match_on!r} is neither 'formula' nor a column "
+                     f"of obs ({list(md.obs.columns)})")
+
+
+def _fractions(md: AnnData) -> np.ndarray:
+    raw = md.X.toarray() if hasattr(md.X, "toarray") else np.asarray(md.X)
+    raw = np.asarray(raw, dtype=float)
+    totals = raw.sum(axis=1, keepdims=True)
+    return np.divide(raw, totals, out=np.zeros_like(raw), where=totals > 0)
+
+
+@register_function(
     aliases=["deduplicate", "dedup", "remove duplicate structures",
              "structure matching", "unique structures"],
     category="pp",
@@ -419,6 +580,6 @@ def strain(md: AnnData, amount, source: str = "input",
     record(md, "pp.strain", source=source, name=name)
 
 
-__all__ = ["standardize", "describe", "qc", "filter_materials",
+__all__ = ["standardize", "describe", "qc", "filter_materials", "harmonize",
            "filter_elements", "normalize_composition", "dedup", "supercell",
            "rattle", "strain"]

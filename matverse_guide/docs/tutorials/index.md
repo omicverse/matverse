@@ -22,6 +22,14 @@ hull, and shortlist — with the reasoning left in the object.
 What `X` being the composition matrix buys: ordination, clustering, and finding
 which elements distinguish the candidates that passed.
 :::
+
+:::{grid-item-card} Beyond one number {octicon}`pulse;1em;`
+:link: beyond_one_number
+:link-type: doc
+
+Curves on a shared grid, per-atom results on their own axis, measurements as a
+level of theory, and scoring generated candidates.
+:::
 ::::
 
 ```{toctree}
@@ -30,4 +38,5 @@ which elements distinguish the candidates that passed.
 
 screening
 chemical_space
+beyond_one_number
 ```

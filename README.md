@@ -80,12 +80,16 @@ not single compositions.
 | | |
 |---|---|
 | `mv.data` | build a dataset — CIF, Materials Project, matminer, ASE, pymatgen |
-| `mv.pp` | standardisation, symmetry, quality control, filtering, deduplication |
+| `mv.pp` | standardisation, symmetry, quality control, filtering, deduplication, cross-database harmonisation |
 | `mv.feat` | descriptors into `obsm` |
 | `mv.tl` | ordination, clustering, element enrichment, novelty |
-| `mv.calc` | energies and relaxation, tagged by level of theory |
+| `mv.calc` | energies, forces and relaxation, tagged by level of theory |
+| `mv.prop` | derived properties, including curves on a shared grid |
 | `mv.thermo` | convex hull, energy above hull, decomposition products |
 | `mv.screen` | filtering, ranking and Pareto fronts that leave a record |
+| `mv.multi` | the sites axis — one row per atom |
+| `mv.exp` | measured data, on the same footing as computed data |
+| `mv.gen` | scoring generated candidates, and enumerating substitutions |
 
 `mv.struct` is the v0.1 name for the structure half of `mv.pp`, kept as
 re-exports.
@@ -95,14 +99,32 @@ re-exports.
 ```
 X                       materials x elements — the composition matrix
 var                     one row per element — the periodic table
-obs                     one row per material
+obs                     one row per material; scalars carry _<level>
 obsm['structures']      structures, one column per variant
+obsm['xrd_pbe']         curves: materials x grid, one block per quantity and level
 obsm[...]               descriptors, embeddings
 obsp                    pairwise: similarity
+uns['grids']            the shared axis each curve is defined on
 uns['features']         which featuriser produced which block
 uns['levels']           per-level-of-theory provenance
 uns['provenance']       operations applied, in order
 ```
+
+One rule covers every result: **the level of theory is a name suffix**.
+`obs['energy_pbe']` and `obsm['xrd_pbe']` read the same way, and a measured
+pattern is `obsm['xrd_experiment']` rather than a different kind of thing.
+
+Per-atom results do not fit on this axis, because the number of atoms differs
+per material. They get a second object:
+
+```python
+sites = mv.multi.sites(md)                    # one row per atom
+mv.calc.forces(md, sites, level='emt')        # -> sites.obsm['forces_emt']
+mv.multi.aggregate(sites, md, 'force_magnitude_emt', how='max')
+```
+
+`sites.X` is the one-hot element, so `var` is the same periodic table and
+`mv.tl.rank_elements_groups` runs unchanged on atoms.
 
 Structures are in `obsm`, not `uns`, and the placement is load-bearing. `uns`
 does not subset with the object, so `md[mask]` would keep every structure while
@@ -244,33 +266,41 @@ exactly `obs` versus `obsm`.
 
 ## Status
 
-v0.1.1. A screening pipeline that works end to end, and is honest about what it
-does not do yet. See [DESIGN.md](DESIGN.md) for the full plan.
+v0.1.2. A screening pipeline that works end to end, three axes for the data that
+does not fit on one, and measured data on the same footing as computed data. See
+[DESIGN.md](DESIGN.md) for the full plan and
+[Release notes](matverse_guide/docs/Release_notes.md) for what changed.
 
-Landed since v0.1.0:
+Landed:
 
 - `X` as the composition matrix, `var` as the periodic table, and `mv.tl` on top
 - structures moved to `obsm`, which fixed both the subsetting bug and the h5ad
   claim — neither of which had ever held
 - levels carry `reference`, `license` and `uncertainty`; the hull refuses to mix
 - `mv.thermo.hull` takes real reference phases, so `e_above_hull` can be absolute
-- quality control, deduplication, Pareto screening
-- the registry and the probe harness that verifies it
+- curves as `obsm` blocks on a shared grid, which collapsed the two
+  level-of-theory conventions into one and removed the need for MuData
+- the sites axis, answering the ragged per-atom problem v0.1 flagged as open
+- `mv.exp` — experiment as a level, needing no new machinery
+- `mv.pp.harmonize` — cross-database energies as a batch effect
+- `mv.gen.validate` on LeMat-GenBench's definitions rather than a variant
+- the registry and the probe harness that verifies it: 101/101 claims
 
 Still open:
 
 - **Scale.** Everything here assumes the dataset fits in memory. Alexandria is
   5.06M entries and OMat24 is ~110M calculations; the lazy zarr-backed path is
-  the v0.3.x priority and the one capability no competing package has.
-- **The materials axis suits single-system depth badly.** A sites axis and grid
-  modalities under MuData are designed but not built. One material's full phonon
-  band structure is not what this object is for, and the docs should keep saying
-  so.
-- **Two level-of-theory conventions.** Arrays get a `layer`, scalars get a name
-  suffix, because `obs` has no layers. It is a wart forced by the container.
-- No DFT I/O, no generative models, no experimental data. `mv.gen.validate`
-  adopting LeMat-GenBench's metric definitions verbatim is the highest-value
-  next piece, because every generative paper currently reinvents them.
+  the next structural priority and the one capability no competing package has.
+- **No plotting.** `mv.pl` is missing and is worth more than a twelfth namespace
+  — the periodic-table heatmap in particular, which is the natural display for
+  `rank_elements_groups`.
+- **`harmonize` is fitted, not validated.** It recovers an injected offset
+  exactly on synthetic anchors. Whether it improves a real
+  MP-versus-OQMD-versus-Alexandria hull is unmeasured.
+- **The materials axis still suits single-system depth badly.** The sites axis
+  and grid blocks help; they do not make this the right object for one material's
+  full phonon band structure.
+- No DFT I/O, no property prediction models, no leakage-aware splits.
 
 Design disagreement is welcome, particularly on the axis choice and on whether
 `X` as composition earns its coupling. The test that would kill it is in the

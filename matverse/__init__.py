@@ -50,12 +50,14 @@ creates::
 
 from __future__ import annotations
 
-from . import calc, data, elements, feat, pp, screen, struct, thermo, tl  # noqa: F401
-from ._core import (check_commercial_use, compare_levels, level_info,  # noqa: F401
-                    levels_used, new, provenance, structures)
+from . import (calc, data, elements, exp, feat, gen, multi, pp,  # noqa: F401
+               prop, screen, struct, thermo, tl)
+from ._core import (check_commercial_use, compare_levels, grid_of,  # noqa: F401
+                    level_info, levels_used, new, provenance, structures,
+                    variants)
 from ._registry import get_registry
 
-__version__ = "0.1.1"
+__version__ = "0.1.2"
 
 #: The process-global function registry.
 registry = get_registry()
@@ -77,9 +79,10 @@ def find(query: str, limit: int = 5) -> list:
 
 
 __all__ = [
-    "data", "pp", "feat", "tl", "calc", "thermo", "screen", "elements",
-    "struct",
-    "new", "structures", "provenance", "compare_levels", "levels_used",
-    "level_info", "check_commercial_use",
+    "data", "pp", "feat", "tl", "calc", "prop", "thermo", "screen", "exp",
+    "multi", "gen",
+    "elements", "struct",
+    "new", "structures", "variants", "provenance", "compare_levels",
+    "levels_used", "level_info", "check_commercial_use", "grid_of",
     "registry", "describe", "find", "__version__",
 ]

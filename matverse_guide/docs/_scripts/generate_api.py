@@ -35,11 +35,19 @@ SECTIONS = [
      "Analysis on the composition matrix — ordination, clustering, element "
      "enrichment and novelty."),
     ("calc", "Calculators",
-     "Energies and relaxation, tagged by level of theory."),
+     "Energies, forces and relaxation, tagged by level of theory."),
+    ("prop", "Properties",
+     "Derived properties, including curves stored on a shared grid."),
     ("thermo", "Thermodynamics",
      "Convex hull, energy above hull, decomposition products."),
     ("screen", "Screening",
      "Filtering, ranking and Pareto fronts that leave a record."),
+    ("multi", "Sites axis",
+     "Per-atom results, on a companion object whose rows are atoms."),
+    ("exp", "Experiment",
+     "Measured data, carried as a level of theory like any other."),
+    ("gen", "Generated candidates",
+     "Scoring generated structures, and enumerating substitutions."),
 ]
 
 HEADER = """# User API

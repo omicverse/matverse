@@ -357,6 +357,64 @@ def compare_levels(md: AnnData, quantity: str,
     return df
 
 
+def deposit_grid(md: AnnData, quantity: str, level: str, values,
+                 grid, unit: str = "", **meta: Any) -> str:
+    """Store a grid-shaped result — a spectrum, a density of states, a pattern.
+
+    Grid data is ``n_materials x n_grid_points``: an XRD pattern over 2-theta, a
+    DOS over energy, a phonon spectrum over frequency. It goes into ``obsm``
+    under ``'<quantity>_<level>'``, with the shared grid axis recorded once in
+    ``uns['grids'][quantity]``.
+
+    That placement decides something the design had left open. Array-shaped
+    results were going to use AnnData ``layers`` to hold the level of theory,
+    with scalars using a name suffix — two conventions, split by container.
+    Putting grids in ``obsm`` instead means the suffix works everywhere:
+    ``obs['energy_pbe']`` and ``obsm['xrd_pbe']`` read the same way, one rule
+    covers both, and a measured pattern is ``obsm['xrd_experiment']`` rather
+    than a separate kind of thing.
+
+    Returns the ``obsm`` key it wrote.
+    """
+    import numpy as _np
+
+    values = _np.asarray(values, dtype=float)
+    grid = _np.asarray(grid, dtype=float)
+    if values.ndim != 2:
+        raise ValueError(f"{quantity!r} values must be 2-D "
+                         f"(materials x grid), got shape {values.shape}")
+    if values.shape[0] != md.n_obs:
+        raise ValueError(
+            f"{quantity!r} has {values.shape[0]} rows but the object has "
+            f"{md.n_obs} materials; a grid result is aligned to the material axis")
+    if values.shape[1] != len(grid):
+        raise ValueError(
+            f"{quantity!r} has {values.shape[1]} columns but the grid has "
+            f"{len(grid)} points")
+
+    key = f"{quantity}_{level}"
+    md.obsm[key] = values
+    grids = md.uns.setdefault("grids", {})
+    known = grids.get(quantity)
+    if known is not None and not _np.array_equal(
+            _np.asarray(known.get("values"), dtype=float), grid):
+        raise ValueError(
+            f"{quantity!r} already has a grid of {len(known.get('values', []))} "
+            f"points on this object and the new one differs. Levels of the same "
+            f"quantity must share a grid, or they cannot be compared; pass the "
+            f"same range and step, or use a different quantity name.")
+    grids[quantity] = {"values": grid, "unit": unit, **meta}
+    return key
+
+
+def grid_of(md: AnnData, quantity: str):
+    """The shared axis a grid-shaped result is defined on."""
+    grids = md.uns.get("grids", {})
+    if quantity not in grids:
+        raise KeyError(f"no grid for {quantity!r}; have {sorted(grids)}")
+    return np.asarray(grids[quantity]["values"], dtype=float)
+
+
 def record(md: AnnData, op: str, **params: Any) -> None:
     """Append an operation to ``uns['provenance']``.
 
@@ -376,5 +434,5 @@ def provenance(md: AnnData) -> list[str]:
 __all__ = ["new", "structures", "deposit_structures", "variants", "require",
            "record", "provenance", "set_level", "level_info", "levels_used",
            "compare_levels", "check_commercial_use", "composition_matrix",
-           "CONTAINERS", "LEVEL_FIELDS", "NONCOMMERCIAL_LICENSES",
-           "STRUCTURE_KEY"]
+           "deposit_grid", "grid_of", "CONTAINERS", "LEVEL_FIELDS",
+           "NONCOMMERCIAL_LICENSES", "STRUCTURE_KEY"]

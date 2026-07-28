@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "matverse"
-version = "0.1.1"
+version = "0.1.2"
 description = "A materials analysis ecosystem on the AnnData substrate"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -21,6 +21,7 @@ dependencies = ["anndata>=0.9", "numpy", "pandas", "scipy", "pymatgen", "ase"]
 [project.optional-dependencies]
 analysis = ["scikit-learn", "igraph", "leidenalg"]   # mv.tl clustering routes
 descriptors = ["dscribe"]                            # mv.feat.soap
+multi = ["mudata"]                                   # mv.multi.to_mudata only
 matminer = ["matminer"]
 mp = ["mp-api>=0.46.2"]                              # Delta-table data products
 mlip = ["mace-torch"]

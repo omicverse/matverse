@@ -281,6 +281,71 @@ def relax(md: AnnData, level: str = "emt", source: str = "input",
 
 
 @register_function(
+    aliases=["forces", "atomic forces", "per site forces", "force on each atom",
+             "site forces"],
+    category="calc",
+    description="Compute the force on every atom at one level of theory and "
+                "deposit it onto the sites axis, where per-atom results are a "
+                "matrix rather than ragged records.",
+    requires={"structures": ["{source}"]},
+    produces={"levels": ["{level}"]},
+    prerequisites=["mv.multi.sites"],
+    dispatch="level= selects the calculator, as for mv.calc.energy",
+    examples=["sites = mv.multi.sites(md); mv.calc.forces(md, sites, "
+              "level='emt')"],
+    related=["mv.multi.sites", "mv.multi.aggregate", "mv.calc.relax"],
+    notes="Takes both objects because forces need the structures, which live on "
+          "the material axis, and produce one row per atom, which lives on the "
+          "sites axis. Writes sites.obsm['forces_{level}'] and "
+          "sites.obs['force_magnitude_{level}'] — slots on the object passed "
+          "as `sites`, which the contract fields cannot name because they "
+          "describe one object only.",
+)
+def forces(md: AnnData, sites: AnnData, level: str = "emt",
+           source: str = "input", **params) -> None:
+    """Per-atom forces, in eV/angstrom, onto the sites axis."""
+    from pymatgen.io.ase import AseAtomsAdaptor
+
+    from .multi import AXIS_KEY
+
+    if sites.uns.get(AXIS_KEY) != "sites":
+        raise ValueError("second argument must be a sites object from "
+                         "mv.multi.sites(md)")
+    if sites.uns.get("parent", {}).get("source") != source:
+        raise ValueError(
+            f"the sites object was built from {sites.uns.get('parent', {}).get('source')!r} "
+            f"but forces were asked for on {source!r}; the atoms would not "
+            f"line up. Rebuild with mv.multi.sites(md, source={source!r}).")
+
+    factory, meta = _get(level)
+    adaptor = AseAtomsAdaptor()
+    calc = factory()
+
+    rows, failed = [], 0
+    for s in structures(md, source):
+        try:
+            atoms = adaptor.get_atoms(s)
+            atoms.calc = calc
+            rows.append(np.asarray(atoms.get_forces(), dtype=float))
+        except Exception:
+            rows.append(np.full((len(s), 3), np.nan))
+            failed += 1
+
+    stacked = np.vstack(rows) if rows else np.zeros((0, 3))
+    if len(stacked) != sites.n_obs:
+        raise ValueError(
+            f"computed {len(stacked)} force vectors for {sites.n_obs} sites; "
+            f"the sites object is out of date with the structures")
+
+    sites.obsm[f"forces_{level}"] = stacked
+    sites.obs[f"force_magnitude_{level}"] = np.sqrt((stacked ** 2).sum(axis=1))
+    set_level(md, level, **meta, source=source, n_failed=failed, **params)
+    set_level(sites, level, **meta, source=source, n_failed=failed, **params)
+    record(md, "calc.forces", level=level, source=source)
+    record(sites, "calc.forces", level=level, source=source)
+
+
+@register_function(
     aliases=["committee", "ensemble uncertainty", "model uncertainty",
              "predictive variance", "error bar"],
     category="calc",
@@ -316,5 +381,5 @@ def committee(md: AnnData, levels: list[str], key: str = "ensemble") -> None:
     record(md, "calc.committee", levels=list(levels), key=key)
 
 
-__all__ = ["energy", "relax", "committee", "register_calculator", "available",
-           "check_licenses"]
+__all__ = ["energy", "relax", "forces", "committee", "register_calculator",
+           "available", "check_licenses"]

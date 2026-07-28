@@ -47,33 +47,56 @@ has **three** natural axes, and to give each one a real home.
 | Axis | Rows are | Lives in | Example content |
 |---|---|---|---|
 | **materials** | one candidate | the primary `AnnData` | formula, spacegroup, energy, e_above_hull, descriptors |
-| **sites** | one atom in one material | a modality with its own `obs` | forces, Bader charges, magmoms, SOAP, coordination number |
-| **grid** | one point on a shared axis | one modality per grid | XRD 2θ, DOS energy, phonon frequency, wavelength, PDF *r* |
+| **sites** | one atom in one material | a second `AnnData` keyed back | forces, Bader charges, magmoms, SOAP, coordination number |
+| **grid** | one point on a shared axis | an `obsm` block per quantity and level | XRD 2θ, DOS energy, phonon frequency, wavelength, PDF *r* |
 
-`MuData` holds all three. The materials axis is the primary `obs`; the sites
-modality carries a `material_id` foreign key; each grid modality is a
-`materials × grid` matrix sharing the primary `obs`.
+*Revised in v0.1.2 by implementation.* The plan was one `MuData` holding all
+three axes as modalities. Two of the three turned out not to need one.
+
+**Grid data does not need a modality.** A `materials × grid` matrix is aligned to
+the material axis, which is what `obsm` is for, and the shared axis is one array
+in `uns['grids'][quantity]`. Making it a modality would buy a `var` per grid and
+cost every user a second object type. So grids live in `obsm` and everything
+stays in one `AnnData` and one `h5ad`.
+
+**The sites axis genuinely needs its own object**, because it has a different
+number of rows. It is a plain `AnnData` with `obs['material']` as the foreign key
+back, not a modality — matverse's operations take `AnnData`, and the sites object
+is useful without ever being assembled into anything.
 
 ```
-mdata
-├── obs                          n_materials — the primary axis
-├── mod['struct']  (AnnData)     X = composition,   var = elements
-├── mod['sites']   (AnnData)     obs = atoms,       obs['material_id'] → parent
-├── mod['xrd']     (AnnData)     var = 2θ grid,     layers = {'pbe', 'experiment'}
-├── mod['dos']     (AnnData)     var = energy grid, layers = {'pbe', 'hse06'}
-└── mod['phonon']  (AnnData)     var = frequency grid
+md    (AnnData)     obs = materials
+├── X                            composition,  var = elements
+├── obsm['structures']           one column per variant
+├── obsm['xrd_calc']             materials x 2θ,  grid in uns['grids']['xrd']
+├── obsm['xrd_experiment']       same grid, measured
+└── obs['energy_pbe'] ...        scalars, level in the suffix
+
+sites (AnnData)     obs = atoms
+├── X                            one-hot element, var = the same elements
+├── obs['material']              foreign key
+└── obsm['forces_emt']           per-atom results
 ```
 
-Two things fall out of this that are worth the complexity:
+`mv.multi.to_mudata` assembles the two into a `MuData` for storage or handoff,
+and nothing in matverse requires it. That is the whole of the MuData dependency:
+optional, at the edge.
+
+Two things fall out of the sites axis that are worth its cost:
 
 - **Per-site descriptors and per-site results share an axis.** SOAP vectors are
   per-site, and so are the forces and charges an MLIP returns. Putting them on
   the same axis means a training set for a fitted potential is a subset
   operation, not a script.
-- **A measured spectrum and a computed one become two layers of one matrix.**
-  `mod['xrd'].layers['experiment']` against `mod['xrd'].layers['pbe']` is the
-  compute-versus-experiment comparison that the field currently does by
-  exporting both to CSV.
+- **The element axis is shared with the material object.** `X` on the sites
+  object is the one-hot element, so `var` is the same periodic table and
+  `mv.tl.rank_elements_groups` runs unchanged on atoms — "which elements carry
+  the largest forces" needs no new function.
+
+A measured spectrum and a computed one likewise become two columns blocks of one
+object — `obsm['xrd_experiment']` against `obsm['xrd_calc']` — which is the
+compute-versus-experiment comparison the field currently does by exporting both
+to CSV.
 
 Trajectories (relaxation paths, MD) deliberately do **not** get an axis. OMat24
 alone is ~110M frames; these belong in a zarr store referenced from `uns`, read
@@ -124,12 +147,20 @@ design changes.
 v0.1's convention (`obs['energy_pbe']` + `uns['calc']['pbe']`) is the best idea
 in the skeleton and should be extended rather than merely kept.
 
-**Where results are array-shaped, the level is a `layer`, not a name suffix.**
-`mod['dos'].layers['pbe']` and `mod['dos'].layers['hse06']` are the same shape
-and different quantities — exactly what layers are for. Scalars stay as
-suffixed `obs` columns because `obs` has no layers. Two conventions, but each
-one is forced by the container, and the boundary is mechanical: array → layer,
-scalar → suffix.
+**One convention: the level is a name suffix, everywhere.**
+
+*Revised in v0.1.2 by implementation.* The original plan was two conventions
+split by container — a `layer` for array-shaped results, a name suffix for
+scalars — and §8.3 listed the split as a wart forced by `obs` having no layers.
+
+Building it showed the wart was avoidable. Grid-shaped results go into `obsm` as
+`'<quantity>_<level>'` with the shared axis in `uns['grids'][quantity]`, so
+`obs['energy_pbe']` and `obsm['xrd_pbe']` read the same way and one rule covers
+both. A measured pattern is `obsm['xrd_experiment']`, which is the same kind of
+thing as a computed one rather than a special case.
+
+The knock-on is larger than it looks: grids no longer need a modality, so they no
+longer need MuData. See §2.1.
 
 **`uns['levels'][level]` needs more fields than v0.1 gives it.** The 2026
 ecosystem makes three of them load-bearing:
@@ -332,16 +363,20 @@ batch submission), caching and checkpointing, and the function registry (§7).
 
 Tiered by whether the library is *usable* without it.
 
-**v0.1.x — a screening pipeline that works end to end.**
-`mv.data` (OPTIMADE + MP + local files), `mv.pp` (standardize, qc, dedup,
-supercell), `mv.feat` (composition + dscribe SOAP + MLIP embedding), `mv.calc`
-(TorchSim + OAM-model dispatch), `mv.thermo.hull` with real reference phases,
-`mv.screen`, basic `mv.pl`. Every function decorated at authoring time (§7).
+**v0.1.x — a screening pipeline that works end to end. ✅ shipped.**
+`mv.data`, `mv.pp` (standardize, qc, dedup, supercell), `mv.feat`, `mv.calc`
+with level dispatch, `mv.thermo.hull` taking real reference phases, `mv.screen`.
+`X` as composition and `mv.tl` on top of it landed here rather than in v0.2.
+Every function decorated at authoring time, with the probe harness (§7).
+Still outstanding from this tier: OPTIMADE ingestion, the TorchSim batched
+execution path, and `mv.pl`.
 
-**v0.2.x — the object earns its keep.**
-The MuData multi-axis layout (§2.1), `X` as composition and `mv.tl` on top of it
-including `harmonize`, `mv.model` with leakage-aware splits and fine-tuning,
-`mv.prop` for phonons/elastic/electronic, `mv.gen.validate`.
+**v0.2.x — the object earns its keep. ◐ in progress.**
+Shipped in v0.1.2: the multi-axis layout (§2.1) as a sites object plus grid blocks,
+`mv.prop` (XRD, RDF, grid comparison), `mv.exp` (experiment as a level, pattern
+matching), `mv.pp.harmonize`, `mv.gen.validate` and `mv.gen.substitute`.
+Outstanding: `mv.model` with leakage-aware splits and foundation-model
+fine-tuning, and the rest of `mv.prop` — phonons, elastic, electronic structure.
 
 **v0.3.x — the loop closes.**
 `mv.opt` campaigns, `mv.exp` with XRD matching, defect thermodynamics,
@@ -460,23 +495,33 @@ confirming failure. Report a contract-verified rate alongside AFS.
 
 ## 8. Open problems
 
-1. **`X` as composition is a bet.** If chemical-space structure carries no
-   signal worth the coupling, fall back to v0.1's empty `X`. Nothing else
-   changes. Test it before committing: does `rank_elements_groups` on a real
-   screen recover chemistry a domain expert would recognise?
+1. **`X` as composition is a bet.** Still a bet, but it has now paid twice: on
+   the material axis, where `rank_elements_groups` recovers the chemistry a
+   screen selected for, and on the sites axis, which shares the element `var` and
+   so inherits the same function unchanged. The test that would kill it is
+   `test_rank_elements_groups_recovers_the_obvious_chemistry`; the fallback is
+   `build_X=False` and nothing else changes.
 2. **The materials axis still fits single-system depth badly.** The sites axis
-   and grid modalities help. They do not make this the right object for one
-   material's full phonon band structure, and the docs should say so rather than
-   overclaim.
-3. **Two level-of-theory conventions** (layer for arrays, name suffix for
-   scalars) is a wart. It is forced by `obs` having no layers. Worth one more
-   attempt at unification before it ossifies.
-4. **Scope discipline.** Fourteen namespaces is a lot of surface. v0.1.x is seven
-   of them, and shipping a screening pipeline that genuinely works beats
-   fourteen half-namespaces.
+   and grid blocks help, and they do not make this the right object for one
+   material's full phonon band structure. The docs say so rather than overclaim.
+3. ~~**Two level-of-theory conventions.**~~ *Resolved in v0.1.2.* Grid results
+   went to `obsm` rather than to a modality's `layers`, so the name suffix is the
+   only convention. See §2.3.
+4. **Scope discipline.** Eleven namespaces now, against fourteen designed. The
+   pressure is real and the answer has not changed: a pipeline that genuinely
+   works beats fourteen half-namespaces. `mv.pl` is still missing and is more
+   valuable than a twelfth namespace.
 5. **Benchmark credibility.** Per `DEV_PROMPT.md`: write task specifications
-   against scientific goals *first*, then check which functions they need. Do
-   not co-design a task around a function you just wrote.
-6. **Ragged per-site data.** The sites-axis modality is the proposed answer to
-   the problem v0.1 flagged as open. It should be prototyped early enough to
-   fail cheaply.
+   against scientific goals *first*, then check which functions they need. Do not
+   co-design a task around a function you just wrote. Unchanged and unstarted.
+6. ~~**Ragged per-site data.**~~ *Resolved in v0.1.2* by the sites object, which
+   is a second `AnnData` rather than a modality. See §2.1.
+7. **`harmonize` is fitted, not validated.** It recovers an injected offset
+   exactly and reduces cross-database RMSE to zero on synthetic anchors. Whether
+   it improves a real MP-versus-OQMD-versus-Alexandria hull is unmeasured, and
+   the honest test needs the three databases and a held-out set of compositions.
+8. **Contract fields cannot describe two objects.** `mv.calc.forces` writes into
+   the `sites` object passed as its second argument, and `produces` names slots
+   on one object only — so those writes are documented in prose and unprobed.
+   This is the second place the vocabulary has run out, after the
+   route-conditional `requires` on `mv.tl.cluster`. Both are worth reporting.

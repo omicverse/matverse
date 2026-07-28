@@ -12,6 +12,7 @@ the exercise is a registry whose claims are all earned.
 
 from __future__ import annotations
 
+import numpy as np
 import pytest
 
 import matverse as mv
@@ -75,6 +76,29 @@ def _probe_everything(make_md) -> ProbeReport:
         mv.calc.energy(md, level="emt")
         return md
 
+    def patterned():
+        md = make_md()
+        mv.prop.xrd(md, two_theta=(10, 40), step=0.1)
+        return md
+
+    def two_levels():
+        md = patterned()
+        mv.exp.attach(md, "xrd", md.obsm["xrd_calc"], mv.grid_of(md, "xrd"))
+        return md
+
+    def batched():
+        """Two databases sharing every composition, so harmonize has anchors."""
+        import pandas as pd
+        md = make_md()
+        doubled = mv.data.from_structures(
+            mv.structures(md) + mv.structures(md),
+            obs=pd.DataFrame({
+                "database": ["mp"] * md.n_obs + ["oqmd"] * md.n_obs,
+                "e": np.concatenate([np.zeros(md.n_obs),
+                                     np.full(md.n_obs, 0.1)]),
+            }))
+        return doubled
+
     def featured():
         md = make_md()
         mv.feat.element_stats(md)
@@ -112,6 +136,15 @@ def _probe_everything(make_md) -> ProbeReport:
         (mv.tl.neighbors, embedded, (), {"n_neighbors": 3}),
         (mv.tl.cluster, embedded, (), {"method": "kmeans", "n_clusters": 2}),
         (mv.tl.rank_elements_groups, grouped, ("group",), {}),
+        (mv.pp.harmonize, batched, (), {"batch_key": "database",
+                                        "energy_key": "e",
+                                        "reference": "mp"}),
+        (mv.prop.xrd, make_md, (), {"two_theta": (10, 40), "step": 0.1}),
+        (mv.prop.rdf, make_md, (), {"r_max": 6.0}),
+        (mv.prop.compare_grids, two_levels, ("xrd", "calc", "experiment"), {}),
+        (mv.exp.measure, make_md, ("band_gap", [0.0] * 6), {}),
+        (mv.exp.match_xrd, patterned, ([1.0] * 10, list(range(10, 20))), {}),
+        (mv.gen.validate, make_md, (), {}),
     ]
     for func, factory, args, kwargs in cases:
         import warnings
