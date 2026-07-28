@@ -1,0 +1,30 @@
+# Sphinx documentation dependencies for the matverse guide.
+#
+# The version pins mirror the omicverse guide, which found them the hard way:
+# sphinx 8.x throws "issubclass() arg 2 must be a class, a tuple of classes, or
+# a union" at autosummary.process_generate_options, and staying on the 7.x line
+# keeps the classic code path that surfaces the real error instead of
+# swallowing it.
+sphinx>=7.4,<8.0
+sphinx-book-theme>=1.1,<1.2
+myst-nb>=1.1,<1.2
+sphinx-autodoc-typehints<2.4
+sphinx-copybutton
+sphinx-design<0.7
+sphinxext-opengraph
+sphinx-hoverxref<1.5
+linkify-it-py
+
+# Notebook execution support (nb_execution_mode is "off", but myst-nb still
+# imports these to parse notebook cells).
+ipykernel
+nbformat
+
+# matverse's own core, so autodoc can import the package and the API generator
+# can read the registry. Optional backends are mocked in conf.py.
+numpy
+pandas
+scipy
+anndata
+pymatgen
+ase

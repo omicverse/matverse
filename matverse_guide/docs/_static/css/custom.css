@@ -1,0 +1,49 @@
+/* matverse docs — small adjustments on top of sphinx-book-theme.
+   Kept deliberately short: the theme's defaults are good, and every override
+   here is one more thing to re-check when the theme updates. */
+
+:root {
+  --mv-accent: #2c6e9b;
+  --mv-accent-dark: #7fb4d8;
+}
+
+/* Slot names (obs['energy_emt'], obsm['structures']) appear constantly in this
+   documentation. Give inline code enough contrast to scan a table of them. */
+code.literal {
+  font-size: 0.86em;
+  padding: 0.12em 0.35em;
+  border-radius: 3px;
+}
+
+/* Grid cards on the landing page: match the theme's border radius and lift
+   slightly on hover so they read as navigation rather than as callouts. */
+.sd-card {
+  border-radius: 8px;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.sd-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.10);
+}
+
+.sd-card-title {
+  font-weight: 600;
+}
+
+/* API tables list one function per row with its slots in the second column;
+   without this the slot column wraps into an unreadable column of fragments. */
+table.docutils td,
+table.docutils th {
+  vertical-align: top;
+}
+
+table.docutils code.literal {
+  white-space: nowrap;
+}
+
+/* Warnings carry real content in these docs — closed hulls, model licences —
+   rather than boilerplate. Make them a little more prominent. */
+div.admonition.warning {
+  border-left-width: 4px;
+}

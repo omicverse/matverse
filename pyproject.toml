@@ -4,18 +4,37 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "matverse"
-version = "0.1.0"
+version = "0.1.1"
 description = "A materials analysis ecosystem on the AnnData substrate"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 license = {text = "MIT"}
-dependencies = ["anndata>=0.9", "numpy", "pandas", "pymatgen", "ase"]
+
+# Core stays deliberately small. This ecosystem's dependency conflicts are real
+# and current — AMSET pins Python >=3.9 while pymatgen requires >=3.11,
+# reaction-network's PyPI release trails its git by two years, matminer has not
+# released since April 2024 — so everything beyond this list is an optional
+# extra, imported inside the function that needs it and failing with an error
+# that names the extra. `pip install matverse` must never break an environment.
+dependencies = ["anndata>=0.9", "numpy", "pandas", "scipy", "pymatgen", "ase"]
 
 [project.optional-dependencies]
+analysis = ["scikit-learn", "igraph", "leidenalg"]   # mv.tl clustering routes
+descriptors = ["dscribe"]                            # mv.feat.soap
 matminer = ["matminer"]
-mp = ["mp-api"]
-mlip = ["mace-torch", "chgnet"]
+mp = ["mp-api>=0.46.2"]                              # Delta-table data products
+mlip = ["mace-torch"]
 dev = ["pytest"]
+
+[project.urls]
+Source = "https://github.com/matverse/matverse"
 
 [tool.setuptools.packages.find]
 include = ["matverse*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = [
+    "ignore::DeprecationWarning:spglib.*",
+    "ignore:Transforming to str index:UserWarning",
+]
