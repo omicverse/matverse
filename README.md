@@ -272,10 +272,9 @@ exactly `obs` versus `obsm`.
 ## Status
 
 v0.1.6. **96 functions across 16 namespaces**, every one carrying a registry
-entry whose claims are verified by execution — currently **142/142** — plus
-`matverse-bench`, whose grader contains no model calls. See [DESIGN.md](DESIGN.md) for the
-full plan and [Release notes](matverse_guide/docs/Release_notes.md) for what
-changed.
+entry whose claims are verified by execution — currently **142/142**. See
+[DESIGN.md](DESIGN.md) for the full plan and
+[Release notes](matverse_guide/docs/Release_notes.md) for what changed.
 
 Landed:
 
@@ -302,8 +301,6 @@ Landed:
   Dulong-Petit limit rather than against a stored number
 - streaming construction and chunked compute, so a corpus larger than memory is
   a loop rather than a wall
-- `matverse-bench`: goal-not-API prompts graded on end state, layered by whether
-  a task needs one call, two composed, or a full screen
 - the registry and the probe harness that verifies it: **142/142 claims**
 
 Still open:
@@ -329,8 +326,6 @@ Still open:
 - **The materials axis still suits single-system depth badly.** The sites axis
   and grid blocks help; they do not make this the right object for one material's
   full phonon band structure.
-- **No benchmark.** `matverse-bench` — goal-not-API prompts graded on end state —
-  is designed but unwritten.
 
 Design disagreement is welcome, particularly on the axis choice and on whether
 `X` as composition earns its coupling. The test that would kill it is in the

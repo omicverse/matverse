@@ -53,14 +53,6 @@ Why the object has this shape, what matverse deliberately does not build, and
 what is still open.
 :::
 
-:::{grid-item-card} Benchmark {octicon}`checklist;1em;`
-:link: Benchmark
-:link-type: doc
-
-matverse-bench: goal-not-API tasks graded on end state, by a grader with no
-model calls in it.
-:::
-
 :::{grid-item-card} Release notes {octicon}`tag;1em;`
 :link: Release_notes
 :link-type: doc
@@ -127,7 +119,6 @@ Installation_guide
 tutorials/index
 api/index
 Design
-Benchmark
 Release_notes
 Developer_guide
 GitHub <https://github.com/matverse/matverse>

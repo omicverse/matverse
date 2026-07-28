@@ -36,7 +36,7 @@ elemental fcc supercell — rather than a stored count.
 
 ## v0.1.5
 
-Working past memory, and a benchmark that can fail.
+Working past memory.
 
 ### Scale
 
@@ -64,38 +64,6 @@ block than they do overall.
 
 This is chunking, not laziness. The object is still materialised; a zarr-backed
 `obs` with on-demand structure resolution is the next step.
-
-### `matverse-bench`
-
-Goal-not-API prompts graded on end state. Twelve tasks in three layers — one
-call, two composed, a full screen — so a failure localises to discovery versus
-composition.
-
-**The grader contains no model calls**, and a test reads its source to keep it
-that way. That is what makes a pass arguable from the code rather than delegated
-to a black box. Columns are matched by regular expression wherever the name is
-not part of the specification, because it usually is not: a model that writes
-`stable` where the reference writes `passes` has not made a mistake.
-
-Most of the benchmark's own test suite feeds the grader **wrong answers on
-purpose**, because a grader that passes everything measures nothing. It is shown
-to catch: doing nothing (0/12), a sign error in the hull distance, a validity
-flag that marks everything valid, a half-computed column, a forgotten file save,
-and — the one that took a purpose-built check — a constant energy offset
-masquerading as a cross-database reconciliation. Both produce a column; only one
-makes the databases agree on a composition whose correction differs from the
-average.
-
-It is also shown to *accept* differently-spelled answers and hand-rolled ones:
-an agent that computes a duplicate flag itself scores exactly as one that calls
-`mv.pp.dedup`, because the trajectory is not graded.
-
-Reference solutions exist to prove the benchmark is passable — the failure mode
-where every arm scores zero because a criterion was written wrong, and the number
-looks like a hard benchmark. They are not a target.
-
-Per `DEV_PROMPT.md`, the task specifications were written against the scientific
-goal first and only then checked against which functions they happen to need.
 
 ## v0.1.4
 

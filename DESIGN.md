@@ -381,15 +381,19 @@ leakage-aware splits; `mv.dft` for the boundary between a screen and a directory
 tree of calculations.
 
 **Tier 3 — the loop closes. ✅**
-`mv.opt` campaigns, defect enumeration, Pourbaix, chunked compute at scale
-(§5), and `matverse-bench` — twelve goal-not-API tasks whose grader contains no
-model calls and is tested against wrong answers to show it discriminates.
+`mv.opt` campaigns, defect enumeration, Pourbaix, chunked compute at scale (§5).
 
 **What deliberately did not ship.** No interatomic potential, no graph network
 and no embedder are vendored; `mv.calc`, `mv.model` and `mv.feat` are
 registration interfaces, because weights are hundreds of megabytes with their
 own licences and the leaderboard reorders monthly. Workflow submission stays
 with atomate2, quacc and AiiDA. Both are choices, argued in §6, not omissions.
+
+**The benchmark is not part of the package.** `matverse-bench` is described in
+§7 and belongs in its own repository beside `ovagent-bench`, not shipped inside
+the library it measures. A package and the evidence for a package are different
+artefacts with different audiences, and bundling them makes the install heavier
+for everyone who only wants the library.
 
 **What is genuinely still missing**, and named in the README rather than here so
 a reader meets it first: the scale path is chunked rather than lazy — the object
