@@ -1,5 +1,98 @@
 # Release notes
 
+## v0.1.18
+
+### `mv.calc.relax` never moved the lattice
+
+Adding `mv.prop.eos` gave a second, independent route to the bulk modulus — a
+curvature in volume against `mv.prop.elastic`'s curvature in strain. The two are
+the same quantity, and they disagreed by **9–12%, always in the same direction**.
+Both were converged: the EOS value moved by 0.2% between a ±4% and a ±10% strain
+series, and the elastic value by 0.2% between a 0.2% and a 2% strain.
+
+The cause was not in either function. `mv.calc.relax` built a bare
+`BFGS(atoms)`, with no cell filter, so it relaxed the atomic positions and never
+the lattice. For a high-symmetry cell that is not a weak relaxation — it is *no*
+relaxation, because the forces on an fcc metal vanish by symmetry. The optimiser
+converged immediately, changed nothing, reported `relax_converged = True`, and
+deposited the input geometry under the name `relaxed_emt`.
+
+Everything downstream inherited it. Elastic constants were second derivatives
+taken about a geometry under residual tensile stress, which softens them; phonon
+frequencies, Debye temperatures and any energy entering a hull were computed at
+whatever lattice constant the input happened to carry.
+
+`cell=True` is now the default, via ASE's `FrechetCellFilter`, and is skipped
+for molecules. Five of the seven bundled fcc metals moved closer to experiment:
+
+| bulk modulus (GPa) | before | after | experiment |
+|---|---|---|---|
+| Cu | 123 | 135 | 140 |
+| Ni | 157 | 176 | 180 |
+| Ag | 93 | 100 | 101 |
+| Au | 159 | 174 | 180 |
+| Al | 35 | 40 | 76 |
+
+With the cell relaxed, the two routes agree to **1.1% at worst and under 0.4%
+for six of seven**.
+
+The part worth keeping is how it was found. Neither number looked wrong on its
+own — 123 GPa for copper is a plausible answer from a cheap potential, and no
+test asserted otherwise. **The disagreement between two quantities that had to
+match was the only visible symptom**, and it was visible only because both sit
+on one object under names that say what they are. Pass `cell=False` when the
+lattice is meant to be held, as for a slab.
+
+Also worth recording: no existing test failed when this was fixed. Nothing in
+the suite had asserted that relaxation relaxes anything, so
+`tests/test_equation_of_state.py` now pins it directly.
+
+### `mv.prop.eos` — the equation of state
+
+Compress each cell over a series of volume scale factors, fit a Birch-Murnaghan
+(or Vinet, Murnaghan, Poirier-Tarantola) equation of state, and deposit the bulk
+modulus, its pressure derivative, the equilibrium volume and the RMS misfit. The
+energy-volume curves land in `obsm` on a shared **scale-factor** grid rather
+than a volume grid, because materials of different size have no common volume
+axis while the strain series they were computed on is common by construction.
+
+`B0'` earns its place beyond the bulk modulus: aluminium comes out at 1.95
+against a measured 4.4, so EMT has the wrong *shape* for aluminium's
+energy-volume curve rather than merely the wrong curvature at one point.
+
+### `mv.prop.dimensionality` — 0D, 1D, 2D or 3D
+
+Classify the bonded network so a screen can ask for exfoliable candidates
+directly. This is the archetypal property `X` cannot reach: graphite and diamond
+have the same composition matrix, the same `var` and the same element counts,
+and differ by whether the bonds close in three directions.
+
+Validated against textbook answers — graphite 2D, MoS2 2D with two layers per
+cell, fcc copper 3D, well-separated I2 0D. The near-neighbour strategy is
+recorded next to the answer for the same reason `mv.env.coordination` records
+it, and the stakes are higher here: the classification turns entirely on whether
+a long contact counts as a bond, which is exactly what a van der Waals gap is.
+
+### What was not built, and why
+
+The roadmap for this batch listed piezoelectric constants, NMR shieldings, SLME
+and XAS alongside the equation of state. Those four are **ingestion, not
+calculation**: pymatgen's `PiezoTensor`, `ChemicalShielding` and SLME all take a
+DFT-computed tensor or dielectric function as *input*, and there is nothing for
+a cheap potential to compute. They belong behind `mv.dft`, on the same boundary
+as `read_outputs`, and pretending otherwise would have produced four functions
+that raise on every dataset a user can actually build.
+
+### A note on `uns['levels']`
+
+`set_level` replaces its entry rather than merging, so per-call parameters
+written by one operation are overwritten by the next at the same level —
+`mv.prop.elastic` after `mv.calc.relax` leaves `strain` where `fmax` and `cell`
+had been. Per-operation parameters are kept in order by `uns['provenance']`,
+which is where they belong and where `mv.provenance(md)` reads them from, so
+nothing is lost. The level entry should probably hold only level-defining
+fields; that is not changed here.
+
 ## v0.1.17
 
 ### The contract-verified rate was measuring the test suite

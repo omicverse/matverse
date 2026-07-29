@@ -167,6 +167,62 @@ md.obs[["name", "has_octahedra"]]"""),
 in the same environment, which is what a high-symmetry structure looks like
 from the inside.
 
+## The same graph, asked a global question
+
+Coordination is local: how many neighbours does this atom have. The bond graph
+also answers something the local view cannot — whether the structure holds
+together in three directions, in two, in one, or not at all. That is the
+difference between a framework, a layered material you can exfoliate, a chain
+compound and a molecular crystal.
+
+`mv.prop.dimensionality` is the archetypal thing `X` cannot tell you. Graphite
+and diamond have the same composition matrix, the same `var`, and the same
+element counts. One is layers held by van der Waals forces; the other is the
+hardest material in common use."""),
+
+    ("code", """\
+from pymatgen.core import Lattice, Structure
+
+graphite = Structure(Lattice.hexagonal(2.46, 6.70), ["C"] * 4,
+                     [[0, 0, 0], [1/3, 2/3, 0], [0, 0, 0.5], [2/3, 1/3, 0.5]])
+diamond = Structure(Lattice.cubic(3.567), ["C"] * 8,
+                    [[0, 0, 0], [0, .5, .5], [.5, 0, .5], [.5, .5, 0],
+                     [.25, .25, .25], [.25, .75, .75],
+                     [.75, .25, .75], [.75, .75, .25]])
+mos2 = Structure(Lattice.hexagonal(3.16, 12.3),
+                 ["Mo", "Mo", "S", "S", "S", "S"],
+                 [[1/3, 2/3, 0.25], [2/3, 1/3, 0.75],
+                  [2/3, 1/3, 0.371], [1/3, 2/3, 0.629],
+                  [1/3, 2/3, 0.871], [2/3, 1/3, 0.129]])
+
+carbon = mv.data.from_structures([graphite, diamond, mos2])
+mv.pp.describe(carbon)
+mv.prop.dimensionality(carbon)
+
+carbon.obs[["formula", "dimensionality", "n_components", "is_layered",
+            "density"]].round(2)"""),
+
+    ("markdown", """\
+Graphite 2D, diamond 3D, MoS2 2D — and `n_components` counts two layers per
+cell for both of the layered ones.
+
+The two carbons differ in density, so density is *a* signal, but it is the kind
+that fails on the next pair. Dimensionality is the property itself.
+
+A screen asks for it directly:"""),
+
+    ("code", """\
+mv.screen.filter(carbon, dimensionality__eq=2, name="exfoliable")
+carbon.obs[["formula", "exfoliable", "dimensionality_strategy"]]"""),
+
+    ("markdown", """\
+`dimensionality_strategy` is recorded next to the answer for the same reason
+`coordination_strategy` was. The near-neighbour algorithms disagree, and here
+the disagreement is sharper than it was for a coordination number: the
+classification turns entirely on whether a long contact counts as a bond, which
+is precisely what a van der Waals gap is. A dimensionality without its strategy
+is not a reproducible result.
+
 ## Electronic structure
 
 `mv.elec` starts where a band structure starts — the path through the Brillouin

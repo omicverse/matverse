@@ -195,6 +195,170 @@ def elastic(md: AnnData, level: str = "emt", source: str = "input",
     record(md, "prop.elastic", level=level, source=source, strain=strain)
 
 
+@register_function(
+    aliases=["equation of state", "eos", "energy volume curve", "e-v curve",
+             "birch murnaghan", "compressibility", "fit eos"],
+    category="prop",
+    description="Fit an equation of state to the energy-volume curve of every "
+                "structure at one level of theory, giving the bulk modulus, "
+                "its pressure derivative and the equilibrium volume.",
+    requires={"structures": ["{source}"]},
+    produces={"obs": ["bulk_modulus_eos_{level}",
+                      "bulk_modulus_derivative_{level}",
+                      "equilibrium_volume_{level}",
+                      "equilibrium_energy_{level}",
+                      "eos_residual_{level}"],
+              "obsm": ["eos_{level}"], "uns": ["grids"], "levels": ["{level}"]},
+    prerequisites=["mv.calc.relax"],
+    dispatch="level= selects the calculator, as for mv.calc.energy",
+    examples=["mv.prop.eos(md, level='emt')",
+              "mv.prop.eos(md, level='emt', source='relaxed_emt', "
+              "model='vinet')"],
+    related=["mv.prop.elastic", "mv.calc.relax", "mv.screen.filter"],
+    notes="The bulk modulus this returns and the one mv.prop.elastic derives "
+          "from the stiffness tensor are the same quantity by two routes — a "
+          "curvature in volume against a curvature in strain — and they agree "
+          "when the input is relaxed and the calculator is well behaved. When "
+          "they disagree, the usual cause is that the input was not at a "
+          "minimum, and the disagreement is the cheapest available warning. "
+          "Both live on the object, so comparing them is a subtraction.\n\n"
+          "The curve is stored against the **volume scale factor**, not against "
+          "absolute volume: materials of different size have no common volume "
+          "axis, and the strain series they were computed on is common by "
+          "construction. obs['eos_residual'] is the RMS misfit in eV/atom; a "
+          "value far above a meV is a fit that should not be read.",
+)
+def eos(md: AnnData, level: str = "emt", source: str = "input",
+        scales=None, model: str = "birch_murnaghan",
+        key_added: str | None = None) -> None:
+    """Equation of state by isotropic compression. Deposits; returns ``None``."""
+    from pymatgen.analysis.eos import EOS
+    from pymatgen.io.ase import AseAtomsAdaptor
+
+    from .calc import _get
+
+    factory, meta = _get(level)
+    adaptor = AseAtomsAdaptor()
+    calculator = factory()
+    quantity = key_added or "eos"
+
+    grid = (np.linspace(0.94, 1.06, 7) if scales is None
+            else np.asarray(scales, dtype=float))
+    if grid.ndim != 1 or grid.size < 4:
+        raise ValueError(
+            f"an equation of state needs at least four volume scale factors to "
+            f"fit four parameters; got {grid.size}. Pass scales=np.linspace("
+            f"0.94, 1.06, 7) or leave it at the default.")
+
+    curves = np.full((md.n_obs, grid.size), np.nan)
+    moduli = np.full(md.n_obs, np.nan)
+    derivatives = np.full(md.n_obs, np.nan)
+    volumes = np.full(md.n_obs, np.nan)
+    energies0 = np.full(md.n_obs, np.nan)
+    residuals = np.full(md.n_obs, np.nan)
+    failed = 0
+
+    for i, structure in enumerate(structures(md, source)):
+        n = len(structure)
+        try:
+            sampled_v, sampled_e = [], []
+            for j, scale in enumerate(grid):
+                strained = structure.copy()
+                strained.scale_lattice(structure.volume * float(scale))
+                atoms = adaptor.get_atoms(strained)
+                atoms.calc = calculator
+                energy = float(atoms.get_potential_energy())
+                curves[i, j] = energy / n
+                sampled_v.append(strained.volume)
+                sampled_e.append(energy)
+
+            fit = EOS(eos_name=model).fit(sampled_v, sampled_e)
+            moduli[i] = float(fit.b0_GPa)
+            derivatives[i] = float(fit.b1)
+            volumes[i] = float(fit.v0)
+            energies0[i] = float(fit.e0) / n
+            predicted = np.asarray(
+                [fit.func(v) for v in sampled_v], dtype=float)
+            residuals[i] = float(np.sqrt(np.mean(
+                ((predicted - np.asarray(sampled_e)) / n) ** 2)))
+        except Exception:
+            failed += 1
+
+    deposit_grid(md, quantity, level, curves, grid, unit="eV/atom",
+                 grid_unit="V/V_input", model=model, source=source)
+    md.obs[f"bulk_modulus_eos_{level}"] = moduli
+    md.obs[f"bulk_modulus_derivative_{level}"] = derivatives
+    md.obs[f"equilibrium_volume_{level}"] = volumes
+    md.obs[f"equilibrium_energy_{level}"] = energies0
+    md.obs[f"eos_residual_{level}"] = residuals
+    set_level(md, level, **meta, source=source, eos_model=model,
+              n_scales=int(grid.size), n_failed=failed)
+    record(md, "prop.eos", level=level, source=source, model=model,
+           n_scales=int(grid.size))
+
+
+@register_function(
+    aliases=["dimensionality", "is it layered", "2d material", "layered",
+             "bonding dimensionality", "van der waals layered",
+             "molecular crystal"],
+    category="prop",
+    description="Classify every structure by the dimensionality of its bonded "
+                "network — 0D molecular, 1D chains, 2D layers, 3D framework — "
+                "so a screen can ask for exfoliable candidates directly.",
+    requires={"structures": ["{source}"]},
+    produces={"obs": ["dimensionality", "n_components", "is_layered",
+                      "dimensionality_strategy"]},
+    examples=["mv.prop.dimensionality(md)",
+              "mv.prop.dimensionality(md, strategy='minimum_distance')",
+              "mv.prop.dimensionality(md); "
+              "mv.screen.filter(md, dimensionality__eq=2, name='exfoliable')"],
+    related=["mv.env.bonds", "mv.env.coordination", "mv.screen.filter"],
+    notes="A layered material and a framework can have identical compositions, "
+          "identical space groups and nearly identical densities, so this is "
+          "not derivable from X or from obs — it is a property of the bond "
+          "graph, which is why it needs a near-neighbour algorithm to exist "
+          "at all.\n\n"
+          "Which algorithm is recorded next to the answer, for the same reason "
+          "mv.env.coordination records it: the algorithms disagree, and a "
+          "dimensionality without its strategy is not reproducible. The "
+          "disagreement is worse here than for a coordination number, because "
+          "the classification turns on whether a long contact counts as a bond "
+          "at all — which is exactly the question a van der Waals gap poses.\n\n"
+          "n_components counts the disconnected pieces in the unit cell, so a "
+          "2D material with two layers per cell reports 2. It is one and the "
+          "same number for a 3D framework, which is 1 by construction.",
+)
+def dimensionality(md: AnnData, source: str = "input",
+                   strategy: str = "crystalnn") -> None:
+    """Bonded-network dimensionality per material. Deposits; returns ``None``."""
+    from pymatgen.analysis.dimensionality import (get_dimensionality_larsen,
+                                                  get_structure_components)
+    from pymatgen.analysis.graphs import StructureGraph
+
+    from .env import _strategy
+
+    finder = _strategy(strategy)
+    dims = np.full(md.n_obs, -1, dtype=int)
+    counts = np.full(md.n_obs, -1, dtype=int)
+    failed = 0
+
+    for i, structure in enumerate(structures(md, source)):
+        try:
+            graph = StructureGraph.from_local_env_strategy(structure, finder)
+            dims[i] = int(get_dimensionality_larsen(graph))
+            counts[i] = len(get_structure_components(graph))
+        except Exception:
+            failed += 1
+
+    md.obs["dimensionality"] = dims
+    md.obs["n_components"] = counts
+    md.obs["is_layered"] = dims == 2
+    md.obs["dimensionality_strategy"] = str(strategy)
+    md.uns["dimensionality"] = {"strategy": str(strategy), "source": source,
+                                "n_failed": int(failed)}
+    record(md, "prop.dimensionality", source=source, strategy=str(strategy))
+
+
 #: eV/angstrom^3 -> GPa
 _EV_PER_A3_TO_GPA = 160.21766208
 
@@ -704,5 +868,6 @@ def compare_grids(md: AnnData, quantity: str, a: str, b: str) -> None:
     record(md, "prop.compare_grids", quantity=quantity, a=a, b=b)
 
 
-__all__ = ["xrd", "rdf", "elastic", "phonon", "free_energy",
+__all__ = ["xrd", "rdf", "elastic", "eos", "dimensionality", "phonon",
+           "free_energy",
            "thermal_conductivity", "compare_grids"]

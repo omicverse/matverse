@@ -86,7 +86,7 @@ not single compositions.
 | `mv.feat` | descriptors into `obsm` |
 | `mv.tl` | ordination, clustering, element enrichment, novelty |
 | `mv.calc` | energies, forces and relaxation, tagged by level of theory |
-| `mv.prop` | derived properties — elastic moduli, phonons, and curves on a shared grid |
+| `mv.prop` | derived properties — elastic moduli, equation of state, phonons, bonding dimensionality, and curves on a shared grid |
 | `mv.md` | molecular dynamics — diffusivity, thermal expansion, amorphous structures |
 | `mv.neb` | migration barriers by nudged elastic band |
 | `mv.mag` | magnetic orderings, and which one the hull should use |
@@ -242,8 +242,8 @@ attributes on returned objects and nothing is mutated in common.
 
 **Claims are verified by execution, not asserted.** `produces` is checked by
 running the call and looking; `requires` by deleting the slot and confirming the
-call fails. The current state is **433/433 probed claims verified**. Of the 132
-entries that make a contract claim, 118 are probed; the other 14 need the
+call fails. The current state is **447/447 probed claims verified**. Of the 134
+entries that make a contract claim, 120 are probed; the other 14 need the
 network, a real VASP or LOBSTER output, or a tool that is not installed, and
 each is named with its reason in `tests/_contract_cases.py` rather than quietly
 left out.
@@ -312,8 +312,8 @@ exactly `obs` versus `obsm`.
 
 ## Status
 
-v0.1.17. **153 functions across 27 namespaces**, every one carrying a registry
-entry whose claims are verified by execution — currently **433/433**, with
+v0.1.18. **155 functions across 27 namespaces**, every one carrying a registry
+entry whose claims are verified by execution — currently **447/447**, with
 every claim-making entry either probed or exempted for a stated reason. See
 [DESIGN.md](DESIGN.md) for the full plan and
 [Release notes](matverse_guide/docs/Release_notes.md) for what changed.
@@ -346,7 +346,7 @@ Landed:
 - molecular dynamics, migration barriers, surfaces and adsorption
 - magnetic ordering enumeration, lattice thermal conductivity, electronic
   structure ingestion and charged-defect thermodynamics
-- the registry and the probe harness that verifies it: **433/433 claims**,
+- the registry and the probe harness that verifies it: **447/447 claims**,
   with a coverage check that fails if an entry ships a claim nothing probes
 
 Still open:

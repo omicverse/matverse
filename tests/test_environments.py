@@ -158,3 +158,79 @@ class TestSummarise:
         bare = mv.multi.sites(olivine)
         with pytest.raises(ValueError, match="mv.env.coordination"):
             mv.env.summarise(bare, olivine)
+
+
+class TestDimensionality:
+    """The same bond graph, asked a global question instead of a local one.
+
+    The four cases have textbook answers, which is the point of choosing them:
+    graphite and MoS2 are the archetypal layered materials, fcc copper is a
+    framework, and iodine at a wide separation is molecular.
+    """
+
+    @staticmethod
+    def _graphite():
+        from pymatgen.core import Lattice, Structure
+        return Structure(Lattice.hexagonal(2.46, 6.70), ["C"] * 4,
+                         [[0, 0, 0], [1 / 3, 2 / 3, 0],
+                          [0, 0, 0.5], [2 / 3, 1 / 3, 0.5]])
+
+    @staticmethod
+    def _mos2():
+        from pymatgen.core import Lattice, Structure
+        return Structure(Lattice.hexagonal(3.16, 12.3),
+                         ["Mo", "Mo", "S", "S", "S", "S"],
+                         [[1 / 3, 2 / 3, 0.25], [2 / 3, 1 / 3, 0.75],
+                          [2 / 3, 1 / 3, 0.371], [1 / 3, 2 / 3, 0.629],
+                          [1 / 3, 2 / 3, 0.871], [2 / 3, 1 / 3, 0.129]])
+
+    @staticmethod
+    def _copper():
+        from pymatgen.core import Lattice, Structure
+        return Structure(Lattice.cubic(3.61), ["Cu"] * 4,
+                         [[0, 0, 0], [0, .5, .5], [.5, 0, .5], [.5, .5, 0]])
+
+    @staticmethod
+    def _iodine():
+        from pymatgen.core import Lattice, Structure
+        return Structure(Lattice.cubic(12.0), ["I", "I"],
+                         [[0, 0, 0], [0.222, 0, 0]])
+
+    @pytest.fixture(scope="class")
+    def mixed(self):
+        md = mv.data.from_structures(
+            [self._graphite(), self._mos2(), self._copper(), self._iodine()])
+        mv.pp.describe(md)
+        mv.prop.dimensionality(md)
+        return md
+
+    def test_the_textbook_answers(self, mixed):
+        assert list(mixed.obs["dimensionality"]) == [2, 2, 3, 0]
+
+    def test_layers_per_cell_are_counted(self, mixed):
+        """Graphite and MoS2 both have two layers in the conventional cell; a
+        framework has one component by construction."""
+        assert list(mixed.obs["n_components"]) == [2, 2, 1, 1]
+
+    def test_a_screen_can_ask_for_exfoliable_candidates(self, mixed):
+        mv.screen.filter(mixed, dimensionality__eq=2, name="exfoliable")
+        assert list(mixed.obs["exfoliable"]) == [True, True, False, False]
+
+    def test_the_strategy_is_recorded_next_to_the_answer(self, mixed):
+        """A dimensionality without its near-neighbour algorithm is not
+        reproducible, for the same reason a coordination number is not."""
+        assert set(mixed.obs["dimensionality_strategy"]) == {"crystalnn"}
+        assert mixed.uns["dimensionality"]["strategy"] == "crystalnn"
+
+    def test_it_is_not_derivable_from_composition(self, mixed):
+        """Two materials can share X and differ here, which is the argument
+        for computing it at all. Graphite and diamond are the same element."""
+        from pymatgen.core import Lattice, Structure
+        diamond = Structure(Lattice.cubic(3.567), ["C"] * 8,
+                            [[0, 0, 0], [0, .5, .5], [.5, 0, .5], [.5, .5, 0],
+                             [.25, .25, .25], [.25, .75, .75],
+                             [.75, .25, .75], [.75, .75, .25]])
+        md = mv.data.from_structures([self._graphite(), diamond])
+        mv.prop.dimensionality(md)
+        assert list(md.obs["dimensionality"]) == [2, 3]
+        assert (md.X[0].toarray() > 0).sum() == (md.X[1].toarray() > 0).sum()

@@ -152,6 +152,13 @@ def two_metals():
     return md
 
 
+def relaxed_metal():
+    md = mv.datasets.metals(["Cu"])
+    mv.pp.describe(md)
+    mv.calc.relax(md, level="emt", fmax=0.01)
+    return md
+
+
 def magnetic():
     md = mv.datasets.metals(["Ni"])
     mv.pp.describe(md)
@@ -433,6 +440,12 @@ def cases(tmp):
         (mv.screen.filter, energised, (), {"energy_emt__lt": 0.0}),
         (mv.screen.pareto, described, ({"volume": "min", "density": "max"},),
          {}),
+
+        # mv.prop
+        (mv.prop.eos, relaxed_metal, (),
+         {"level": "emt", "source": "relaxed_emt",
+          "scales": [0.96, 0.98, 1.0, 1.02, 1.04]}),
+        (mv.prop.dimensionality, described, (), {}),
 
         # mv.thermo
         (mv.thermo.reaction, with_alni, (["Al", "Ni"], ["AlNi"]),

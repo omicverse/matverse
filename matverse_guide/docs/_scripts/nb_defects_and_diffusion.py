@@ -20,7 +20,7 @@ energy against Fermi level.
 
 The migration barrier at the end comes out at **0.754 eV** against a literature
 value of about 0.70 eV for vacancy migration in fcc copper, and the formation
-energy at **1.25 eV** against roughly 1.3 eV measured by positron annihilation.
+energy at **1.314 eV** against roughly 1.3 eV measured by positron annihilation.
 Both from a potential that took no download and no training set."""),
 
     ("code", """\
@@ -91,9 +91,23 @@ it unchanged.
 
     ("code", """\
 mv.calc.relax(copper, level="emt", fmax=0.02)
-mv.calc.relax(defects, level="emt", fmax=0.05, steps=200)
+mv.calc.relax(defects, level="emt", fmax=0.05, steps=200, cell=False)
 
 defects.obs[["defect", "energy_emt", "relax_converged_emt"]].round(4)"""),
+
+    ("markdown", """\
+```{note}
+`cell=False` on the defective supercell, and it is not a detail. A 32-atom cell
+with one vacancy is a stand-in for a *dilute* defect in an infinite crystal.
+Letting its lattice relax lets the whole crystal contract around a vacancy
+concentration of 1 in 32, which is not the quantity anyone wants; the host
+lattice is what holds the defect open. So the host relaxes its cell and the
+defect relaxes only its ions inside that cell.
+
+Before v0.1.17 this line needed no argument, because `mv.calc.relax` never
+moved a cell at all. It was right here for the wrong reason and wrong
+everywhere else for the same one.
+```"""),
 
     ("markdown", """\
 The raw energy of a cell with one atom missing is not a formation energy. A
@@ -115,11 +129,16 @@ formation = e_defect - e_host + mu_cu
 round(formation, 3)"""),
 
     ("markdown", """\
-**1.25 eV**, against roughly 1.3 eV measured for copper by positron
+**1.314 eV**, against roughly 1.3 eV measured for copper by positron
 annihilation. That is the number that sets the equilibrium vacancy concentration
-through `exp(-E_f / kT)`, and getting it within 5% from effective-medium theory
-is better than this calculation deserves — EMT was fitted to exactly this kind
-of metallic environment.
+through `exp(-E_f / kT)`, and landing within a couple of percent of it from
+effective-medium theory is better than this calculation deserves — EMT was
+fitted to exactly this kind of metallic environment.
+
+It was 1.25 eV until v0.1.17, when `mv.calc.relax` began relaxing the host's
+lattice. The host now sits at EMT's own equilibrium volume instead of copper's
+measured room-temperature one, and the defect is held in that lattice — which is
+the combination the formula assumes.
 
 ## Formation energy against Fermi level
 
@@ -155,8 +174,8 @@ Each straight segment is one charge state, and its slope is the charge; the
 kinks are the transition levels where the stable charge changes. `stable_charge`
 records which state wins where.
 
-The reported 1.11 eV is *not* the 1.25 eV computed by hand above, and the
-difference is the point: 1.25 eV is the neutral vacancy, while this is the lower
+The reported 1.117 eV is *not* the 1.314 eV computed by hand above, and the
+difference is the point: 1.314 eV is the neutral vacancy, while this is the lower
 envelope over all five charge states evaluated at the Fermi level. They coincide
 only where the neutral state is the stable one.
 
@@ -203,15 +222,19 @@ two distinct minima."""),
 
     ("code", """\
 mv.calc.relax(copper, level="emt", source="hop_initial", key_added="start",
-              fmax=0.05, steps=80)
+              fmax=0.05, steps=80, cell=False)
 mv.calc.relax(copper, level="emt", source="hop_final", key_added="end",
-              fmax=0.05, steps=80)
+              fmax=0.05, steps=80, cell=False)
 
 mv.variants(copper)"""),
 
     ("markdown", """\
 `key_added` matters here. Without it the second relaxation would overwrite the
 first and the band would run from a structure to itself.
+
+`cell=False` again, and for a second reason on top of the dilute-defect one: a
+band is interpolated between two endpoints, and endpoints with different
+lattices are not two points on one path.
 
 ## The nudged elastic band"""),
 
