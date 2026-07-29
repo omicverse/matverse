@@ -1276,7 +1276,7 @@ def compare_grids(md: AnnData, quantity: str, a: str, b: str) -> None:
 __all__ = ["xrd", "rdf", "neutron", "tem", "elastic", "eos", "dimensionality",
            "phonon", "free_energy", "quasiharmonic",
            "nmr", "efg", "piezoelectric", "dielectric", "slme",
-           "cost", "supply_risk",
+           "cost", "supply_risk", "frontier_orbitals",
            "thermal_conductivity", "compare_grids"]
 
 
@@ -1692,3 +1692,89 @@ def tem(md: AnnData, source: str = "input", level: str = "calc",
               failures=reasons[:5])
     record(md, "prop.tem", source=source, level=level,
            beam_direction=axis, voltage=voltage)
+
+
+@register_function(
+    aliases=["frontier orbitals", "band edge elements", "homo lumo",
+             "which element sets the band edge", "orbital gap estimate",
+             "is it likely a metal"],
+    category="prop",
+    description="Estimate which atomic orbitals form the band edges, and "
+                "whether the material is likely a metal, from atomic orbital "
+                "energies alone — no calculator and no structure needed.",
+    requires={"X": ["composition"]},
+    produces={"obs": ["homo_element", "homo_orbital", "homo_energy",
+                      "lumo_element", "lumo_orbital", "lumo_energy",
+                      "orbital_gap_estimate", "likely_metal"]},
+    examples=["mv.prop.frontier_orbitals(md)",
+              "mv.prop.frontier_orbitals(md); "
+              "mv.screen.filter(md, likely_metal__eq=False)"],
+    related=["mv.elec.band_features", "mv.dft.read_dos", "mv.prop.slme"],
+    notes="This is the cheapest possible statement about electronic structure: "
+          "line up the atomic orbital energies of the elements present and see "
+          "which sits highest occupied and which lowest unoccupied. It costs "
+          "nothing and needs only the composition.\\n\\n"
+          "On SrTiO3 it says O 2p and Ti 3d, which is the textbook answer for "
+          "a perovskite oxide — the valence band is oxygen 2p and the "
+          "conduction band titanium 3d. **What it tells you is which element "
+          "controls each edge**, and that is a real design handle: it is why "
+          "substituting on the A site of a perovskite barely moves the gap and "
+          "substituting on the B site moves it a lot.\\n\\n"
+          "The gap it reports is a **difference of atomic orbital energies**, "
+          "not a band gap. It has no hybridisation, no crystal field, no "
+          "Madelung potential and no structure — two polymorphs get the same "
+          "answer. Use it to sort a list before computing, never as a number. "
+          "likely_metal is the more trustworthy column, because 'the frontier "
+          "orbitals overlap' survives a lot of approximation.",
+)
+def frontier_orbitals(md: AnnData, source: str = "input") -> None:
+    """Atomic-orbital band-edge estimate. Deposits; returns ``None``."""
+    from pymatgen.core.molecular_orbitals import MolecularOrbitals
+
+    fields = ("homo_element", "homo_orbital", "lumo_element", "lumo_orbital")
+    text = {name: np.empty(md.n_obs, dtype=object) for name in fields}
+    homo_e = np.full(md.n_obs, np.nan)
+    lumo_e = np.full(md.n_obs, np.nan)
+    gap = np.full(md.n_obs, np.nan)
+    metal = np.full(md.n_obs, False)
+    failures = []
+
+    for i, structure in enumerate(structures(md, source)):
+        for name in fields:
+            text[name][i] = ""
+        formula = structure.composition.reduced_formula
+        try:
+            edges = MolecularOrbitals(formula).obtain_band_edges()
+        except Exception as exc:
+            failures.append(f"{formula}: {type(exc).__name__}: {exc}")
+            continue
+        metal[i] = bool(edges.get("metal", False))
+        homo = edges.get("HOMO")
+        lumo = edges.get("LUMO")
+        if homo:
+            text["homo_element"][i] = str(homo[0])
+            text["homo_orbital"][i] = str(homo[1])
+            homo_e[i] = float(homo[2])
+        if lumo:
+            text["lumo_element"][i] = str(lumo[0])
+            text["lumo_orbital"][i] = str(lumo[1])
+            lumo_e[i] = float(lumo[2])
+        if np.isfinite(homo_e[i]) and np.isfinite(lumo_e[i]) and not metal[i]:
+            gap[i] = (lumo_e[i] - homo_e[i]) * _HARTREE_TO_EV
+
+    for name in fields:
+        md.obs[name] = text[name].astype(str)
+    md.obs["homo_energy"] = homo_e
+    md.obs["lumo_energy"] = lumo_e
+    md.obs["orbital_gap_estimate"] = gap
+    md.obs["likely_metal"] = metal
+    md.uns["frontier_orbitals"] = {
+        "source": source, "n_failed": len(failures), "failures": failures[:10],
+        "note": "a difference of atomic orbital energies, not a band gap: no "
+                "hybridisation, no crystal field, no structure",
+    }
+    record(md, "prop.frontier_orbitals", source=source)
+
+
+#: Atomic orbital energies are tabulated in Hartree.
+_HARTREE_TO_EV = 27.211386245988

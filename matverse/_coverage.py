@@ -61,6 +61,20 @@ WRAPPED: Dict[str, List[str]] = {
     "analysis.cost": ["mv.prop.cost"],
     "analysis.prototypes": ["mv.pp.prototype"],
     "symmetry.groups": ["mv.pp.symmetry"],
+    "analysis.defects.core":
+        "the generators mv.pp.defects calls yield Defect objects from here - "
+        "an antisite comes back as a defects.core.Substitution - and it is "
+        "those objects the supercells are built from",
+    "analysis.defects.supercells":
+        "Defect.get_supercell_structure, which mv.pp.defects calls for every "
+        "interstitial and antisite, picks its cell in this module",
+    "electronic_structure.cohp":
+        "Icohplist.icohpcollection, which mv.elec.cohp reads, is an "
+        "IcohpCollection defined here",
+    "core.ion":
+        "PourbaixDiagram represents its aqueous species as Ion objects, so "
+        "mv.thermo.pourbaix rests on this module even though the diagram "
+        "itself needs Materials Project entries to build",
     "symmetry.structure": ["mv.pp.symmetry"],
     "symmetry.site_symmetries": ["mv.pp.symmetry"],
     "core.molecule_matcher": ["mv.mol.match"],
@@ -69,6 +83,11 @@ WRAPPED: Dict[str, List[str]] = {
     "symmetry.kpath": ["mv.elec.kpath"],
     "core.tensors": ["mv.prop.piezoelectric"],
     "core.bonds": ["mv.mol.bond_lengths"],
+    "core.molecular_orbitals": ["mv.prop.frontier_orbitals"],
+    "analysis.defects.core": ["mv.pp.defects"],
+    "analysis.defects.supercells": ["mv.pp.defects"],
+    "electronic_structure.cohp": ["mv.elec.cohp"],
+    "core.ion": ["mv.thermo.pourbaix"],
     "core.interface": ["mv.iface.build"],
     "analysis.chemenv.connectivity.connectivity_finder":
         ["mv.env.connectivity"],
@@ -146,6 +165,20 @@ TRANSITIVE: Dict[str, str] = {
     "core.tensors":
         "PiezoTensor subclasses Tensor, so mv.prop.piezoelectric's symmetry "
         "check and IEEE conversion are this module's code",
+    "analysis.defects.core":
+        "the generators mv.pp.defects calls yield Defect objects from here - "
+        "an antisite comes back as a defects.core.Substitution - and it is "
+        "those objects the supercells are built from",
+    "analysis.defects.supercells":
+        "Defect.get_supercell_structure, which mv.pp.defects calls for every "
+        "interstitial and antisite, picks its cell in this module",
+    "electronic_structure.cohp":
+        "Icohplist.icohpcollection, which mv.elec.cohp reads, is an "
+        "IcohpCollection defined here",
+    "core.ion":
+        "PourbaixDiagram represents its aqueous species as Ion objects, so "
+        "mv.thermo.pourbaix rests on this module even though the diagram "
+        "itself needs Materials Project entries to build",
     "symmetry.structure":
         "SpacegroupAnalyzer.get_symmetrized_structure returns a "
         "SymmetrizedStructure, and mv.pp.symmetry reads wyckoff_symbols off "

@@ -123,6 +123,33 @@ md.obs[["name", "spacegroup", "prototype_mineral", "strukturbericht"]]"""),
 mv.pp.symmetry(md)
 md.obs[["name", "crystal_system", "point_group", "n_wyckoff", "wyckoff"]]"""),
 
+    ("code", """\
+mv.prop.frontier_orbitals(md)
+md.obs[["name", "homo_element", "homo_orbital", "lumo_element",
+        "lumo_orbital", "likely_metal"]]"""),
+
+    ("markdown", """\
+The cheapest possible statement about electronic structure: line up the atomic
+orbital energies of the elements present, and see which sits highest occupied
+and which lowest unoccupied. No calculator, no structure — only the composition.
+
+What it tells you is **which element controls each band edge**, and that is a
+real design handle. On SrTiO₃ it says O 2p and Ti 3d, the textbook perovskite
+answer, and it says exactly the same for BaTiO₃ — which is why substituting on
+the A site of a perovskite barely moves the gap and substituting on the B site
+moves it a lot.
+
+```{warning}
+`orbital_gap_estimate` is a **difference of atomic orbital energies**, not a
+band gap. No hybridisation, no crystal field, no Madelung potential, no
+structure — two polymorphs get the same answer, and NaCl comes out near 6 eV
+against a measured 8.5. Use it to sort a list before computing, never as a
+number.
+
+`likely_metal` is the more trustworthy column: "the frontier orbitals overlap"
+survives a lot of approximation.
+```"""),
+
     ("markdown", """\
 `spacegroup` gives the symbol. This gives what the symbol *implies* — and
 `wyckoff` is the part worth reading.

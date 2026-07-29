@@ -1,5 +1,42 @@
 # Release notes
 
+## v0.1.36
+
+**99 of 136 in-scope pymatgen modules, 72.8%.** 17 open gaps, 20 blocked.
+
+### `mv.prop.frontier_orbitals`
+
+The cheapest possible statement about electronic structure: line up the atomic
+orbital energies of the elements present and see which sits highest occupied and
+which lowest unoccupied. No calculator, no structure, only the composition.
+
+On SrTiO₃ it says **O 2p and Ti 3d** — the textbook perovskite answer — and it
+says exactly the same for BaTiO₃. That identity is the point: substituting on
+the A site of a perovskite does not touch the frontier orbitals and substituting
+on the B site does, and this reports which element controls each edge. Copper
+comes out a metal; NaCl gets Cl 3p up and Na 3s down, the charge transfer that
+makes rocksalt ionic.
+
+`orbital_gap_estimate` is a difference of atomic orbital energies and not a band
+gap — NaCl comes out near 6 eV against a measured 8.5 — and a test pins that it
+is not accidentally accurate. `likely_metal` is the trustworthy column, because
+"the frontier orbitals overlap" survives a lot of approximation.
+
+### Four modules matverse was already using through returned objects
+
+Checked rather than assumed, and one candidate was refuted by the check:
+
+- `analysis.defects.core` — the generators `mv.pp.defects` calls yield `Defect`
+  objects from there; an antisite comes back as a `defects.core.Substitution`
+- `analysis.defects.supercells` — `Defect.get_supercell_structure` picks its
+  cell in that module
+- `electronic_structure.cohp` — `Icohplist.icohpcollection`, which
+  `mv.elec.cohp` reads, is an `IcohpCollection` defined there
+- `core.ion` — `PourbaixDiagram` represents its aqueous species as `Ion` objects
+
+`symmetry.maggroups` looked like a fifth and is not: `magnetism.analyzer` does
+not import it, so it stays in the gap list.
+
 ## v0.1.35
 
 **94 of 136 in-scope pymatgen modules, 69.1%.** 22 open gaps, 20 blocked.

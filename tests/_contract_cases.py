@@ -574,6 +574,7 @@ def cases(tmp):
           "scales": [0.96, 0.98, 1.0, 1.02, 1.04]}),
         (mv.prop.dimensionality, described, (), {}),
         (mv.prop.cost, described, (), {}),
+        (mv.prop.frontier_orbitals, described, (), {}),
         (mv.prop.supply_risk, described, (), {}),
         (mv.prop.neutron, described, (),
          {"two_theta": (20.0, 60.0), "step": 1.0}),

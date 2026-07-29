@@ -384,3 +384,67 @@ class TestSymmetry:
         mv.pp.symmetry(md)
         defective = mv.pp.defects(md, kinds=("vacancy",), supercell=(1, 1, 1))
         assert defective.n_obs == int(md.obs["n_wyckoff"].iloc[0])
+
+
+class TestFrontierOrbitals:
+    """The cheapest possible statement about electronic structure."""
+
+    @staticmethod
+    def _perovskite(a_site, a=3.905):
+        from pymatgen.core import Lattice, Structure
+        return Structure(Lattice.cubic(a), [a_site, "Ti", "O", "O", "O"],
+                         [[0, 0, 0], [.5, .5, .5], [.5, .5, 0],
+                          [.5, 0, .5], [0, .5, .5]])
+
+    @pytest.fixture(scope="class")
+    def estimated(self):
+        from pymatgen.core import Lattice, Structure
+        copper = Structure(Lattice.cubic(3.61), ["Cu"] * 4,
+                           [[0, 0, 0], [0, .5, .5], [.5, 0, .5], [.5, .5, 0]])
+        rocksalt = Structure.from_spacegroup(
+            "Fm-3m", Lattice.cubic(5.64), ["Na", "Cl"],
+            [[0, 0, 0], [.5, .5, .5]])
+        md = mv.data.from_structures([self._perovskite("Sr"),
+                                      self._perovskite("Ba", 4.0),
+                                      copper, rocksalt])
+        mv.pp.describe(md)
+        mv.prop.frontier_orbitals(md)
+        return md
+
+    def test_a_perovskite_oxide_gets_the_textbook_edges(self, estimated):
+        """O 2p valence band, Ti 3d conduction band — which is what a
+        perovskite oxide's electronic structure is."""
+        assert estimated.obs["homo_element"].iloc[0] == "O"
+        assert estimated.obs["homo_orbital"].iloc[0] == "2p"
+        assert estimated.obs["lumo_element"].iloc[0] == "Ti"
+        assert estimated.obs["lumo_orbital"].iloc[0] == "3d"
+
+    def test_substituting_the_a_site_does_not_move_the_edges(self, estimated):
+        """SrTiO3 and BaTiO3 come out identical, and that is the design handle:
+        the A site does not touch the frontier orbitals, the B site does."""
+        assert estimated.obs["orbital_gap_estimate"].iloc[0] == \
+            pytest.approx(estimated.obs["orbital_gap_estimate"].iloc[1])
+
+    def test_a_metal_is_called_a_metal(self, estimated):
+        assert bool(estimated.obs["likely_metal"].iloc[2])
+        assert not bool(estimated.obs["likely_metal"].iloc[0])
+
+    def test_an_ionic_insulator_gets_the_right_elements(self, estimated):
+        """Chlorine 3p up, sodium 3s down — the charge transfer that makes
+        rocksalt ionic."""
+        assert estimated.obs["homo_element"].iloc[3] == "Cl"
+        assert estimated.obs["lumo_element"].iloc[3] == "Na"
+
+    def test_the_gap_is_not_offered_as_a_band_gap(self, estimated):
+        """NaCl's measured gap is 8.5 eV and this reports under 6. The note
+        says it is a difference of atomic orbital energies, and the test pins
+        that it is not accidentally accurate."""
+        assert estimated.obs["orbital_gap_estimate"].iloc[3] < 7.0
+        assert "not a band gap" in md_note(estimated)
+
+    def test_a_metal_gets_no_gap(self, estimated):
+        assert np.isnan(estimated.obs["orbital_gap_estimate"].iloc[2])
+
+
+def md_note(md):
+    return md.uns["frontier_orbitals"]["note"]
