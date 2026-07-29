@@ -449,6 +449,95 @@ INTERNAL_MARKERS = (
 #: — but they are not "nobody got to it", and the distinction is the difference
 #: between a backlog and a wish.
 BLOCKED: Dict[str, str] = {
+    "analysis.xps":
+        "matverse reads external first-principles output as a matter of "
+        "course - mv.dft.read_outputs, mv.dft.read_dos, mv.elec.read_bands "
+        "and mv.elec.cohp all take a directory of runs - so this is not "
+        "blocked by what matverse is. It is blocked by verification: XPS is "
+        "the projected density of states weighted by photoionisation "
+        "cross-sections, and nothing here produces a PDOS. mv.dft.read_dos "
+        "parses a vasprun, so a wrapper would fit the existing pattern "
+        "exactly - it needs one real vasprun with projections to be checked "
+        "against, and pymatgen ships no test files in its wheel.",
+    "analysis.lobster_env":
+        "matverse reads external first-principles output as a matter of "
+        "course - mv.dft.read_outputs, mv.dft.read_dos, mv.elec.read_bands "
+        "and mv.elec.cohp all take a directory of runs - so this is not "
+        "blocked by what matverse is. It is blocked by verification: "
+        "LobsterNeighbors needs ICOHPLIST and CHARGE files from a LOBSTER "
+        "run. mv.elec.cohp already reads ICOHPLIST from a directory, so the "
+        "route in exists; what is missing is a real LOBSTER output "
+        "directory to verify against.",
+    "analysis.ferroelectricity.polarization":
+        "matverse reads external first-principles output as a matter of "
+        "course - mv.dft.read_outputs, mv.dft.read_dos, mv.elec.read_bands "
+        "and mv.elec.cohp all take a directory of runs - so this is not "
+        "blocked by what matverse is. It is blocked by verification: "
+        "Polarization.from_outcars_and_structures wants the Berry-phase "
+        "output of a sequence of VASP runs along a distortion path. Reading "
+        "them is mv.dft.read_outputs' job; the missing piece is such a "
+        "sequence to test on.",
+    "analysis.piezo_sensitivity":
+        "matverse reads external first-principles output as a matter of "
+        "course - mv.dft.read_outputs, mv.dft.read_dos, mv.elec.read_bands "
+        "and mv.elec.cohp all take a directory of runs - so this is not "
+        "blocked by what matverse is. It is blocked by verification: it "
+        "needs Born effective charges and force constants from a DFPT run, "
+        "which is a vasprun matverse could parse - but not one that exists "
+        "here.",
+    "analysis.topological.spillage":
+        "matverse reads external first-principles output as a matter of "
+        "course - mv.dft.read_outputs, mv.dft.read_dos, mv.elec.read_bands "
+        "and mv.elec.cohp all take a directory of runs - so this is not "
+        "blocked by what matverse is. It is blocked by verification: "
+        "SOCSpillage compares two WAVECARs, with and without spin-orbit "
+        "coupling. Those are large binary files from two real runs and "
+        "there are none here.",
+    "analysis.defects.corrections.freysoldt":
+        "matverse reads external first-principles output as a matter of "
+        "course - mv.dft.read_outputs, mv.dft.read_dos, mv.elec.read_bands "
+        "and mv.elec.cohp all take a directory of runs - so this is not "
+        "blocked by what matverse is. It is blocked by verification: the "
+        "correction is computed from the electrostatic potential (LOCPOT) "
+        "of the defective and pristine supercells. No LOCPOT here.",
+    "analysis.defects.corrections.kumagai":
+        "matverse reads external first-principles output as a matter of "
+        "course - mv.dft.read_outputs, mv.dft.read_dos, mv.elec.read_bands "
+        "and mv.elec.cohp all take a directory of runs - so this is not "
+        "blocked by what matverse is. It is blocked by verification: it "
+        "needs the atomic site potentials from the OUTCARs of the defective "
+        "and pristine supercells. None here.",
+    "analysis.defects.ccd":
+        "matverse reads external first-principles output as a matter of "
+        "course - mv.dft.read_outputs, mv.dft.read_dos, mv.elec.read_bands "
+        "and mv.elec.cohp all take a directory of runs - so this is not "
+        "blocked by what matverse is. It is blocked by verification: a "
+        "configuration-coordinate diagram needs the potential energy "
+        "surfaces of two charge states along a distortion, from real runs.",
+    "analysis.defects.recombination":
+        "matverse reads external first-principles output as a matter of "
+        "course - mv.dft.read_outputs, mv.dft.read_dos, mv.elec.read_bands "
+        "and mv.elec.cohp all take a directory of runs - so this is not "
+        "blocked by what matverse is. It is blocked by verification: "
+        "non-radiative capture coefficients need electron-phonon coupling "
+        "matrix elements, which no calculator matverse ships computes.",
+    "analysis.excitation":
+        "matverse reads external first-principles output as a matter of "
+        "course - mv.dft.read_outputs, mv.dft.read_dos, mv.elec.read_bands "
+        "and mv.elec.cohp all take a directory of runs - so this is not "
+        "blocked by what matverse is. It is blocked by verification: an "
+        "excitation spectrum comes from a TD-DFT or BSE run; the parser is "
+        "the easy half and the run is the missing one.",
+    "analysis.quasirrho":
+        "matverse reads external first-principles output as a matter of "
+        "course - mv.dft.read_outputs, mv.dft.read_dos, mv.elec.read_bands "
+        "and mv.elec.cohp all take a directory of runs - so this is not "
+        "blocked by what matverse is. It is blocked by verification: the "
+        "quasi-RRHO free energy needs vibrational frequencies from a "
+        "quantum-chemistry output. matverse can compute frequencies for a "
+        "molecule through mv.calc, so this is the closest of these to "
+        "reachable - what stops it is that QuasiRRHO's constructors take "
+        "Gaussian or QChem output objects rather than a frequency list.",
     "analysis.bond_dissociation":
         "needs openbabel, and specifically its pybel bindings, which "
         "pymatgen imports as `from openbabel import openbabel, pybel`. "
@@ -500,26 +589,10 @@ BLOCKED: Dict[str, str] = {
         "with calculated entries for the same compounds, and pymatgen ships "
         "no such data file - the module references none. Applying the "
         "result is mv.thermo.corrections, wrapped.",
-    "analysis.defects.corrections.freysoldt":
-        "needs the electrostatic potential from a real DFT run",
-    "analysis.defects.corrections.kumagai":
-        "needs site potentials from a real DFT run",
-    "analysis.defects.ccd": "needs DFT potential energy surfaces",
-    "analysis.defects.recombination": "needs DFT electron-phonon coupling",
-    "analysis.xps": "needs a projected density of states, not a total one",
-    "analysis.excitation": "needs a DFT excited-state calculation",
-    "analysis.piezo_sensitivity": "needs Born charges and force constants",
-    "analysis.ferroelectricity.polarization":
-        "needs Berry-phase polarisation from a DFT run",
-    "analysis.topological.spillage": "needs two DFT runs, with and without "
-                                     "spin-orbit coupling",
-    "analysis.lobster_env": "needs LOBSTER output",
     "electronic_structure.boltztrap": "needs the BoltzTraP binary",
     "electronic_structure.boltztrap2":
         "BoltzTraP2 links against netCDF and does not build here; "
         "mv.elec.transport already reports the install command",
-    "analysis.quasirrho": "needs molecular vibrational frequencies from a "
-                          "quantum-chemistry run",
 }
 
 
