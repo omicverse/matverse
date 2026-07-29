@@ -228,6 +228,18 @@ NATIVE: Dict[str, str] = {
         "the comparison table correctly from a set of entries that "
         "process_entries then reports as zero GGA and zero r2SCAN",
     "entries.mixing_scheme": "see analysis.compatibility.mixing_scheme",
+    "analysis.diffusion.aimd.van_hove":
+        "not wrapped: VanHoveAnalysis exposes get_1d_plot and get_3d_plot and "
+        "no data accessor, so storing the correlation functions would mean "
+        "reading private attributes. matverse deposits data rather than "
+        "figures, and a deposit that depends on an underscore name is a "
+        "deposit that breaks on the next release",
+    "analysis.diffusion.aimd.pathway":
+        "not wrapped: generate_stable_sites raises on a single stable site - "
+        "the condensed distance matrix is empty and scipy's linkage refuses "
+        "it - and one well-localised site is the commonest case there is. The "
+        "probability density itself is reachable; the sites it exists to find "
+        "are not",
     "analysis.disorder":
         "not wrapped: get_warren_cowley_parameters returns the same value for "
         "every pair, and on B2 - where every nearest neighbour is unlike - it "

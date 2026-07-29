@@ -1,5 +1,33 @@
 # Release notes
 
+## v0.1.35
+
+**94 of 136 in-scope pymatgen modules, 69.1%.** 22 open gaps, 20 blocked.
+
+### Two more not wrapped, and the reasons are the release
+
+`analysis.diffusion.aimd.van_hove` exposes `get_1d_plot` and `get_3d_plot` and
+**no data accessor**. Storing the correlation functions would mean reading
+private attributes, and matverse deposits data rather than figures — a deposit
+that depends on an underscore name is a deposit that breaks on the next release.
+
+`analysis.diffusion.aimd.pathway` computes a probability density that is
+reachable, and then `generate_stable_sites` raises on a **single** stable site:
+the condensed distance matrix is empty and scipy's `linkage` refuses it. One
+well-localised site is the commonest case there is. The density is available;
+the sites the function exists to find are not.
+
+With the NEB half already broken by an upstream rename, that is three of four
+halves of `pymatgen-analysis-diffusion` unusable against this stack.
+`aimd.rdf` — wrapped last release — was the clean part.
+
+This branch has now recorded five distinct reasons a gap stays a gap: upstream
+computes the wrong thing (`analysis.disorder`), upstream is stale against the
+installed pymatgen (`neb.full_path_mapper`), upstream exposes no data
+(`van_hove`), upstream crashes on the common case (`pathway`), and nothing here
+can verify the result (`magnetism.heisenberg`). None of them is "we did not get
+to it", and telling them apart is most of what the coverage map is for.
+
 ## v0.1.34
 
 **92 of 136 in-scope pymatgen modules, 67.6%.** 25 open gaps, 19 blocked.
