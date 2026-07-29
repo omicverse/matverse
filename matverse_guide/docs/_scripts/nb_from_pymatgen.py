@@ -254,6 +254,46 @@ of how they were produced. Written as a script over lists, the same pipeline is
 six lists you keep aligned by index and a comment explaining what `structures2`
 was.
 
+## A number you can check against a textbook
+
+Most of what a screening library computes can only be checked against another
+calculation. The Madelung energy is different — it has a closed form, and that
+makes it the one place the machinery can be verified outright."""),
+
+    ("code", """\
+rocksalt = Structure.from_spacegroup("Fm-3m", Lattice.cubic(5.64),
+                                     ["Na", "Cl"], [[0, 0, 0], [.5, .5, .5]])
+cscl = Structure(Lattice.cubic(4.11), ["Cs", "Cl"],
+                 [[0, 0, 0], [.5, .5, .5]])
+
+ionic = mv.data.from_structures([rocksalt, cscl])
+mv.pp.describe(ionic)
+mv.transform.oxidation_states(ionic)
+mv.prop.electrostatic(ionic, source="oxidized")
+
+ionic.obs[["formula", "electrostatic_energy",
+           "electrostatic_per_formula_unit"]].round(4)"""),
+
+    ("markdown", """\
+| | matverse | α·e²/4πε₀r |
+|---|---|---|
+| NaCl, α = 1.747565 | −8.9235 | −8.924 |
+| CsCl, α = 1.762675 | −7.1310 | −7.131 |
+
+Two structure types, two different Madelung constants, both exact. Getting one
+right could be a fitted coincidence; getting both is not.
+
+```{note}
+It needs **oxidation states** — a point-charge sum with no charges is zero — and
+a neutral structure returns NaN rather than 0, because a zero would read as "no
+electrostatic contribution" rather than "nobody assigned any charges".
+
+It is a point-charge model: no covalency, no polarisation, no short-range
+repulsion. The right tool for ranking cation orderings on a fixed lattice, which
+is what `mv.disorder.orderings` uses it for, and the wrong one for comparing
+different chemistries.
+```
+
 ## The record"""),
 
     ("code", """\

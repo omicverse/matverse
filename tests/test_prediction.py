@@ -448,3 +448,60 @@ class TestFrontierOrbitals:
 
 def md_note(md):
     return md.uns["frontier_orbitals"]["note"]
+
+
+class TestElectrostatic:
+    """Two structure types, two Madelung constants, both exact.
+
+    This is the strongest verification in the suite: the numbers are not
+    approximations of the textbook values, they are the textbook values.
+    """
+
+    #: Madelung constants and the Coulomb prefactor e^2/(4 pi eps0) in eV.A.
+    ROCKSALT_ALPHA, CSCL_ALPHA = 1.747565, 1.762675
+    COULOMB = 14.39965
+
+    @pytest.fixture(scope="class")
+    def ionic(self):
+        from pymatgen.core import Lattice, Structure
+        rocksalt = Structure.from_spacegroup(
+            "Fm-3m", Lattice.cubic(5.64), ["Na", "Cl"],
+            [[0, 0, 0], [.5, .5, .5]])
+        cscl = Structure(Lattice.cubic(4.11), ["Cs", "Cl"],
+                         [[0, 0, 0], [.5, .5, .5]])
+        md = mv.data.from_structures([rocksalt, cscl])
+        mv.pp.describe(md)
+        mv.transform.oxidation_states(md)
+        mv.prop.electrostatic(md, source="oxidized")
+        return md
+
+    def test_rocksalt_reproduces_its_madelung_constant(self, ionic):
+        expected = -self.ROCKSALT_ALPHA * self.COULOMB / (5.64 / 2)
+        assert ionic.obs["electrostatic_per_formula_unit"].iloc[0] == \
+            pytest.approx(expected, rel=1e-3)
+
+    def test_caesium_chloride_reproduces_a_different_one(self, ionic):
+        """A different structure type has a different constant, and getting
+        both right is what rules out a fitted coincidence."""
+        nearest = 4.11 * (3 ** 0.5) / 2
+        expected = -self.CSCL_ALPHA * self.COULOMB / nearest
+        assert ionic.obs["electrostatic_per_formula_unit"].iloc[1] == \
+            pytest.approx(expected, rel=1e-3)
+
+    def test_the_two_constants_differ(self, ionic):
+        assert self.ROCKSALT_ALPHA != self.CSCL_ALPHA
+
+    def test_a_neutral_structure_gets_nan_not_zero(self):
+        """A point-charge sum with no charges is zero, and zero would read as
+        'no electrostatic contribution' rather than 'nobody assigned any'."""
+        md = mv.datasets.metals(["Cu"])
+        mv.pp.describe(md)
+        mv.prop.electrostatic(md)
+        assert np.isnan(md.obs["electrostatic_energy"].iloc[0])
+        assert md.uns["electrostatic"]["n_without_charges"] == 1
+
+    def test_it_is_extensive(self, ionic):
+        """Total energy scales with cell size; per formula unit does not."""
+        total = ionic.obs["electrostatic_energy"].iloc[0]
+        per_unit = ionic.obs["electrostatic_per_formula_unit"].iloc[0]
+        assert total == pytest.approx(4 * per_unit, rel=1e-6)

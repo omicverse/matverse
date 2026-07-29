@@ -1,5 +1,39 @@
 # Release notes
 
+## v0.1.37
+
+**100 of 136 in-scope pymatgen modules, 73.5%.** 16 open gaps, 20 blocked.
+
+### `mv.prop.electrostatic` — a number checkable against a textbook
+
+Almost everything a screening library computes can only be checked against
+another calculation. The Madelung energy is different: it has a closed form.
+
+| | matverse | α·e²/4πε₀r |
+|---|---|---|
+| NaCl, α = 1.747565 | −8.9235 | −8.924 |
+| CsCl, α = 1.762675 | −7.1310 | −7.131 |
+
+Two structure types, two different Madelung constants, both exact. Getting one
+right could be a fitted coincidence; getting both is not. This is the strongest
+verification in the suite — the numbers are not approximations of the textbook
+values, they *are* the textbook values.
+
+It needs oxidation states, and a neutral structure returns **NaN rather than 0**:
+a point-charge sum with no charges is zero, and zero would read as "no
+electrostatic contribution" rather than "nobody assigned any charges".
+
+### The layout split reached a second function
+
+`energy_models` moved from `pymatgen.analysis` to `pymatgen.core` in 2026.5,
+exactly as `molecule_matcher` did two releases ago. The import tries one and
+falls back to the other, and the coverage map lists both names as one
+capability. Running the notebook build on the older interpreter is what caught
+it — the function worked on 3.12 and the docs build failed on 3.10.
+
+That is now twice that supporting two pymatgen versions has cost a fallback
+import, and both times the second environment found it.
+
 ## v0.1.36
 
 **99 of 136 in-scope pymatgen modules, 72.8%.** 17 open gaps, 20 blocked.

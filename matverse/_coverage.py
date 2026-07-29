@@ -84,6 +84,8 @@ WRAPPED: Dict[str, List[str]] = {
     "core.tensors": ["mv.prop.piezoelectric"],
     "core.bonds": ["mv.mol.bond_lengths"],
     "core.molecular_orbitals": ["mv.prop.frontier_orbitals"],
+    "core.energy_models": ["mv.prop.electrostatic"],
+    "analysis.energy_models": ["mv.prop.electrostatic"],
     "analysis.defects.core": ["mv.pp.defects"],
     "analysis.defects.supercells": ["mv.pp.defects"],
     "electronic_structure.cohp": ["mv.elec.cohp"],
@@ -206,6 +208,7 @@ EQUIVALENT = [
     frozenset({"entries.compatibility", "analysis.compatibility"}),
     frozenset({"entries.entry_tools", "analysis.compatibility.entry_tools"}),
     frozenset({"analysis.molecule_matcher", "core.molecule_matcher"}),
+    frozenset({"analysis.energy_models", "core.energy_models"}),
 ]
 
 

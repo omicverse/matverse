@@ -1276,7 +1276,7 @@ def compare_grids(md: AnnData, quantity: str, a: str, b: str) -> None:
 __all__ = ["xrd", "rdf", "neutron", "tem", "elastic", "eos", "dimensionality",
            "phonon", "free_energy", "quasiharmonic",
            "nmr", "efg", "piezoelectric", "dielectric", "slme",
-           "cost", "supply_risk", "frontier_orbitals",
+           "cost", "supply_risk", "frontier_orbitals", "electrostatic",
            "thermal_conductivity", "compare_grids"]
 
 
@@ -1778,3 +1778,86 @@ def frontier_orbitals(md: AnnData, source: str = "input") -> None:
 
 #: Atomic orbital energies are tabulated in Hartree.
 _HARTREE_TO_EV = 27.211386245988
+
+
+@register_function(
+    aliases=["electrostatic energy", "madelung", "ewald energy",
+             "lattice energy", "coulomb energy", "ionic energy"],
+    category="prop",
+    description="Electrostatic energy of every structure by Ewald summation, "
+                "which for an ionic crystal is the Madelung energy and the "
+                "bulk of its lattice energy.",
+    requires={"structures": ["{source}"]},
+    produces={"obs": ["electrostatic_energy", "electrostatic_per_atom",
+                      "electrostatic_per_formula_unit"]},
+    prerequisites=["mv.transform.oxidation_states"],
+    examples=["mv.transform.oxidation_states(md); "
+              "mv.prop.electrostatic(md, source='oxidized')",
+              "mv.prop.electrostatic(md, source='oxidized', "
+              "real_space_cut=12.0)"],
+    related=["mv.transform.oxidation_states", "mv.disorder.orderings",
+             "mv.thermo.hull"],
+    notes="Needs **oxidation states**, because a point-charge sum with no "
+          "charges is zero. Run mv.transform.oxidation_states first and pass "
+          "its variant; a neutral structure returns NaN rather than 0, since a "
+          "zero here would read as 'no electrostatic contribution' rather than "
+          "'nobody assigned any charges'.\\n\\n"
+          "For rocksalt this reproduces the Madelung constant exactly: NaCl at "
+          "a 2.82 angstrom separation comes out at -8.924 eV per formula unit, "
+          "against 1.747565 x 14.39965 / 2.82 = -8.924. That is the check "
+          "worth knowing, because it means the number is the textbook quantity "
+          "and not a parameterised approximation of it.\\n\\n"
+          "It is a point-charge model. There is no covalency, no polarisation "
+          "and no short-range repulsion, so it is the right tool for ranking "
+          "cation orderings on a fixed lattice — which is what "
+          "mv.disorder.orderings uses it for — and the wrong one for comparing "
+          "different chemistries.",
+)
+def electrostatic(md: AnnData, source: str = "input",
+                  real_space_cut: float | None = None,
+                  reciprocal_space_cut: float | None = None) -> None:
+    """Ewald electrostatic energy per material. Deposits; returns ``None``."""
+    # energy_models moved from pymatgen.analysis to pymatgen.core in 2026.5,
+    # and matverse supports both sides of that move.
+    try:
+        from pymatgen.core.energy_models import EwaldElectrostaticModel
+    except ImportError:
+        from pymatgen.analysis.energy_models import EwaldElectrostaticModel
+
+    model = EwaldElectrostaticModel(real_space_cut=real_space_cut,
+                                    recip_space_cut=reciprocal_space_cut)
+    total = np.full(md.n_obs, np.nan)
+    per_atom = np.full(md.n_obs, np.nan)
+    per_formula = np.full(md.n_obs, np.nan)
+    uncharged = []
+    failures = []
+
+    for i, (row, structure) in enumerate(
+            zip(md.obs_names, structures(md, source))):
+        charges = [getattr(site.specie, "oxi_state", None) for site in structure]
+        if any(q is None for q in charges) or not any(charges):
+            uncharged.append(str(row))
+            continue
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                energy = float(model.get_energy(structure))
+        except Exception as exc:
+            failures.append(f"{row}: {type(exc).__name__}: {exc}")
+            continue
+        total[i] = energy
+        per_atom[i] = energy / len(structure)
+        units = structure.composition.get_reduced_composition_and_factor()[1]
+        per_formula[i] = energy / units if units else np.nan
+
+    md.obs["electrostatic_energy"] = total
+    md.obs["electrostatic_per_atom"] = per_atom
+    md.obs["electrostatic_per_formula_unit"] = per_formula
+    md.uns["electrostatic"] = {
+        "source": source, "n_without_charges": len(uncharged),
+        "without_charges": uncharged[:10],
+        "n_failed": len(failures), "failures": failures[:5],
+        "note": "point charges only: no covalency, polarisation or short-range "
+                "repulsion",
+    }
+    record(md, "prop.electrostatic", source=source)

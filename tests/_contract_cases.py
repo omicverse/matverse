@@ -575,6 +575,7 @@ def cases(tmp):
         (mv.prop.dimensionality, described, (), {}),
         (mv.prop.cost, described, (), {}),
         (mv.prop.frontier_orbitals, described, (), {}),
+        (mv.prop.electrostatic, oxidized, (), {"source": "oxidized"}),
         (mv.prop.supply_risk, described, (), {}),
         (mv.prop.neutron, described, (),
          {"two_theta": (20.0, 60.0), "step": 1.0}),
