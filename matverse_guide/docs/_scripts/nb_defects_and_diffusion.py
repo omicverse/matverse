@@ -363,6 +363,67 @@ the reason a copper wire does not visibly age. The vacancy fraction alone falls
 from 10⁻⁵ to 10⁻²¹ over that range."""),
 
     ("markdown", """\
+## Which barriers are actually worth computing?
+
+The NEB above was one hop, chosen for us by `mv.neb.hop_endpoints`. A real cell
+has many pairs of mobile sites and far fewer *kinds* of jump between them —
+running a band for each pair spends almost the whole budget re-deriving barriers
+that symmetry already fixed.
+
+`mv.neb.hops` enumerates the distinct ones:"""),
+
+    ("code", """\
+from pymatgen.core import Lattice, Structure
+
+lattices = mv.data.from_structures([
+    Structure(Lattice.cubic(3.51), ["Li"] * 4,
+              [[0, 0, 0], [0, .5, .5], [.5, 0, .5], [.5, .5, 0]]),
+    Structure.from_spacegroup("Fd-3m", Lattice.cubic(8.24), ["Li", "Mn", "O"],
+                              [[0, 0, 0], [0.625] * 3, [0.3875] * 3])])
+lattices.obs_names = ["Li fcc", "LiMn2O4 spinel"]
+
+distinct = mv.neb.hops(lattices, species="Li")
+distinct.obs[["parent", "hop_distance", "multiplicity"]].round(4)"""),
+
+    ("markdown", """\
+One hop each. Close-packed lithium has twelve neighbours and they are all the
+same neighbour as far as symmetry is concerned, so **one** band gives you all
+twelve — 2.482 Å is $a/\\sqrt{2}$, and the multiplicity 24 is four sites times
+twelve neighbours counted from both ends. Spinel's 8a sublattice is diamond-like:
+3.568 Å is $a\\sqrt{3}/4$ and each of the eight sites has four neighbours.
+
+Break the symmetry and the hop splits, which is the behaviour that makes the
+count worth trusting:"""),
+
+    ("code", """\
+squashed = mv.data.from_structures([Structure(
+    Lattice.tetragonal(3.51, 3.90), ["Li"] * 4,
+    [[0, 0, 0], [0, .5, .5], [.5, 0, .5], [.5, .5, 0]])])
+
+split = mv.neb.hops(squashed, species="Li", cutoff=3.2)
+split.obs[["hop_distance", "multiplicity"]].round(4)"""),
+
+    ("markdown", """\
+Stretching *c* separates the twelve neighbours into four in the basal plane at
+$a/\\sqrt{2}$ and eight out of it at $\\sqrt{a^2+c^2}/2$. Two kinds of jump now,
+two barriers to compute, and the multiplicities still sum to 24 — nothing was
+lost, it was reclassified.
+
+```{note}
+Distinctness here means "same pair of symmetry-equivalent sites, same distance
+to within `tol`". That is exact when the site pair and the length determine the
+path, which covers ordinary crystals. In a low-symmetry cell it can merge two
+genuinely different routes between the same pair of sites — it never splits what
+should be merged, so the count is a lower bound on the work, never an inflated
+one.
+
+Written from the definition rather than wrapped from
+`pymatgen.analysis.diffusion.neb.full_path_mapper`, whose `MigrationGraph` calls
+a `StructureGraph` method that was renamed upstream and raises `AttributeError`
+against current pymatgen.
+```"""),
+
+    ("markdown", """\
 ## Before the barrier: can the ion get out at all?
 
 A barrier is the cost of **one** hop. It is silent on whether that hop repeated

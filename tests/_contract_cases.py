@@ -648,6 +648,7 @@ def cases(tmp):
           "band_gap": 1.2}),
 
         (mv.neb.percolation, one_metal, ("Cu",), {}),
+        (mv.neb.hops, one_metal, ("Cu",), {"returns": "new"}),
 
         (mv.disorder.sro, one_metal, (), {}),
         (mv.gen.alloy_pairs, arsenides, (), {"returns": "new"}),

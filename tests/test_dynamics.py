@@ -366,6 +366,99 @@ def _has_diffusion_addon() -> bool:
     return True
 
 
+class TestDistinctHops:
+    """Every expected value here is a closed-form lattice distance or a
+    coordination number, so the test does not depend on the implementation
+    having ever been right."""
+
+    A = 3.51
+    C = 3.90
+
+    @staticmethod
+    def _fcc(a):
+        from pymatgen.core import Lattice, Structure
+        return Structure(Lattice.cubic(a), ["Li"] * 4,
+                         [[0, 0, 0], [0, .5, .5], [.5, 0, .5], [.5, .5, 0]])
+
+    @pytest.fixture
+    def lattices(self):
+        from pymatgen.core import Lattice, Structure
+        spinel = Structure.from_spacegroup(
+            "Fd-3m", Lattice.cubic(8.24), ["Li", "Mn", "O"],
+            [[0, 0, 0], [0.625] * 3, [0.3875] * 3])
+        md = mv.data.from_structures([self._fcc(self.A), spinel])
+        md.obs_names = ["fcc", "spinel"]
+        return md
+
+    def test_a_close_packed_metal_has_one_kind_of_hop(self, lattices):
+        """Twelve neighbours, all equivalent, so one barrier to compute rather
+        than twelve — which is the entire point."""
+        found = mv.neb.hops(lattices, species="Li")
+        fcc = found.obs[found.obs["parent"] == "fcc"]
+        assert len(fcc) == 1
+        assert float(fcc["hop_distance"].iloc[0]) == \
+            pytest.approx(self.A / np.sqrt(2), rel=1e-4)
+        # four sites, twelve neighbours each, counted from both ends
+        assert int(fcc["multiplicity"].iloc[0]) == 24
+
+    def test_the_spinel_hop_is_the_8a_sublattice_spacing(self, lattices):
+        found = mv.neb.hops(lattices, species="Li")
+        spinel = found.obs[found.obs["parent"] == "spinel"]
+        assert len(spinel) == 1
+        assert float(spinel["hop_distance"].iloc[0]) == \
+            pytest.approx(8.24 * np.sqrt(3) / 4, rel=1e-4)
+        # 8a is diamond-like: eight sites, four neighbours each
+        assert int(spinel["multiplicity"].iloc[0]) == 16
+
+    def test_lowering_the_symmetry_splits_the_hop(self):
+        """A tetragonal distortion of fcc separates the twelve neighbours into
+        four in-plane and eight out-of-plane. Two distinct hops, two distances
+        both known in closed form, and the multiplicities still summing to the
+        undistorted twelve."""
+        from pymatgen.core import Lattice, Structure
+        tet = Structure(Lattice.tetragonal(self.A, self.C), ["Li"] * 4,
+                        [[0, 0, 0], [0, .5, .5], [.5, 0, .5], [.5, .5, 0]])
+        md = mv.data.from_structures([tet])
+        found = mv.neb.hops(md, species="Li", cutoff=3.2)
+        assert found.n_obs == 2
+        distances = sorted(found.obs["hop_distance"])
+        assert distances[0] == pytest.approx(self.A / np.sqrt(2), rel=1e-4)
+        assert distances[1] == pytest.approx(
+            np.sqrt(self.A ** 2 + self.C ** 2) / 2, rel=1e-4)
+        assert int(found.obs["multiplicity"].sum()) == 24
+
+    def test_the_shell_cutoff_does_not_miss_its_own_shell(self, lattices):
+        """A regression. The radius was derived by rounding the neighbour
+        distance to four decimals and adding 1e-6, which lands *below* the
+        distance it was meant to admit, and fcc came back with no hops at
+        all."""
+        found = mv.neb.hops(lattices, species="Li")
+        assert (found.obs["parent"] == "fcc").any()
+
+    def test_hops_point_back_at_their_material(self, lattices):
+        found = mv.neb.hops(lattices, species="Li")
+        assert set(found.obs["parent"]) == {"fcc", "spinel"}
+        assert (found.obs["hop_distance"] > 0).all()
+
+    def test_a_material_without_the_species_is_reported(self):
+        from pymatgen.core import Lattice, Structure
+        md = mv.data.from_structures([
+            self._fcc(self.A),
+            Structure(Lattice.cubic(3.61), ["Cu"] * 4,
+                      [[0, 0, 0], [0, .5, .5], [.5, 0, .5], [.5, .5, 0]])])
+        found = mv.neb.hops(md, species="Li")
+        assert found.n_obs == 1
+        assert any("no Li" in e for e in found.uns["hops"]["errors"])
+
+    def test_nothing_to_hop_says_so(self):
+        from pymatgen.core import Lattice, Structure
+        md = mv.data.from_structures([
+            Structure(Lattice.cubic(3.61), ["Cu"] * 4,
+                      [[0, 0, 0], [0, .5, .5], [.5, 0, .5], [.5, .5, 0]])])
+        with pytest.raises(ValueError, match="no Li hop"):
+            mv.neb.hops(md, species="Li")
+
+
 class TestOccupancy:
     """Localised, floppy and liquid, in that order — and the sampling trap.
 

@@ -256,6 +256,16 @@ def equivalents(module: str) -> frozenset:
 # ---------------------------------------------------------------- NATIVE
 #: Capability present in matverse, implemented without pymatgen's module.
 NATIVE: Dict[str, str] = {
+    "analysis.diffusion.neb.full_path_mapper":
+        "mv.neb.hops enumerates the symmetry-distinct hops directly, which "
+        "is what MigrationGraph is used for - knowing which barriers are "
+        "worth computing. Not a wrapper: that module calls "
+        "StructureGraph.with_local_env_strategy, renamed upstream to "
+        "from_local_env_strategy, so every entry point raises AttributeError "
+        "against current pymatgen. Checked on fcc (one hop at a/sqrt2, "
+        "multiplicity 24), spinel 8a (one at a*sqrt3/4, multiplicity 16) and "
+        "a tetragonal distortion that splits the twelve neighbours into four "
+        "in-plane and eight out",
     "analysis.diffusion.aimd.pathway":
         "mv.md.occupancy computes the probability density from the "
         "definition - a histogram of the mobile ions' fractional positions "
@@ -445,11 +455,6 @@ BLOCKED: Dict[str, str] = {
         "during a mv.env.chemenv call, but pymatgen imports it lazily "
         "inside the finder, so there is no import chain from matverse to "
         "it and no entry point to wrap - only compute_structure_environments",
-    "analysis.diffusion.neb.full_path_mapper":
-        "pymatgen-analysis-diffusion 2025.11 calls "
-        "StructureGraph.with_local_env_strategy, renamed upstream to "
-        "from_local_env_strategy, so every migration-graph entry point "
-        "raises AttributeError against the pymatgen installed here.",
     "analysis.magnetism.heisenberg":
         "fitting exchange couplings needs spin-polarised energies, and no "
         "calculator matverse ships is spin-polarised, so nothing here can "

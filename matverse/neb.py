@@ -33,6 +33,7 @@ promotes candidates that DFT would reject. Every level records this in
 from __future__ import annotations
 
 import numpy as np
+import pandas as pd
 from anndata import AnnData
 
 from ._core import deposit_grid, record, set_level, structures
@@ -288,7 +289,7 @@ def _shift(index: int, removed: int) -> int:
     return index - 1 if index > removed else index
 
 
-__all__ = ["barrier", "hop_endpoints"]
+__all__ = ["barrier", "hop_endpoints", "hops", "percolation"]
 
 
 @register_function(
@@ -438,3 +439,147 @@ def _percolation_threshold(sub, max_image: int) -> float:
         if _percolation_rank(sub, distance + 1e-6, max_image) >= 1:
             return distance
     return float("nan")
+
+
+@register_function(
+    aliases=["hops", "distinct hops", "unique hops", "migration graph",
+             "which barriers do i need", "hop enumeration", "jump network"],
+    category="neb",
+    description="Enumerate the symmetry-distinct hops a mobile ion can make, "
+                "so a barrier is computed once per kind of jump rather than "
+                "once per pair of sites.",
+    requires={"structures": ["{source}"]},
+    examples=["hops = mv.neb.hops(md, species='Li')",
+              "hops = mv.neb.hops(md, species='Li', cutoff=4.0)"],
+    related=["mv.neb.barrier", "mv.neb.hop_endpoints", "mv.neb.percolation"],
+    notes="A cell with n mobile sites has O(n^2) ordered pairs and far fewer "
+          "*kinds* of jump. Computing a NEB for each pair wastes almost all of "
+          "the budget on symmetry copies of a barrier already known, and the "
+          "thing you actually want to know — which distinct hops exist and how "
+          "long they are — is a question about the structure, not about "
+          "energy.\n\n"
+          "Returns rather than deposits: one material gives many hops. "
+          "obs['multiplicity'] is how many copies of that hop the cell "
+          "contains, so a rate summed over the network can be reconstructed "
+          "without re-enumerating, and obs['hop_distance'] is the jump "
+          "length.\n\n"
+          "**How distinctness is decided.** Two hops are treated as the same "
+          "when they connect the same pair of symmetry-equivalent sites over "
+          "the same distance — the equivalence classes come from "
+          "SpacegroupAnalyzer, the distance is rounded to `tol` angstroms. "
+          "That is exact whenever the site pair and the length determine the "
+          "path, which covers ordinary crystals, and it can merge two "
+          "genuinely different routes between the same pair of sites in a low-"
+          "symmetry cell. It does not split what should be merged, so the "
+          "count is a lower bound on the work and never an inflated one.\n\n"
+          "Written here rather than wrapped from "
+          "pymatgen.analysis.diffusion.neb.full_path_mapper: that module calls "
+          "StructureGraph.with_local_env_strategy, renamed upstream to "
+          "from_local_env_strategy, so every MigrationGraph entry point raises "
+          "AttributeError against current pymatgen.",
+)
+def hops(md: AnnData, species: str, source: str = "input",
+         cutoff: float | None = None, tol: float = 0.05) -> AnnData:
+    """Symmetry-distinct hops of one species. Returns a new dataset."""
+    from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
+
+    from .data import from_structures
+
+    names = [str(n) for n in md.obs_names]
+    built, rows, failed = [], [], []
+
+    for row, structure in enumerate(structures(md, source)):
+        mobile = [i for i, site in enumerate(structure)
+                  if site.specie.symbol == species]
+        if not mobile:
+            failed.append(f"{names[row]}: no {species}")
+            continue
+
+        try:
+            dataset = SpacegroupAnalyzer(structure).get_symmetry_dataset()
+            equivalent = list(getattr(dataset, "equivalent_atoms", None)
+                              if not isinstance(dataset, dict)
+                              else dataset["equivalent_atoms"])
+        except Exception:
+            # No symmetry found is not a failure: every site is then its own
+            # class, which is the correct answer for a disordered cell.
+            equivalent = list(range(len(structure)))
+
+        radius = cutoff if cutoff else _first_gap(structure, mobile)
+        seen: dict[tuple, dict] = {}
+        for index in mobile:
+            for neighbour in structure.get_neighbors(structure[index], radius):
+                if neighbour.specie.symbol != species:
+                    continue
+                distance = float(neighbour.nn_distance)
+                if distance < 1e-6:
+                    continue
+                # Unordered: a hop and its reverse are one kind of jump.
+                pair = tuple(sorted((int(equivalent[index]),
+                                     int(equivalent[neighbour.index]))))
+                key = (pair, round(distance / tol))
+                entry = seen.setdefault(key, {
+                    "distance": distance, "count": 0,
+                    "start": index, "end": int(neighbour.index)})
+                entry["count"] += 1
+
+        if not seen:
+            failed.append(f"{names[row]}: no {species}-{species} pair within "
+                          f"{radius:.2f} A")
+            continue
+
+        for (pair, _), entry in sorted(seen.items(),
+                                       key=lambda kv: kv[1]["distance"]):
+            built.append(structure)
+            rows.append({
+                "parent": names[row],
+                "species": species,
+                "hop_distance": entry["distance"],
+                # Each hop was counted from both ends, so the number of
+                # distinct jumps is half the number of sightings.
+                "multiplicity": int(entry["count"] // 2) or 1,
+                "site_class_a": int(pair[0]),
+                "site_class_b": int(pair[1]),
+                "start_index": int(entry["start"]),
+                "end_index": int(entry["end"]),
+            })
+
+    if not built:
+        raise ValueError(f"no {species} hop was found in any of these "
+                         f"{md.n_obs} structures: {failed[:3]}")
+
+    out = from_structures(built, pd.DataFrame(rows))
+    out.uns["hops"] = {
+        "species": species, "source": source, "cutoff": cutoff, "tol": tol,
+        "n_parents": int(md.n_obs), "errors": failed,
+        "distinctness": "same pair of symmetry-equivalent sites and the same "
+                        "distance to within tol angstroms",
+    }
+    record(out, "neb.hops", species=species, source=source, cutoff=cutoff,
+           n_parents=int(md.n_obs))
+    return out
+
+
+def _first_gap(structure, indices, span: float = 8.0) -> float:
+    """A radius that takes the nearest shell of same-species neighbours only.
+
+    Picked from the data rather than defaulted: the first clear gap in the
+    sorted neighbour distances is where one shell ends and the next begins, and
+    a fixed cutoff would take two shells in a close-packed metal and none in an
+    open framework.
+    """
+    distances = sorted(float(n.nn_distance)
+                       for i in indices
+                       for n in structure.get_neighbors(structure[i], span)
+                       if n.specie.symbol == structure[i].specie.symbol
+                       and n.nn_distance > 1e-6)
+    if not distances:
+        return span
+    # The margin is 0.1% rather than an absolute epsilon: rounding a distance
+    # to four decimals and adding 1e-6 puts the cutoff *below* the shell it is
+    # meant to include, which returned zero hops for fcc. 0.1% is far under the
+    # 10% that defines a gap, so it cannot leak into the next shell either.
+    for previous, current in zip(distances, distances[1:]):
+        if current - previous > 0.1 * previous:
+            return previous * 1.001
+    return distances[-1] * 1.001
