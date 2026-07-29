@@ -60,6 +60,9 @@ WRAPPED: Dict[str, List[str]] = {
     "analysis.eos": ["mv.prop.eos", "mv.prop.quasiharmonic"],
     "analysis.cost": ["mv.prop.cost"],
     "analysis.prototypes": ["mv.pp.prototype"],
+    "symmetry.groups": ["mv.pp.symmetry"],
+    "symmetry.structure": ["mv.pp.symmetry"],
+    "symmetry.site_symmetries": ["mv.pp.symmetry"],
     "core.molecule_matcher": ["mv.mol.match"],
     "analysis.molecule_matcher": ["mv.mol.match"],
     "analysis.interfaces.zsl": ["mv.iface.match"],
@@ -140,6 +143,10 @@ TRANSITIVE: Dict[str, str] = {
     "core.tensors":
         "PiezoTensor subclasses Tensor, so mv.prop.piezoelectric's symmetry "
         "check and IEEE conversion are this module's code",
+    "symmetry.structure":
+        "SpacegroupAnalyzer.get_symmetrized_structure returns a "
+        "SymmetrizedStructure, and mv.pp.symmetry reads wyckoff_symbols off "
+        "it",
     "core.interface":
         "CoherentInterfaceBuilder.get_interfaces yields Interface objects, "
         "which mv.iface.build stores - the numpy site properties they carry "

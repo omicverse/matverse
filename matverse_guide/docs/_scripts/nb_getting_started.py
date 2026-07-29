@@ -119,6 +119,24 @@ md.obs[["name", "spacegroup", "formula", "nsites", "density", "is_valid"]]"""),
 mv.pp.prototype(md)
 md.obs[["name", "spacegroup", "prototype_mineral", "strukturbericht"]]"""),
 
+    ("code", """\
+mv.pp.symmetry(md)
+md.obs[["name", "crystal_system", "point_group", "n_wyckoff", "wyckoff"]]"""),
+
+    ("markdown", """\
+`spacegroup` gives the symbol. This gives what the symbol *implies* — and
+`wyckoff` is the part worth reading.
+
+Wyckoff positions say how many **distinct** sites a structure has, and that
+number decides how much work everything downstream is: how many vacancies
+`mv.pp.defects` will enumerate, how many NMR environments to expect, how many
+independent parameters a refinement has. LiFePO₄ has eight, which is why the
+defect tutorial gets six inequivalent vacancies out of a 28-atom cell rather
+than twenty-eight.
+
+Two structures in the same space group with different Wyckoff sets are
+different structures."""),
+
     ("markdown", """\
 A space group says which symmetries a structure has. A **prototype** says which
 structure it *is* — and the two are not the same question: Fm-3m covers

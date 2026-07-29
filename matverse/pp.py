@@ -722,7 +722,8 @@ def strain(md: AnnData, amount, source: str = "input",
 __all__ = ["standardize", "describe", "qc", "filter_materials", "harmonize",
            "defects",
            "filter_elements", "normalize_composition", "dedup", "supercell",
-           "rattle", "strain", "predict_volume", "prototype"]
+           "rattle", "strain", "predict_volume", "prototype",
+           "symmetry"]
 
 
 @register_function(
@@ -900,3 +901,97 @@ def prototype(md: AnnData, source: str = "input") -> None:
                            "n_unmatched": int(md.n_obs - matched),
                            "library": "AFLOW prototype encyclopedia"}
     record(md, "pp.prototype", source=source)
+
+
+@register_function(
+    aliases=["symmetry", "crystal system", "crystallographic point group",
+             "wyckoff", "wyckoff positions", "site symmetry", "how symmetric",
+             "symmetry operations"],
+    category="pp",
+    description="The symmetry a structure actually has: crystal system, point "
+                "group, how many operations the space group contains, and "
+                "which Wyckoff positions the atoms occupy.",
+    requires={"structures": ["{source}"]},
+    produces={"obs": ["crystal_system", "point_group",
+                      "n_symmetry_operations", "n_wyckoff", "wyckoff",
+                      "min_site_symmetry", "max_site_symmetry"]},
+    examples=["mv.pp.symmetry(md)",
+              "mv.pp.symmetry(md, symprec=0.001)"],
+    related=["mv.pp.describe", "mv.pp.standardize", "mv.pp.prototype"],
+    notes="mv.pp.describe already reports the space group symbol. This is what "
+          "the symbol implies and what a screen can filter on: Pm-3m is cubic "
+          "with point group m-3m and 48 operations, and its atoms sit at 1a, "
+          "1b and 3c — which is the standard perovskite assignment, arrived at "
+          "from the coordinates rather than from the label.\\n\\n"
+          "**Wyckoff positions are the useful part.** They say how many "
+          "*distinct* sites a structure has, which is what decides how many "
+          "defects to enumerate, how many NMR environments to expect and how "
+          "many independent parameters a refinement has. Two structures in the "
+          "same space group with different Wyckoff sets are different "
+          "structures.\\n\\n"
+          "min_site_symmetry and max_site_symmetry are the order of the site "
+          "symmetry group at the least and most symmetric site. A site with "
+          "order 1 is general position; a high order means the atom sits on "
+          "the special positions that constrain where it can relax to.\\n\\n"
+          "Everything here depends on symprec, and it is a real choice rather "
+          "than a detail: a structure relaxed to 1e-3 angstrom is not exactly "
+          "symmetric, and too tight a tolerance reports P1 for a crystal that "
+          "is obviously cubic.\n\n"
+          "The bare alias 'point group' belongs to mv.mol.point_group, where it "
+          "is the whole symmetry answer for a molecule. For a crystal it is one "
+          "fact among several, so this one is reached as 'crystallographic "
+          "point group'.",
+)
+def symmetry(md: AnnData, source: str = "input", symprec: float = 0.01) -> None:
+    """Crystal system, point group and Wyckoff positions. Deposits."""
+    from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
+    from pymatgen.symmetry.groups import SpaceGroup
+    from pymatgen.symmetry.site_symmetries import get_site_symmetries
+
+    systems = np.empty(md.n_obs, dtype=object)
+    points = np.empty(md.n_obs, dtype=object)
+    orders = np.full(md.n_obs, np.nan)
+    wyckoff_count = np.full(md.n_obs, np.nan)
+    wyckoff = np.empty(md.n_obs, dtype=object)
+    lowest = np.full(md.n_obs, np.nan)
+    highest = np.full(md.n_obs, np.nan)
+    failures = []
+
+    for i, (row, structure) in enumerate(
+            zip(md.obs_names, structures(md, source))):
+        systems[i] = ""
+        points[i] = ""
+        wyckoff[i] = ""
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                analyzer = SpacegroupAnalyzer(structure, symprec=symprec)
+                systems[i] = str(analyzer.get_crystal_system())
+                points[i] = str(analyzer.get_point_group_symbol())
+                symbols = list(
+                    analyzer.get_symmetrized_structure().wyckoff_symbols)
+                wyckoff[i] = ", ".join(str(w) for w in symbols)
+                wyckoff_count[i] = len(symbols)
+                try:
+                    orders[i] = float(
+                        SpaceGroup(analyzer.get_space_group_symbol()).order)
+                except Exception:
+                    orders[i] = float(len(analyzer.get_symmetry_operations()))
+                per_site = get_site_symmetries(structure)
+                sizes = [len(ops) for ops in per_site]
+                if sizes:
+                    lowest[i] = float(min(sizes))
+                    highest[i] = float(max(sizes))
+        except Exception as exc:
+            failures.append(f"{row}: {type(exc).__name__}: {exc}".split("\n")[0])
+
+    md.obs["crystal_system"] = systems.astype(str)
+    md.obs["point_group"] = points.astype(str)
+    md.obs["n_symmetry_operations"] = orders
+    md.obs["n_wyckoff"] = wyckoff_count
+    md.obs["wyckoff"] = wyckoff.astype(str)
+    md.obs["min_site_symmetry"] = lowest
+    md.obs["max_site_symmetry"] = highest
+    md.uns["symmetry"] = {"source": source, "symprec": float(symprec),
+                          "n_failed": len(failures), "failures": failures[:10]}
+    record(md, "pp.symmetry", source=source, symprec=symprec)

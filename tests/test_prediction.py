@@ -324,3 +324,63 @@ class TestPrototype:
         mv.pp.prototype(md)
         assert list(md.obs["prototype"]) == [""]
         assert md.uns["prototype"]["n_unmatched"] == 1
+
+
+class TestSymmetry:
+    """What a space group symbol implies, from the coordinates."""
+
+    @staticmethod
+    def _fcc():
+        from pymatgen.core import Lattice, Structure
+        return Structure(Lattice.cubic(3.61), ["Cu"] * 4,
+                         [[0, 0, 0], [0, .5, .5], [.5, 0, .5], [.5, .5, 0]])
+
+    @staticmethod
+    def _perovskite():
+        from pymatgen.core import Lattice, Structure
+        return Structure(Lattice.cubic(3.905), ["Sr", "Ti", "O", "O", "O"],
+                         [[0, 0, 0], [.5, .5, .5], [.5, .5, 0],
+                          [.5, 0, .5], [0, .5, .5]])
+
+    @pytest.fixture(scope="class")
+    def analysed(self):
+        md = mv.data.from_structures([self._fcc(), self._perovskite()])
+        mv.pp.describe(md)
+        mv.pp.symmetry(md)
+        return md
+
+    def test_the_crystal_system_and_point_group(self, analysed):
+        assert list(analysed.obs["crystal_system"]) == ["cubic", "cubic"]
+        assert list(analysed.obs["point_group"]) == ["m-3m", "m-3m"]
+
+    def test_the_perovskite_wyckoff_set_is_the_textbook_one(self, analysed):
+        """Sr at 1a, Ti at 1b, O at 3c — arrived at from the coordinates
+        rather than from the label."""
+        assert analysed.obs["wyckoff"].iloc[1] == "1a, 1b, 3c"
+        assert analysed.obs["n_wyckoff"].iloc[1] == 3
+
+    def test_a_close_packed_metal_has_one_distinct_site(self, analysed):
+        assert analysed.obs["n_wyckoff"].iloc[0] == 1
+        assert analysed.obs["wyckoff"].iloc[0] == "4a"
+
+    def test_the_operation_count_matches_the_space_group(self, analysed):
+        """Fm-3m has 192 operations in the conventional cell and Pm-3m 48."""
+        assert analysed.obs["n_symmetry_operations"].iloc[0] == 192
+        assert analysed.obs["n_symmetry_operations"].iloc[1] == 48
+
+    def test_site_symmetry_separates_special_from_general(self, analysed):
+        """In the perovskite Sr and Ti sit on the most symmetric sites and the
+        oxygens do not; in fcc copper every site is equivalent."""
+        assert analysed.obs["min_site_symmetry"].iloc[0] == \
+            analysed.obs["max_site_symmetry"].iloc[0]
+        assert analysed.obs["min_site_symmetry"].iloc[1] < \
+            analysed.obs["max_site_symmetry"].iloc[1]
+
+    def test_wyckoff_count_predicts_the_defect_count(self):
+        """The reason to care: distinct sites are what mv.pp.defects
+        enumerates, so n_wyckoff says how many vacancies to expect."""
+        md = mv.data.from_structures([self._perovskite()])
+        mv.pp.describe(md)
+        mv.pp.symmetry(md)
+        defective = mv.pp.defects(md, kinds=("vacancy",), supercell=(1, 1, 1))
+        assert defective.n_obs == int(md.obs["n_wyckoff"].iloc[0])

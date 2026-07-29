@@ -1,5 +1,32 @@
 # Release notes
 
+## v0.1.30
+
+**87 of 136 in-scope pymatgen modules, 64.0%.** 31 open gaps, 18 blocked.
+
+### `mv.pp.symmetry`
+
+`mv.pp.describe` reports the space group symbol. This reports what the symbol
+implies and what a screen can filter on: crystal system, crystallographic point
+group, how many operations the group contains, the Wyckoff positions the atoms
+occupy, and the order of the site symmetry group at the least and most symmetric
+site.
+
+SrTiO₃ comes back cubic, m-3m, 48 operations, Wyckoff **1a, 1b, 3c** — the
+standard perovskite assignment, arrived at from the coordinates rather than from
+the label. fcc copper has one distinct site; LiFePO₄ has eight.
+
+**Wyckoff count is the number worth having.** It says how many *distinct* sites
+a structure has, which decides how much work everything downstream is: how many
+vacancies `mv.pp.defects` enumerates, how many NMR environments to expect, how
+many independent parameters a refinement has. The defect tutorial gets six
+inequivalent vacancies from a 28-atom LiFePO₄ cell rather than twenty-eight, and
+that is this number. A test asserts the two agree.
+
+The alias collision check fired a fifth time: `mv.mol.point_group` owns "point
+group", where for a molecule it is the whole symmetry answer. For a crystal it
+is one fact among several, so this is reached as "crystallographic point group".
+
 ## v0.1.29
 
 **84 of 136 in-scope pymatgen modules, 61.8%** — and this release is mostly
