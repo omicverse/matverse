@@ -414,4 +414,86 @@ def oxidation_states(md: AnnData, source: str = "input",
 
 
 __all__ = ["MODULES", "available", "apply", "expand", "chain",
-           "oxidation_states"]
+           "oxidation_states", "setting"]
+
+
+@register_function(
+    aliases=["setting", "cell setting", "change setting", "jones faithful",
+             "non-diagonal supercell", "reorient cell", "axis permutation"],
+    category="transform",
+    description="Apply a Jones-Faithful cell transformation — an axis "
+                "permutation, a non-diagonal supercell, or an origin shift — "
+                "and deposit the result as its own structure variant.",
+    requires={"structures": ["{source}"]},
+    produces={"structures": ["{key_added}"],
+              "obs": ["{key_added}_volume_ratio"], "uns": ["setting"]},
+    examples=["mv.transform.setting(md, 'b,a,-c;0,0,0')",
+              "mv.transform.setting(md, 'a+b,a-b,c;0,0,0', key_added='ortho')",
+              "mv.transform.setting(md, 'a,b,c;1/2,0,0')"],
+    related=["mv.pp.supercell", "mv.pp.standardize", "mv.transform.apply"],
+    notes="mv.pp.supercell scales the axes by integers. This does what that "
+          "cannot: **non-diagonal** transformations. 'a+b,a-b,c' turns a cubic "
+          "cell into the body-centred-tetragonal one that halves the number of "
+          "symmetry-distinct sites, and no diagonal scaling reaches it.\\n\\n"
+          "The other use is settings. The same space group has several, and "
+          "'Pnma or Pbnm' is a standing annoyance in perovskite work — they "
+          "are the same structure with the axes named differently, and a "
+          "comparison across the two silently fails. This converts between "
+          "them.\\n\\n"
+          "The convention is the International Tables one: the string names "
+          "the **new basis in terms of the old**, and the lattice transforms "
+          "as L' = L P. 'b,a,-c' therefore permutes which Cartesian direction "
+          "each axis points along while leaving the three lengths as a set "
+          "unchanged — the cell is relabelled, not reshaped. "
+          "obs['{key_added}_volume_ratio'] is the volume change, so a "
+          "transformation that was meant to relabel and instead resized is "
+          "visible rather than assumed.",
+)
+def setting(md: AnnData, transformation: str, source: str = "input",
+            key_added: str = "resettled") -> None:
+    """Apply a cell setting transformation. Deposits; returns ``None``."""
+    from pymatgen.core import Structure
+    from pymatgen.symmetry.settings import JonesFaithfulTransformation
+
+    from ._core import deposit_structures
+
+    try:
+        jft = JonesFaithfulTransformation.from_transformation_str(
+            str(transformation))
+    except Exception as exc:
+        raise ValueError(
+            f"could not read {transformation!r} as a Jones-Faithful string. "
+            f"It names the new basis in terms of the old, with an optional "
+            f"origin shift after a semicolon: 'b,a,-c;0,0,0', "
+            f"'a+b,a-b,c;0,0,0', 'a,b,c;1/2,0,0'. ({exc})") from exc
+
+    built = []
+    ratio = np.full(md.n_obs, np.nan)
+    failures = []
+
+    for i, (row, structure) in enumerate(
+            zip(md.obs_names, structures(md, source))):
+        try:
+            lattice = jft.transform_lattice(structure.lattice)
+            coords = jft.transform_coords(
+                [site.frac_coords for site in structure])
+            moved = Structure(lattice, [site.species for site in structure],
+                              coords)
+            built.append(moved)
+            ratio[i] = float(moved.volume / structure.volume)
+        except Exception as exc:
+            failures.append(f"{row}: {type(exc).__name__}: {exc}")
+            built.append(structure)
+
+    deposit_structures(md, key_added, built)
+    md.obs[f"{key_added}_volume_ratio"] = ratio
+    md.uns["setting"] = {
+        "transformation": str(transformation), "source": source,
+        "key_added": key_added, "n_failed": len(failures),
+        "failures": failures[:10],
+        "convention": "International Tables: the string names the new basis "
+                      "in terms of the old, and the lattice transforms as "
+                      "L' = L P",
+    }
+    record(md, "transform.setting", transformation=str(transformation),
+           source=source, key_added=key_added)

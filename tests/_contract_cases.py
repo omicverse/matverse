@@ -507,6 +507,7 @@ def cases(tmp):
          ([("PrimitiveCellTransformation", {}),
            ("PerturbStructureTransformation", {"distance": 0.05})],), {}),
         (mv.transform.oxidation_states, olivine, (), {}),
+        (mv.transform.setting, described, ("b,a,-c;0,0,0",), {}),
         (mv.transform.expand, mixture,
          ("OrderDisorderedStructureTransformation",),
          {"n": 2, "no_oxi_states": True, "returns": "new"}),

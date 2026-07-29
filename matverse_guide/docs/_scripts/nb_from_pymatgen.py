@@ -254,6 +254,44 @@ of how they were produced. Written as a script over lists, the same pipeline is
 six lists you keep aligned by index and a comment explaining what `structures2`
 was.
 
+## Cells that `supercell` cannot reach
+
+`mv.pp.supercell` scales the axes by integers. `mv.transform.setting` does what
+that cannot: **non-diagonal** transformations, axis permutations and origin
+shifts."""),
+
+    ("code", """\
+box = mv.data.from_structures([Structure(Lattice.orthorhombic(3., 4., 5.),
+                                         ["Cu"], [[0, 0, 0]])])
+mv.pp.describe(box)
+
+for spec, key in [("2a,b,c;0,0,0", "doubled"),
+                  ("a+b,a-b,c;0,0,0", "bct"),
+                  ("a,b,c;1/2,0,0", "shifted")]:
+    mv.transform.setting(box, spec, key_added=key)
+
+box.obs[[c for c in box.obs.columns if c.endswith("volume_ratio")]].round(3)"""),
+
+    ("markdown", """\
+`a+b, a-b, c` is the one to look at: it doubles the volume and gives axes of
+3√2 and 4√2, and **no integer scaling of the axes reaches it**. That is the
+transformation that turns a cubic cell into the body-centred tetragonal one.
+
+The other standing use is settings. The same space group has several, and
+"Pnma or Pbnm" is a permanent annoyance in perovskite work — the same structure
+with the axes named differently, so a comparison across the two silently fails.
+
+```{note}
+The convention is the International Tables one: the string names the **new basis
+in terms of the old**, and the lattice transforms as L′ = L·P. So `b,a,-c`
+permutes which Cartesian direction each axis points along and leaves the three
+lengths, as a set, unchanged — the cell is relabelled, not reshaped.
+
+`obs['<key>_volume_ratio']` is there because that distinction is easy to get
+backwards: a transformation meant to relabel that instead resized is visible
+rather than assumed.
+```
+
 ## A number you can check against a textbook
 
 Most of what a screening library computes can only be checked against another

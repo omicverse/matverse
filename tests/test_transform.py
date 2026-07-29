@@ -214,3 +214,62 @@ class TestOxidationStates:
                                       key_added="guessed")
         assert oxides.uns["oxidation_states"]["method"] == "composition guess"
         assert "guessed" in mv.variants(oxides)
+
+
+class TestSetting:
+    """Cell transformations mv.pp.supercell cannot reach."""
+
+    @staticmethod
+    def _orthorhombic():
+        from pymatgen.core import Lattice, Structure
+        return Structure(Lattice.orthorhombic(3.0, 4.0, 5.0), ["Cu"],
+                         [[0, 0, 0]])
+
+    def test_the_identity_changes_nothing(self):
+        md = mv.data.from_structures([self._orthorhombic()])
+        mv.pp.describe(md)
+        mv.transform.setting(md, "a,b,c;0,0,0", key_added="same")
+        assert md.obs["same_volume_ratio"].iloc[0] == pytest.approx(1.0)
+        assert mv.structures(md, "same")[0].lattice.abc == \
+            pytest.approx((3.0, 4.0, 5.0))
+
+    def test_scaling_one_axis_doubles_the_volume(self):
+        md = mv.data.from_structures([self._orthorhombic()])
+        mv.pp.describe(md)
+        mv.transform.setting(md, "2a,b,c;0,0,0", key_added="doubled")
+        assert md.obs["doubled_volume_ratio"].iloc[0] == pytest.approx(2.0)
+        assert mv.structures(md, "doubled")[0].lattice.abc[0] == \
+            pytest.approx(6.0)
+
+    def test_a_non_diagonal_transformation_is_reachable(self):
+        """This is what mv.pp.supercell cannot do: a+b and a-b are not any
+        integer scaling of the axes."""
+        md = mv.data.from_structures([self._orthorhombic()])
+        mv.pp.describe(md)
+        mv.transform.setting(md, "a+b,a-b,c;0,0,0", key_added="bct")
+        lattice = mv.structures(md, "bct")[0].lattice
+        assert md.obs["bct_volume_ratio"].iloc[0] == pytest.approx(2.0)
+        assert lattice.abc[0] == pytest.approx(3.0 * 2 ** 0.5, abs=1e-3)
+
+    def test_an_origin_shift_moves_the_coordinates_not_the_cell(self):
+        md = mv.data.from_structures([self._orthorhombic()])
+        mv.pp.describe(md)
+        mv.transform.setting(md, "a,b,c;1/2,0,0", key_added="shifted")
+        assert md.obs["shifted_volume_ratio"].iloc[0] == pytest.approx(1.0)
+        moved = mv.structures(md, "shifted")[0]
+        assert moved.frac_coords[0][0] % 1.0 == pytest.approx(0.5, abs=1e-6)
+
+    def test_the_convention_is_recorded(self):
+        """The string names the new basis in terms of the old, which is the
+        International Tables convention and the opposite of what a reader
+        might assume."""
+        md = mv.data.from_structures([self._orthorhombic()])
+        mv.pp.describe(md)
+        mv.transform.setting(md, "b,a,-c;0,0,0")
+        assert "International Tables" in md.uns["setting"]["convention"]
+
+    def test_an_unreadable_string_explains_the_format(self):
+        md = mv.data.from_structures([self._orthorhombic()])
+        mv.pp.describe(md)
+        with pytest.raises(ValueError, match="Jones-Faithful"):
+            mv.transform.setting(md, "rotate it a bit")

@@ -77,6 +77,7 @@ WRAPPED: Dict[str, List[str]] = {
         "itself needs Materials Project entries to build",
     "symmetry.structure": ["mv.pp.symmetry"],
     "symmetry.site_symmetries": ["mv.pp.symmetry"],
+    "symmetry.settings": ["mv.transform.setting"],
     "core.molecule_matcher": ["mv.mol.match"],
     "analysis.molecule_matcher": ["mv.mol.match"],
     "core.molecule_structure_comparator": ["mv.mol.match"],

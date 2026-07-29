@@ -1,5 +1,35 @@
 # Release notes
 
+## v0.1.41
+
+**104 of 136 in-scope pymatgen modules, 76.5%.** 12 open gaps, 20 blocked.
+
+### `mv.transform.setting` — cells `supercell` cannot reach
+
+`mv.pp.supercell` scales the axes by integers. This does what that cannot:
+non-diagonal transformations, axis permutations and origin shifts.
+
+`a+b, a-b, c` is the one to look at. It doubles the volume and gives axes of
+3√2 and 4√2, and **no integer scaling of the axes reaches it** — it is the
+transformation that turns a cubic cell into the body-centred tetragonal one.
+
+The other standing use is settings. The same space group has several, and
+"Pnma or Pbnm" is a permanent annoyance in perovskite work: the same structure
+with the axes named differently, so a comparison across the two silently fails.
+
+### A convention I got backwards before checking
+
+`transform_lattice` returned an unchanged `abc` for `b,a,-c`, which looked wrong
+— swapping a and b should surely swap 3 and 4. It is not wrong. pymatgen follows
+the International Tables convention where the string names the new basis in
+terms of the old and the lattice transforms as L′ = L·P, so `b,a,-c` permutes
+which Cartesian direction each axis points along and leaves the three lengths,
+as a set, unchanged. `2a,b,c` doubling the volume is what settled it.
+
+That distinction is easy to get backwards in either direction, which is why
+`obs['<key>_volume_ratio']` is deposited: a transformation meant to relabel that
+instead resized is visible rather than assumed.
+
 ## v0.1.40
 
 **103 of 136 in-scope pymatgen modules, 75.7%.** 13 open gaps, 20 blocked.
