@@ -62,6 +62,9 @@ WRAPPED: Dict[str, List[str]] = {
     "analysis.prototypes": ["mv.pp.prototype"],
     "core.molecule_matcher": ["mv.mol.match"],
     "analysis.molecule_matcher": ["mv.mol.match"],
+    "analysis.interfaces.zsl": ["mv.iface.match"],
+    "symmetry.kpath": ["mv.elec.kpath"],
+    "core.tensors": ["mv.prop.piezoelectric"],
     "analysis.chemenv.connectivity.connectivity_finder":
         ["mv.env.connectivity"],
     "analysis.chemenv.connectivity.structure_connectivity":
@@ -127,6 +130,15 @@ WRAPPED: Dict[str, List[str]] = {
 #: than by importing them. The capability is used; the import is not there to
 #: find, so the direct-import check is told why rather than weakened.
 TRANSITIVE: Dict[str, str] = {
+    "analysis.interfaces.zsl":
+        "SubstrateAnalyzer, which mv.iface.match imports, runs the "
+        "Zur-McGill lattice search out of this module",
+    "symmetry.kpath":
+        "HighSymmKpath, which mv.elec.kpath imports, is the front door to the "
+        "path constructions here",
+    "core.tensors":
+        "PiezoTensor subclasses Tensor, so mv.prop.piezoelectric's symmetry "
+        "check and IEEE conversion are this module's code",
     "analysis.chemenv.connectivity.structure_connectivity":
         "ConnectivityFinder.get_structure_connectivity returns a "
         "StructureConnectivity, and mv.env.connectivity calls "

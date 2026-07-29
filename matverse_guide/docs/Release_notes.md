@@ -1,5 +1,29 @@
 # Release notes
 
+## v0.1.28
+
+**76 of 142 in-scope pymatgen modules, 53.5%.**
+
+### Three modules matverse was already using without an import
+
+`SubstrateAnalyzer` runs the Zur-McGill lattice search out of
+`analysis.interfaces.zsl`; `HighSymmKpath` is the front door to
+`symmetry.kpath`; `PiezoTensor` subclasses `core.tensors.Tensor`, so the
+symmetry check and IEEE conversion in `mv.prop.piezoelectric` are that module's
+code. All three are used, none is imported, and each is recorded in `TRANSITIVE`
+with the object that hands it over.
+
+### One thing deliberately not added
+
+`analysis.chempot_diagram` builds the full chemical potential domain per phase,
+where `mv.thermo.chempot_limits` gives the window for one target. It is not
+added, and the reason is shape rather than difficulty: a domain is a polytope,
+not a scalar, so there is no obvious `obs` column for it — and EMT finds no
+stable Al-Ni compound, so there is no worked example on a calculator matverse
+ships to check the deposit against.
+
+Adding it would have moved the number by one. That is not a reason.
+
 ## v0.1.27
 
 **73 of 142 in-scope pymatgen modules, 51.4%.**
