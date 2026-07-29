@@ -359,6 +359,402 @@ def dimensionality(md: AnnData, source: str = "input",
     record(md, "prop.dimensionality", source=source, strategy=str(strategy))
 
 
+@register_function(
+    aliases=["nmr", "chemical shielding", "chemical shift", "shielding tensor",
+             "solid state nmr", "magnetic shielding", "csa"],
+    category="prop",
+    description="Reduce a per-atom chemical shielding tensor to the parameters "
+                "a solid-state NMR spectrum is described by — isotropic shift, "
+                "anisotropy, asymmetry, span and skew — on the sites axis.",
+    requires={"sites.obs": ["material"]},
+    produces={"sites.obs": ["shielding_iso_{level}",
+                            "shielding_anisotropy_{level}",
+                            "shielding_asymmetry_{level}",
+                            "shielding_span_{level}",
+                            "shielding_skew_{level}"],
+              "sites.obsm": ["shielding_tensor_{level}"],
+              "levels": ["{level}"]},
+    prerequisites=["mv.multi.sites"],
+    examples=["sites = mv.multi.sites(md); mv.prop.nmr(md, sites, shieldings)",
+              "mv.prop.nmr(md, sites, shieldings, level='pbe')"],
+    related=["mv.prop.efg", "mv.multi.sites", "mv.dft.read_outputs"],
+    notes="Takes the tensors as an argument rather than reading them off the "
+          "object, for the same reason mv.elec.bands takes band structures: "
+          "nothing in matverse computes a shielding tensor, and the honest "
+          "place for a result someone else computed is an argument.\n\n"
+          "Both conventions are reported because both are in use and they "
+          "disagree on what 'anisotropy' names. Haeberlen's zeta is "
+          "sigma_33 - sigma_iso; the reduced anisotropy quoted by most "
+          "spectrometer software is 3/2 of it. span and skew are the "
+          "Herzfeld-Berger pair, which is what a sideband analysis returns.\n\n"
+          "These are **shieldings**, not shifts. A chemical shift is a "
+          "shielding referenced to a standard compound and runs the other way "
+          "in sign; converting needs a reference this function is not given.",
+)
+def nmr(md: AnnData, sites: AnnData, shieldings, level: str = "dft") -> None:
+    """NMR shielding parameters per atom. Deposits on ``sites``."""
+    from pymatgen.analysis.nmr import ChemicalShielding
+
+    from .env import _require_sites
+
+    _require_sites(sites, md)
+    tensors = np.asarray(shieldings, dtype=float)
+    if tensors.shape != (sites.n_obs, 3, 3):
+        raise ValueError(
+            f"got shieldings of shape {tensors.shape} for {sites.n_obs} atoms; "
+            f"expected ({sites.n_obs}, 3, 3) — one 3x3 tensor per row of the "
+            f"sites object, in the order mv.multi.sites produced them")
+
+    iso = np.full(sites.n_obs, np.nan)
+    zeta = np.full(sites.n_obs, np.nan)
+    eta = np.full(sites.n_obs, np.nan)
+    span = np.full(sites.n_obs, np.nan)
+    skew = np.full(sites.n_obs, np.nan)
+
+    for i, tensor in enumerate(tensors):
+        shielding = ChemicalShielding(tensor)
+        haeberlen = shielding.haeberlen_values
+        mehring = shielding.mehring_values
+        s11, s22, s33 = (float(np.real(mehring.sigma_11)),
+                         float(np.real(mehring.sigma_22)),
+                         float(np.real(mehring.sigma_33)))
+        iso[i] = float(np.real(haeberlen.sigma_iso))
+        zeta[i] = float(np.real(haeberlen.zeta))
+        eta[i] = float(np.real(haeberlen.eta))
+        # Herzfeld-Berger: the span is the full width, the skew says which
+        # side of the isotropic value the third principal component sits on.
+        span[i] = s33 - s11
+        skew[i] = (3.0 * (s22 - iso[i]) / span[i]
+                   if abs(span[i]) > 1e-12 else 0.0)
+
+    sites.obsm[f"shielding_tensor_{level}"] = tensors.reshape(sites.n_obs, 9)
+    sites.obs[f"shielding_iso_{level}"] = iso
+    sites.obs[f"shielding_anisotropy_{level}"] = zeta
+    sites.obs[f"shielding_asymmetry_{level}"] = eta
+    sites.obs[f"shielding_span_{level}"] = span
+    sites.obs[f"shielding_skew_{level}"] = skew
+    set_level(md, level, kind="dft", method="chemical shielding tensor",
+              reference=None, surrogate=False, license=None, uncertainty=None,
+              quantity="nmr shielding")
+    record(md, "prop.nmr", level=level, n_sites=int(sites.n_obs))
+
+
+@register_function(
+    aliases=["efg", "electric field gradient", "quadrupolar coupling",
+             "quadrupole coupling constant", "nuclear quadrupole"],
+    category="prop",
+    description="Reduce a per-atom electric field gradient tensor to Vzz, the "
+                "asymmetry parameter and the quadrupolar coupling constant, "
+                "which is what a quadrupolar NMR lineshape is set by.",
+    requires={"sites.obs": ["element"]},
+    produces={"sites.obs": ["efg_vzz_{level}", "efg_asymmetry_{level}",
+                            "efg_coupling_{level}"],
+              "sites.obsm": ["efg_tensor_{level}"],
+              "levels": ["{level}"]},
+    prerequisites=["mv.multi.sites"],
+    examples=["sites = mv.multi.sites(md); mv.prop.efg(md, sites, gradients)",
+              "mv.prop.efg(md, sites, gradients, level='pbe')"],
+    related=["mv.prop.nmr", "mv.multi.sites"],
+    notes="The coupling constant needs the nuclear quadrupole moment of a "
+          "specific isotope, which is a property of the nucleus rather than of "
+          "the calculation. It is looked up from the element on each site, so "
+          "it is the most abundant NMR-active isotope; for an element with no "
+          "tabulated moment the coupling is NaN while Vzz and the asymmetry "
+          "are still reported, because those are properties of the gradient "
+          "alone.\n\n"
+          "The convention is |Vzz| >= |Vyy| >= |Vxx|, so eta lies in [0, 1] "
+          "by construction and a value outside it means the tensor was not "
+          "traceless.",
+)
+def efg(md: AnnData, sites: AnnData, gradients, level: str = "dft") -> None:
+    """Electric field gradient parameters per atom. Deposits on ``sites``."""
+    from pymatgen.analysis.nmr import ElectricFieldGradient
+
+    from .env import _require_sites
+
+    _require_sites(sites, md)
+    tensors = np.asarray(gradients, dtype=float)
+    if tensors.shape != (sites.n_obs, 3, 3):
+        raise ValueError(
+            f"got gradients of shape {tensors.shape} for {sites.n_obs} atoms; "
+            f"expected ({sites.n_obs}, 3, 3) — one 3x3 tensor per row of the "
+            f"sites object, in the order mv.multi.sites produced them")
+
+    elements = sites.obs["element"].astype(str).to_numpy()
+    vzz = np.full(sites.n_obs, np.nan)
+    asymmetry = np.full(sites.n_obs, np.nan)
+    coupling = np.full(sites.n_obs, np.nan)
+
+    for i, tensor in enumerate(tensors):
+        gradient = ElectricFieldGradient(tensor)
+        vzz[i] = float(np.real(gradient.V_zz))
+        asymmetry[i] = float(np.real(gradient.asymmetry))
+        try:
+            coupling[i] = float(np.real(
+                gradient.coupling_constant(elements[i])))
+        except Exception:
+            coupling[i] = np.nan       # no tabulated quadrupole moment
+
+    sites.obsm[f"efg_tensor_{level}"] = tensors.reshape(sites.n_obs, 9)
+    sites.obs[f"efg_vzz_{level}"] = vzz
+    sites.obs[f"efg_asymmetry_{level}"] = asymmetry
+    sites.obs[f"efg_coupling_{level}"] = coupling
+    set_level(md, level, kind="dft", method="electric field gradient",
+              reference=None, surrogate=False, license=None, uncertainty=None,
+              quantity="efg")
+    record(md, "prop.efg", level=level, n_sites=int(sites.n_obs))
+
+
+@register_function(
+    aliases=["piezoelectric", "piezo", "piezoelectric tensor", "d33",
+             "piezoelectric coefficient", "electromechanical"],
+    category="prop",
+    description="Check a piezoelectric tensor against the crystal symmetry, "
+                "put it in the IEEE frame, and derive the largest longitudinal "
+                "response over all directions for screening.",
+    requires={"structures": ["{source}"]},
+    produces={"obs": ["piezo_max_longitudinal_{level}",
+                      "piezo_max_direction_{level}",
+                      "piezo_symmetry_valid_{level}"],
+              "obsm": ["piezo_tensor_{level}"], "levels": ["{level}"]},
+    examples=["mv.prop.piezoelectric(md, tensors)",
+              "mv.prop.piezoelectric(md, tensors, level='pbe')"],
+    related=["mv.prop.elastic", "mv.screen.rank", "mv.dft.read_outputs"],
+    notes="A piezoelectric tensor is forbidden by symmetry in any "
+          "centrosymmetric crystal, so a non-zero one there is an error in the "
+          "calculation or in the structure it was paired with rather than a "
+          "discovery. piezo_symmetry_valid is pymatgen's check of the tensor "
+          "against the structure's point group, and it is worth reading before "
+          "the magnitude.\n\n"
+          "The screening number is the largest **longitudinal** response — "
+          "the maximum of d_ijk n_i n_j n_k over unit vectors n — because that "
+          "is the quantity a stack actuator or a single-crystal transducer is "
+          "built around, and it is invariant to how the tensor was oriented. "
+          "It is found by sampling directions rather than solved in closed "
+          "form, so it is a lower bound that tightens with n_directions.",
+)
+def piezoelectric(md: AnnData, tensors, level: str = "dft",
+                  source: str = "input", n_directions: int = 2000,
+                  tolerance: float = 1e-3) -> None:
+    """Piezoelectric response per material. Deposits; returns ``None``."""
+    from pymatgen.analysis.piezo import PiezoTensor
+
+    array = np.asarray(tensors, dtype=float)
+    if array.shape == (md.n_obs, 3, 6):
+        array = np.stack([_from_voigt(v) for v in array])
+    if array.shape != (md.n_obs, 3, 3, 3):
+        raise ValueError(
+            f"got tensors of shape {array.shape} for {md.n_obs} materials; "
+            f"expected ({md.n_obs}, 3, 3, 3) in full notation or "
+            f"({md.n_obs}, 3, 6) in Voigt notation")
+
+    directions = _fibonacci_sphere(int(n_directions))
+    longitudinal = np.full(md.n_obs, np.nan)
+    best = np.empty(md.n_obs, dtype=object)
+    valid = np.zeros(md.n_obs, dtype=bool)
+    ieee = np.full((md.n_obs, 3, 3, 3), np.nan)
+
+    for i, (structure, tensor) in enumerate(zip(structures(md, source), array)):
+        try:
+            piezo = PiezoTensor(tensor)
+            valid[i] = bool(piezo.is_fit_to_structure(structure,
+                                                      tol=tolerance))
+            try:
+                ieee[i] = np.asarray(piezo.convert_to_ieee(structure),
+                                     dtype=float)
+            except Exception:
+                ieee[i] = tensor
+        except Exception:
+            ieee[i] = tensor
+        # d(n) = d_ijk n_i n_j n_k, maximised over the sampled directions.
+        response = np.einsum("ijk,ni,nj,nk->n", ieee[i], directions,
+                             directions, directions)
+        winner = int(np.argmax(np.abs(response)))
+        longitudinal[i] = float(np.abs(response[winner]))
+        best[i] = ",".join(f"{c:.3f}" for c in directions[winner])
+
+    md.obsm[f"piezo_tensor_{level}"] = ieee.reshape(md.n_obs, 27)
+    md.obs[f"piezo_max_longitudinal_{level}"] = longitudinal
+    md.obs[f"piezo_max_direction_{level}"] = best
+    md.obs[f"piezo_symmetry_valid_{level}"] = valid
+    set_level(md, level, kind="dft", method="piezoelectric tensor",
+              reference=None, surrogate=False, license=None, uncertainty=None,
+              source=source, n_directions=int(n_directions))
+    record(md, "prop.piezoelectric", level=level, source=source,
+           n_directions=int(n_directions))
+
+
+#: Voigt index -> the pair of Cartesian indices it stands for.
+_VOIGT_PAIRS = ((0, 0), (1, 1), (2, 2), (1, 2), (0, 2), (0, 1))
+
+
+def _from_voigt(voigt: np.ndarray) -> np.ndarray:
+    """A 3x6 piezoelectric matrix as the full 3x3x3 tensor."""
+    full = np.zeros((3, 3, 3))
+    for i in range(3):
+        for v, (j, k) in enumerate(_VOIGT_PAIRS):
+            # The shear columns carry a factor of two in the Voigt convention
+            # for strain-like second indices, split between the two symmetric
+            # positions so the full tensor stays symmetric in j and k.
+            value = voigt[i, v] / (1.0 if v < 3 else 2.0)
+            full[i, j, k] = value
+            full[i, k, j] = value
+    return full
+
+
+def _fibonacci_sphere(n: int) -> np.ndarray:
+    """``n`` near-uniformly spaced unit vectors, deterministically."""
+    n = max(int(n), 1)
+    index = np.arange(n) + 0.5
+    phi = np.arccos(1.0 - 2.0 * index / n)
+    theta = np.pi * (1.0 + 5.0 ** 0.5) * index
+    return np.stack([np.cos(theta) * np.sin(phi),
+                     np.sin(theta) * np.sin(phi),
+                     np.cos(phi)], axis=1)
+
+
+@register_function(
+    aliases=["dielectric function", "optical absorption", "absorption "
+             "coefficient", "refractive index", "optical properties",
+             "epsilon"],
+    category="prop",
+    description="Deposit a frequency-dependent dielectric function and derive "
+                "the refractive index and absorption coefficient from it, on "
+                "the shared energy grid the rest of the object uses for curves.",
+    produces={"obsm": ["dielectric_real_{level}", "dielectric_imag_{level}",
+                       "absorption_{level}", "extinction_{level}"],
+              "obs": ["static_dielectric_{level}",
+                      "refractive_index_{level}"],
+              "uns": ["grids"], "levels": ["{level}"]},
+    examples=["mv.prop.dielectric(md, energies, eps_real, eps_imag)",
+              "mv.prop.dielectric(md, energies, eps1, eps2, level='pbe')"],
+    related=["mv.prop.slme", "mv.exp.attach", "mv.dft.read_outputs"],
+    notes="The absorption coefficient is derived rather than taken, because "
+          "alpha = 2 E k / (hbar c) is a definition and a dielectric function "
+          "that has been through it twice is a dielectric function nobody can "
+          "reconstruct. Storing epsilon and deriving alpha keeps the input "
+          "recoverable.\n\n"
+          "alpha is in m^-1, which is the unit mv.prop.slme expects and a "
+          "factor of 100 away from the cm^-1 that optics papers quote. The "
+          "static dielectric constant is epsilon_1 at the lowest energy on the "
+          "grid, so it is only the true zero-frequency limit if the grid "
+          "starts near zero.",
+)
+def dielectric(md: AnnData, energies, real, imag, level: str = "dft") -> None:
+    """Dielectric function and what follows from it. Deposits; returns ``None``."""
+    grid = np.asarray(energies, dtype=float)
+    eps1 = np.atleast_2d(np.asarray(real, dtype=float))
+    eps2 = np.atleast_2d(np.asarray(imag, dtype=float))
+    for name, block in (("real", eps1), ("imag", eps2)):
+        if block.shape != (md.n_obs, grid.size):
+            raise ValueError(
+                f"got {name} part of shape {block.shape}; expected "
+                f"({md.n_obs}, {grid.size}) — one row per material on the "
+                f"energy grid given")
+
+    modulus = np.sqrt(eps1 ** 2 + eps2 ** 2)
+    n = np.sqrt(np.maximum(modulus + eps1, 0.0) / 2.0)
+    k = np.sqrt(np.maximum(modulus - eps1, 0.0) / 2.0)
+
+    # alpha = 2 omega k / c, with omega = E / hbar and E in joules.
+    joules = grid * _ELEMENTARY_CHARGE
+    alpha = 2.0 * (joules / _HBAR) * k / _SPEED_OF_LIGHT
+
+    deposit_grid(md, "dielectric_real", level, eps1, grid, unit="eV")
+    deposit_grid(md, "dielectric_imag", level, eps2, grid, unit="eV")
+    deposit_grid(md, "extinction", level, k, grid, unit="eV")
+    deposit_grid(md, "absorption", level, alpha, grid, unit="eV",
+                 value_unit="m^-1")
+    md.obs[f"static_dielectric_{level}"] = eps1[:, 0]
+    md.obs[f"refractive_index_{level}"] = n[:, 0]
+    set_level(md, level, kind="dft", method="dielectric function",
+              reference=None, surrogate=False, license=None, uncertainty=None,
+              quantity="optics")
+    record(md, "prop.dielectric", level=level, n_points=int(grid.size))
+
+
+#: Physical constants, SI, CODATA 2018.
+_ELEMENTARY_CHARGE = 1.602176634e-19
+_HBAR = 1.054571817e-34
+_SPEED_OF_LIGHT = 299792458.0
+
+
+@register_function(
+    aliases=["slme", "solar efficiency", "photovoltaic efficiency",
+             "spectroscopic limited maximum efficiency", "solar absorber",
+             "shockley queisser"],
+    category="prop",
+    description="Spectroscopic limited maximum efficiency: the ceiling on a "
+                "single-junction solar cell made of each material, from its "
+                "absorption spectrum and its gap under the AM1.5G spectrum.",
+    requires={"obsm": ["absorption_{level}"], "uns": ["grids"],
+              "obs": ["band_gap_{level}"]},
+    produces={"obs": ["slme_{level}", "sq_limit_{level}"]},
+    prerequisites=["mv.prop.dielectric"],
+    examples=["mv.prop.slme(md, level='pbe')",
+              "mv.prop.slme(md, level='pbe', thickness=1e-6)"],
+    related=["mv.prop.dielectric", "mv.screen.rank", "mv.elec.band_features"],
+    notes="Returned as a **percentage**, matching how cell efficiencies are "
+          "quoted, and the unit is recorded so mv.utils.check_units can say so. "
+          "The Shockley-Queisser limit for the same gap is reported next to it: "
+          "SLME is always the smaller of the two, and the gap between them is "
+          "what the material's own absorption costs it. A material with a "
+          "perfect step absorption edge and no indirect gap reproduces "
+          "Shockley-Queisser exactly, peaking near 33% at 1.34 eV.\n\n"
+          "indirect_key names the column holding the indirect gap. Left unset, "
+          "the direct gap is used for both, which sets the radiative fraction "
+          "to one — that is the Shockley-Queisser assumption and it is "
+          "optimistic for any real indirect semiconductor, silicon most of all.",
+)
+def slme(md: AnnData, level: str = "dft", thickness: float = 5e-7,
+         temperature: float = 293.15, indirect_key: str | None = None) -> None:
+    """Spectroscopic limited maximum efficiency, in percent. Deposits."""
+    from pymatgen.analysis.solar.slme import slme as _slme
+
+    from ._core import grid_of
+
+    block = f"absorption_{level}"
+    if block not in md.obsm:
+        raise ValueError(
+            f"obsm[{block!r}] absent; run mv.prop.dielectric(md, energies, "
+            f"eps1, eps2, level={level!r}) first, which derives the absorption "
+            f"coefficient from the dielectric function")
+    gap_key = f"band_gap_{level}"
+    if gap_key not in md.obs:
+        raise ValueError(
+            f"obs[{gap_key!r}] absent; a solar efficiency needs a gap. "
+            f"mv.elec.band_features or mv.dft.read_dos deposits one.")
+
+    grid = grid_of(md, "absorption")
+    alpha = np.asarray(md.obsm[block], dtype=float)
+    direct = md.obs[gap_key].to_numpy(dtype=float)
+    indirect = (md.obs[indirect_key].to_numpy(dtype=float)
+                if indirect_key else direct)
+
+    efficiency = np.full(md.n_obs, np.nan)
+    ceiling = np.full(md.n_obs, np.nan)
+    for i in range(md.n_obs):
+        if not np.isfinite(direct[i]) or direct[i] <= 0:
+            continue
+        try:
+            efficiency[i] = float(_slme(grid, alpha[i], direct[i], indirect[i],
+                                        thickness=thickness,
+                                        temperature=temperature))
+            perfect = np.where(grid >= direct[i], 1e8, 0.0)
+            ceiling[i] = float(_slme(grid, perfect, direct[i], direct[i],
+                                     thickness=thickness,
+                                     temperature=temperature))
+        except Exception:
+            continue
+
+    md.obs[f"slme_{level}"] = efficiency
+    md.obs[f"sq_limit_{level}"] = ceiling
+    md.uns.setdefault("units", {})[f"slme_{level}"] = "percent"
+    md.uns["units"][f"sq_limit_{level}"] = "percent"
+    record(md, "prop.slme", level=level, thickness=thickness,
+           temperature=temperature)
+
+
 #: eV/angstrom^3 -> GPa
 _EV_PER_A3_TO_GPA = 160.21766208
 
@@ -869,5 +1265,6 @@ def compare_grids(md: AnnData, quantity: str, a: str, b: str) -> None:
 
 
 __all__ = ["xrd", "rdf", "elastic", "eos", "dimensionality", "phonon",
-           "free_energy",
+           "free_energy", "nmr", "efg", "piezoelectric", "dielectric",
+           "slme",
            "thermal_conductivity", "compare_grids"]

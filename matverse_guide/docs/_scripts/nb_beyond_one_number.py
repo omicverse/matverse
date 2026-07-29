@@ -212,7 +212,175 @@ mdata = mv.multi.to_mudata(md, sites)     # needs matverse[multi]
 ```
 
 Optional throughout. matverse's operations take `AnnData`, and the sites object
-is useful without ever being assembled.
+is useful without ever being assembled."""),
+
+    ("markdown", """\
+## A result computed somewhere else
+
+Everything so far, matverse computed. Plenty of the results a screen wants it
+cannot compute at all: a chemical shielding tensor, a piezoelectric tensor and
+a dielectric function all come out of a DFT code, and no cheap potential
+produces any of them.
+
+That is not a reason for the object to have nothing to say about them. The step
+*after* the calculation — reduce a tensor to the parameters a spectrum is
+described by, check it against the crystal symmetry, turn a dielectric function
+into an efficiency — is arithmetic with conventions in it, and conventions are
+exactly what gets a result quoted wrongly.
+
+So these functions take the computed quantity as an **argument**, the same way
+`mv.elec.bands` takes band structures and `mv.exp.attach` takes measured curves.
+
+### A tensor per atom
+
+NMR shielding is per-atom, so it lands on the sites axis. Here is a tensor with
+principal values 10, 20 and 60 — round numbers, so every convention has a hand
+answer."""),
+
+    ("code", """\
+shieldings = np.tile(np.diag([10.0, 20.0, 60.0]), (sites.n_obs, 1, 1))
+mv.prop.nmr(md, sites, shieldings, level="pbe")
+
+sites.obs[["material", "element", "shielding_iso_pbe",
+           "shielding_anisotropy_pbe", "shielding_asymmetry_pbe",
+           "shielding_span_pbe", "shielding_skew_pbe"]].head(4).round(3)"""),
+
+    ("markdown", """\
+`sigma_iso` is 30, the trace over three. `zeta` is 30, which is
+`sigma_33 - sigma_iso`. `eta` is 1/3, the span is 50 and the skew −0.6.
+
+Two conventions are reported because both are in use and **they disagree about
+what "anisotropy" means**: Haeberlen's `zeta` is `sigma_33 - sigma_iso`, while
+the reduced anisotropy most spectrometer software prints is 3/2 of it. Span and
+skew are the Herzfeld-Berger pair a sideband analysis returns. A single column
+called `anisotropy` would be wrong for half its readers.
+
+These are **shieldings**, not shifts — a shift is a shielding referenced to a
+standard compound, and it runs the other way in sign.
+
+The electric field gradient is the other half of a solid-state NMR experiment,
+and it sets the lineshape of every quadrupolar nucleus."""),
+
+    ("code", """\
+gradients = np.tile(np.diag([-1.0, -2.0, 3.0]), (sites.n_obs, 1, 1))
+mv.prop.efg(md, sites, gradients, level="pbe")
+
+sites.obs[["element", "efg_vzz_pbe", "efg_asymmetry_pbe",
+           "efg_coupling_pbe"]].head(4).round(3)"""),
+
+    ("markdown", """\
+The coupling constant is the only one of the three that needs to know which
+*nucleus* it is looking at — a quadrupole moment is a property of the isotope,
+not of the calculation — so it is looked up from the element on the site.
+
+### A tensor per material, checked against symmetry
+
+α-quartz is the piezoelectric everyone learns first. Its measured constants are
+d₁₁ = 2.3 pC/N and d₁₄ = −0.67 pC/N, and its point group 32 fixes the rest of
+the matrix."""),
+
+    ("code", """\
+from pymatgen.core import Lattice, Structure
+
+quartz = mv.data.from_structures([Structure.from_spacegroup(
+    "P3121", Lattice.hexagonal(4.913, 5.405), ["Si", "O"],
+    [[0.4697, 0.0, 0.0], [0.4135, 0.2669, 0.1191]])])
+mv.pp.describe(quartz)
+
+d11, d14 = 2.3, -0.67
+voigt = np.array([[[d11, -d11, 0, d14, 0, 0],
+                   [0, 0, 0, 0, -d14, -2 * d11],
+                   [0, 0, 0, 0, 0, 0]]])
+
+mv.prop.piezoelectric(quartz, voigt, level="exp")
+quartz.obs[["formula", "piezo_max_longitudinal_exp",
+            "piezo_symmetry_valid_exp"]].round(3)"""),
+
+    ("markdown", """\
+**2.30 pC/N**, recovered from the tensor without being told where to look. For
+class 32 the longitudinal response in the basal plane goes as `d11 cos(3θ)`, so
+its maximum over all directions *is* d₁₁ — which is why the maximum is the
+screening number rather than any single component. Components depend on how
+somebody oriented the cell; the maximum does not.
+
+`piezo_symmetry_valid` is the column to read first. Put the same tensor on a
+centrosymmetric crystal and it fails, because inversion symmetry forbids
+piezoelectricity outright:"""),
+
+    ("code", """\
+copper = mv.datasets.metals(["Cu"])
+mv.pp.describe(copper)
+mv.prop.piezoelectric(copper, voigt, level="bogus")
+
+bool(copper.obs["piezo_symmetry_valid_bogus"].iloc[0])"""),
+
+    ("markdown", """\
+`False` — and a non-zero piezoelectric tensor on an fcc metal is an error in the
+calculation, or a tensor paired with the wrong structure, rather than a
+discovery.
+
+### A spectrum per material, and what it is worth
+
+A dielectric function is a curve, so it goes where curves go. The absorption
+coefficient is **derived** from it rather than stored alongside it, because
+`α = 2Ek/ħc` is a definition and a spectrum that has been through it twice
+cannot be reconstructed."""),
+
+    ("code", """\
+energies = np.linspace(0.3, 4.0, 800)
+gaps = [1.34, 0.90, 2.50, 1.34, 1.34, 1.34, 1.34]
+
+# A model absorber: a step edge at the gap. The last four share a gap and
+# differ only in how strongly they absorb above it.
+strength = [6.0, 6.0, 6.0, 6.0, 0.5, 0.05, 0.005]
+eps1 = np.tile(4.0, (md.n_obs, energies.size))
+eps2 = np.stack([np.where(energies >= g, s, 0.0)
+                 for g, s in zip(gaps, strength)])
+
+mv.prop.dielectric(md, energies, eps1, eps2, level="pbe")
+md.obs["band_gap_pbe"] = gaps
+md.obsm["absorption_pbe"].shape"""),
+
+    ("code", """\
+mv.prop.slme(md, level="pbe", thickness=5e-7)
+
+md.obs[["band_gap_pbe", "slme_pbe", "sq_limit_pbe"]].round(2)"""),
+
+    ("markdown", """\
+Read the first three rows against the last four.
+
+Rows 0–2 differ only in **gap**, and `sq_limit` traces the Shockley-Queisser
+curve: 1.34 eV beats both 0.90 and 2.50, which is why 1.34 eV is quoted as the
+optimum for a single junction. Row 0 lands near 33%, the textbook limit — a
+model absorber with a step edge and no indirect gap *is* the Shockley-Queisser
+idealisation, so reproducing it is the calibration rather than a result.
+
+Rows 3–6 all have the **same gap** and therefore the same `sq_limit`, and
+wildly different `slme`. That spread is the whole reason this function exists.
+A screen ranked on band gap cannot tell those four apart — by that measure they
+are one candidate. They are not one candidate.
+
+```{note}
+`slme` is a **percentage**, and the unit is recorded rather than left to the
+reader; `mv.utils.check_units(md)` will say so. pymatgen's own `slme()` returns
+the same number with no unit in its docstring, which is precisely the kind of
+thing that becomes a factor of 100 three functions downstream.
+```
+
+An indirect gap costs efficiency on top of that, through the radiative fraction
+`exp(-(E_direct - E_indirect)/kT)`. Left unset, the direct gap is used for both,
+which is the optimistic Shockley-Queisser assumption:"""),
+
+    ("code", """\
+md.obs["gap_indirect_pbe"] = [g - 0.3 for g in gaps]
+mv.prop.slme(md, level="pbe", thickness=5e-7,
+             indirect_key="gap_indirect_pbe")
+
+md.obs[["band_gap_pbe", "gap_indirect_pbe", "slme_pbe"]].head(3).round(2)"""),
+
+    ("markdown", """\
+That is the penalty silicon pays, and the reason a direct-gap absorber a tenth
+as thick can outperform it.
 
 ## Experiment is a level of theory
 

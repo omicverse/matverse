@@ -1,5 +1,68 @@
 # Release notes
 
+## v0.1.19
+
+### The four functions that "would raise on every dataset"
+
+v0.1.18 left piezoelectric constants, NMR shieldings, SLME and XAS out, on the
+argument that they are ingestion rather than calculation and would therefore
+raise on any dataset a user could build. The first half of that was right and
+the conclusion did not follow, which the library itself already demonstrated:
+`mv.elec.bands` takes pymatgen band structures as an argument, `mv.exp.attach`
+takes measured curves, `mv.elec.transport` takes a bands object. Taking a result
+somebody else computed is a pattern matverse already has.
+
+What these functions do is the step *after* the calculation — reduce a tensor to
+the parameters a spectrum is described by, check it against the crystal
+symmetry, turn a dielectric function into an efficiency. That step is arithmetic
+with conventions in it, and conventions are what gets a result quoted wrongly.
+
+**`mv.prop.nmr`** and **`mv.prop.efg`** reduce per-atom shielding and electric
+field gradient tensors on the sites axis. Both Haeberlen and Herzfeld-Berger
+parameters are reported, because both are in use and they disagree about what
+"anisotropy" names: Haeberlen's ζ is σ₃₃ − σ_iso, and the reduced anisotropy
+most spectrometer software prints is 3/2 of it. A single column called
+`anisotropy` would be wrong for half its readers. The quadrupolar coupling
+constant is looked up from the element, since a quadrupole moment belongs to the
+isotope rather than to the calculation.
+
+**`mv.prop.piezoelectric`** checks a tensor against the structure's point group,
+converts it to the IEEE frame, and reports the largest longitudinal response
+over all directions. Validated on α-quartz: given the measured d₁₁ = 2.3 pC/N
+and d₁₄ = −0.67 pC/N, it recovers 2.297 pC/N without being told where to look,
+because for class 32 the basal-plane response goes as d₁₁cos 3θ and its maximum
+is d₁₁ itself. Components depend on how somebody oriented the cell; the maximum
+does not. The same tensor on fcc copper reports `piezo_symmetry_valid = False` —
+inversion symmetry forbids piezoelectricity, so a non-zero tensor there is an
+error rather than a discovery.
+
+**`mv.prop.dielectric`** and **`mv.prop.slme`** take a dielectric function onto
+the existing grid convention, derive the absorption coefficient from it
+(α = 2Ek/ħc — derived, so ε stays recoverable), and compute the spectroscopic
+limited maximum efficiency under AM1.5G. Calibrated against Shockley-Queisser: a
+step absorption edge with no indirect gap gives 33.94% at a 1.34 eV gap, and the
+limit falls away on both sides.
+
+SLME is reported **as a percentage with the unit recorded**. pymatgen's `slme()`
+returns the same number with no unit in its docstring, which is the kind of
+thing that becomes a factor of 100 three functions downstream.
+
+The reason to compute it at all shows up in one table: four model absorbers with
+the *same* 1.34 eV gap and the same Shockley-Queisser ceiling of 33.94% score
+33.94, 30.79, 7.61 and 0.86. A screen ranked on band gap cannot tell them apart.
+
+### XAS, and what is actually left out
+
+XAS did not get a function, and this time the reason survives inspection: an XAS
+spectrum is a curve on an energy grid, which is what `uns['grids']` and an
+`obsm` block already are. `mv.exp.attach(md, 'xas', spectra, energies)` stores
+one today, and `mv.prop.compare_grids` compares a measured edge against a
+computed one. A wrapper would add a name, not a capability.
+
+What genuinely remains outside is generating these quantities, which needs a DFT
+code, and reading them back from specific output formats — the boundary
+`mv.dft` already draws.
+
 ## v0.1.18
 
 ### `mv.calc.relax` never moved the lattice

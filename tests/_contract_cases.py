@@ -159,6 +159,53 @@ def relaxed_metal():
     return md
 
 
+def quartz():
+    """alpha-quartz, the textbook piezoelectric and a non-centrosymmetric one."""
+    from pymatgen.core import Lattice, Structure
+    structure = Structure.from_spacegroup(
+        "P3121", Lattice.hexagonal(4.913, 5.405), ["Si", "O"],
+        [[0.4697, 0.0, 0.0], [0.4135, 0.2669, 0.1191]])
+    md = mv.data.from_structures([structure])
+    mv.pp.describe(md)
+    return md
+
+
+#: alpha-quartz in Voigt form, pC/N, from the measured d11 and d14.
+QUARTZ_PIEZO = np.array([[[2.3, -2.3, 0.0, -0.67, 0.0, 0.0],
+                          [0.0, 0.0, 0.0, 0.0, 0.67, -4.6],
+                          [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]]])
+
+#: A model absorber: constant real part, a step edge in the imaginary part.
+OPTICS_GRID = np.linspace(0.3, 4.0, 400)
+
+
+def absorbing():
+    """Three model absorbers with gaps either side of the SQ maximum."""
+    md = mv.datasets.metals(["Cu", "Al", "Ni"])
+    mv.pp.describe(md)
+    gaps = [1.34, 1.10, 2.00]
+    eps1 = np.tile(4.0, (md.n_obs, OPTICS_GRID.size))
+    eps2 = np.stack([np.where(OPTICS_GRID >= g, 6.0, 0.0) for g in gaps])
+    mv.prop.dielectric(md, OPTICS_GRID, eps1, eps2, level="pbe")
+    md.obs["band_gap_pbe"] = gaps
+    return md
+
+
+def sited_metal():
+    md = mv.datasets.metals(["Cu"])
+    mv.pp.describe(md)
+    return md, mv.multi.sites(md)
+
+
+def shielding_tensors(n):
+    """Principal values 10, 20, 60 — hand-checkable in every convention."""
+    return np.tile(np.diag([10.0, 20.0, 60.0]), (n, 1, 1))
+
+
+def gradient_tensors(n):
+    return np.tile(np.diag([-1.0, -2.0, 3.0]), (n, 1, 1))
+
+
 def magnetic():
     md = mv.datasets.metals(["Ni"])
     mv.pp.describe(md)
@@ -359,6 +406,8 @@ def cases(tmp):
     orderings = mv.mag.orderings(magnetic(), max_orderings=2)
     mv.calc.energy(orderings, level="emt")
 
+    nmr_md, nmr_sites = sited_metal()
+
     return [
         # mv.data — a constructor deposits on the object it returns
         (mv.data.from_structures, lambda: [s.copy() for s in STRUCTURES],
@@ -446,6 +495,15 @@ def cases(tmp):
          {"level": "emt", "source": "relaxed_emt",
           "scales": [0.96, 0.98, 1.0, 1.02, 1.04]}),
         (mv.prop.dimensionality, described, (), {}),
+        (mv.prop.piezoelectric, quartz, (QUARTZ_PIEZO,), {"level": "exp"}),
+        (mv.prop.dielectric, described,
+         (OPTICS_GRID, np.tile(4.0, (3, OPTICS_GRID.size)),
+          np.tile(1.0, (3, OPTICS_GRID.size))), {"level": "pbe"}),
+        (mv.prop.slme, absorbing, (), {"level": "pbe", "thickness": 5e-7}),
+        (mv.prop.nmr, lambda: nmr_md, (nmr_sites, shielding_tensors(
+            nmr_sites.n_obs)), {"level": "pbe"}),
+        (mv.prop.efg, lambda: nmr_md, (nmr_sites, gradient_tensors(
+            nmr_sites.n_obs)), {"level": "pbe"}),
 
         # mv.thermo
         (mv.thermo.reaction, with_alni, (["Al", "Ni"], ["AlNi"]),
