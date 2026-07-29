@@ -59,6 +59,12 @@ WRAPPED: Dict[str, List[str]] = {
     "analysis.dimensionality": ["mv.prop.dimensionality"],
     "analysis.eos": ["mv.prop.eos", "mv.prop.quasiharmonic"],
     "analysis.cost": ["mv.prop.cost"],
+    "analysis.structure_prediction.substitution_probability":
+        ["mv.gen.predict_substitutions"],
+    "analysis.structure_prediction.dopant_predictor":
+        ["mv.gen.predict_dopants"],
+    "analysis.structure_prediction.volume_predictor":
+        ["mv.pp.predict_volume"],
     "analysis.hhi": ["mv.prop.supply_risk"],
     "analysis.quasiharmonic": ["mv.prop.quasiharmonic"],
     "analysis.diffraction.neutron": ["mv.prop.neutron"],

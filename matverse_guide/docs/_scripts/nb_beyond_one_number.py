@@ -608,6 +608,62 @@ GdNiSn₄ and LuNiSn₄, despite both being built from known motifs — current 
 recombine compositions within known structural families. A high novelty rate
 measured against a database does not contradict that.
 
+### Where the candidates come from in the first place
+
+`mv.gen.substitute` enumerates the swaps you name. `mv.gen.predict_substitutions`
+ranks the swaps you did not think of, from the data-mined ionic substitution
+model of Hautier et al. — how often two species replace one another across the
+ICSD, rather than whether their radii match.
+
+It needs **oxidation states**, because the model is defined over ionic species:
+Fe²⁺ and Fe³⁺ substitute differently and that distinction is the whole point."""),
+
+    ("code", """\
+cathode = mv.datasets.load("battery_cathodes")[:1].copy()
+mv.pp.describe(cathode)
+mv.transform.oxidation_states(cathode)
+
+proposed = mv.gen.predict_substitutions(cathode, source="oxidized", n=8)
+mv.pp.describe(proposed)
+proposed.obs[["parent", "substitution", "substitution_probability",
+              "formula"]].round(5)"""),
+
+    ("markdown", """\
+From LiFePO₄ it reaches **LiVPO₄** and **LiTiPO₄** — both real olivine
+analogues — without being told anything about olivines. The probability is a
+prior from what has been made before; it says nothing about whether the
+substitution is stable in this structure, which is what the hull is for.
+
+The result is an ordinary materials object, so the whole pipeline runs on it:
+`mv.pp.qc`, `mv.calc.relax`, `mv.thermo.hull`.
+
+Doping is the same statistics asked a narrower question:"""),
+
+    ("code", """\
+mv.gen.predict_dopants(cathode, source="oxidized", n=5)
+cathode.obs[["name", "n_type_dopant", "n_type_probability",
+             "p_type_dopant", "p_type_probability"]].round(4)"""),
+
+    ("markdown", """\
+Fluorine comes out as the n-type choice, which is the doping strategy LiFePO₄ is
+actually treated with. n-type versus p-type here is arithmetic on oxidation
+states — the dopant carries more charge than the site it replaces, or less — not
+a calculation of where the level lands. Whether it is shallow, soluble or
+compensated is `mv.thermo.defect_formation`'s question.
+
+A candidate built by substitution keeps the cell it was built from, which can be
+several percent from where the new composition wants to sit. Starting a
+relaxation there costs steps and can land in a different minimum:"""),
+
+    ("code", """\
+mv.pp.predict_volume(proposed)
+proposed.obs[["formula", "volume", "predicted_volume", "volume_scale"]].round(3)"""),
+
+    ("markdown", """\
+No calculator involved — the prediction comes from tabulated bond lengths — and
+`volume_scale` records how far the cell moved, so a suspicious rescaling is
+visible rather than silent.
+
 ```{seealso}
 [Models and campaigns](models_and_campaigns.ipynb) covers the other half:
 predicting what you have not computed, and choosing what to compute next.

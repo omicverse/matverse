@@ -1,5 +1,40 @@
 # Release notes
 
+## v0.1.22
+
+Where the candidates come from. **63 of 162 in-scope pymatgen modules, 38.9%**,
+up from 37.0%.
+
+Every other namespace assumes a list of candidates already exists. These three
+make it, from the statistics of what has been synthesised rather than from a
+calculation.
+
+**`mv.gen.predict_substitutions`** ranks the swaps you did not think of, using
+the data-mined ionic substitution model of Hautier et al. — how often two
+species replace one another across the ICSD, rather than whether their radii
+match. From LiFePO₄ it reaches LiVPO₄ and LiTiPO₄, both real olivine analogues,
+without being told anything about olivines.
+
+It needs oxidation states and refuses without them, because the model is defined
+over ionic species: Fe²⁺ and Fe³⁺ substitute differently and that distinction is
+the point. A probability here is a prior from what has been made before; it says
+nothing about stability in this structure, which is what the hull is for.
+
+**`mv.gen.predict_dopants`** asks the same statistics a narrower question and
+gets fluorine as the n-type choice for LiFePO₄ — the doping strategy that
+material is actually treated with. n-type versus p-type is arithmetic on
+oxidation states, not a calculation of where the level lands; the top choice
+goes to `obs` and the full ranking stays in `uns`, because the second and third
+are usually the interesting ones.
+
+**`mv.pp.predict_volume`** predicts the equilibrium volume from tabulated bond
+lengths, within 3% on three published cathodes, and deposits a rescaled variant.
+A candidate built by substitution keeps the cell it was built from, which can be
+several percent from where the new composition wants to sit — starting a
+relaxation there costs steps and can land in a different minimum.
+`obs['volume_scale']` records how far the cell moved, so a suspicious rescaling
+is visible rather than silent.
+
 ## v0.1.21
 
 Four more of the gaps the coverage map named. **60 of 162 in-scope pymatgen

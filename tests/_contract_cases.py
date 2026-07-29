@@ -175,6 +175,14 @@ def oxides():
     return md
 
 
+def oxidized():
+    """A real cathode with oxidation states, which the prediction model needs."""
+    md = mv.datasets.load("battery_cathodes")[:1].copy()
+    mv.pp.describe(md)
+    mv.transform.oxidation_states(md)
+    return md
+
+
 def quartz():
     """alpha-quartz, the textbook piezoelectric and a non-centrosymmetric one."""
     from pymatgen.core import Lattice, Structure
@@ -491,6 +499,11 @@ def cases(tmp):
         (mv.pp.defects, described, (),
          {"kinds": ("vacancy",), "returns": "new"}),
         (mv.pp.filter_elements, described, (), {"returns": "new"}),
+        (mv.pp.predict_volume, described, (), {}),
+        (mv.gen.predict_dopants, oxidized, (),
+         {"source": "oxidized", "n": 2}),
+        (mv.gen.predict_substitutions, oxidized, (),
+         {"source": "oxidized", "n": 3, "returns": "new"}),
         (mv.pp.filter_materials, qc_flagged, (), {"returns": "new"}),
 
         # mv.calc
