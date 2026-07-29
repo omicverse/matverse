@@ -565,4 +565,179 @@ def references_from_mp(elements, api_key: str | None = None):
 __all__ = ["hull", "reaction", "chempot_limits", "pourbaix",
            "defect_formation",
            "references_from_mp",
+           "corrections", "CORRECTION_SCHEMES",
            "LevelMismatch"]
+
+
+#: The correction schemes pymatgen ships, by the name matverse dispatches on.
+CORRECTION_SCHEMES = {
+    "mp2020": ("pymatgen.entries.compatibility",
+               "MaterialsProject2020Compatibility",
+               "Materials Project 2020 corrections"),
+    "mp2020_aqueous": ("pymatgen.entries.compatibility",
+                       "MaterialsProjectAqueousCompatibility",
+                       "MP 2020 corrections with the aqueous reference"),
+    "mp_legacy": ("pymatgen.entries.compatibility",
+                  "MaterialsProjectCompatibility",
+                  "the pre-2020 Materials Project corrections"),
+    "mit": ("pymatgen.entries.compatibility", "MITCompatibility",
+            "the MIT parameter set"),
+}
+
+
+@register_function(
+    aliases=["corrections", "energy corrections", "mp2020", "anion correction",
+             "hubbard correction", "compatibility", "correct energies",
+             "mixing scheme"],
+    category="thermo",
+    description="Apply the Materials Project energy corrections to a computed "
+                "energy and deposit the result as its own level of theory, so "
+                "a corrected and an uncorrected energy are never the same "
+                "column.",
+    requires={"obs": ["energy_{level}"], "structures": ["{source}"]},
+    produces={"obs": ["energy_{level}-{scheme}",
+                      "energy_per_atom_{level}-{scheme}",
+                      "correction_{level}-{scheme}",
+                      "correction_per_atom_{level}-{scheme}",
+                      "run_type_{level}-{scheme}"],
+              "levels": ["{level}-{scheme}"], "uns": ["corrections"]},
+    prerequisites=["mv.calc.energy"],
+    dispatch="scheme= selects the correction set; see mv.thermo."
+             "CORRECTION_SCHEMES",
+    examples=["mv.thermo.corrections(md, level='pbe')",
+              "mv.thermo.corrections(md, level='pbe', run_type='GGA+U')",
+              "mv.thermo.corrections(md, level='pbe', scheme='mp_legacy')"],
+    related=["mv.thermo.hull", "mv.pp.harmonize", "mv.calc.energy"],
+    notes="A raw GGA energy and a corrected one are different quantities, so "
+          "the corrected energy becomes a new **level** — 'pbe' in, "
+          "'pbe-mp2020' out — rather than overwriting the column it came from. "
+          "That is the same rule that keeps emt and pbe apart, applied one step "
+          "further along, and it means a hull built on the wrong one is a "
+          "visible mistake rather than a silent one.\n\n"
+          "The corrections are large enough that ignoring them is not a small "
+          "error: Fe2O3 moves by 6.6 eV per formula unit, of which 2.1 eV is "
+          "the oxide anion correction and 4.5 eV the +U correction on iron. "
+          "Energies fetched through mv.data.from_mp arrive **already "
+          "corrected**; energies you computed yourself and read back through "
+          "mv.dft.read_outputs do not. Mixing the two on one hull is the error "
+          "this function exists to make impossible to make quietly.\n\n"
+          "run_type decides whether the +U corrections apply at all. Left "
+          "unset it is inferred as GGA+U when the structure contains an "
+          "element MP applies a U to together with oxygen or fluorine, which "
+          "is MP's own rule, and the inference is recorded next to the result."
+          "\n\n"
+          "The produces slots interpolate level and scheme rather than "
+          "key_added, because those are the two parameters the default output "
+          "name is built from and a template naming key_added resolves to "
+          "nothing on the call everybody makes. Passing key_added overrides "
+          "the name and the claim with it.",
+)
+def corrections(md: AnnData, level: str = "pbe", scheme: str = "mp2020",
+                source: str = "input", run_type: str | None = None,
+                hubbards: dict | None = None,
+                key_added: str | None = None) -> None:
+    """Corrected energies as a new level of theory. Deposits; returns ``None``."""
+    import importlib
+
+    from ._core import set_level
+    from pymatgen.entries.computed_entries import ComputedEntry
+
+    key = str(scheme).strip().lower()
+    if key not in CORRECTION_SCHEMES:
+        raise ValueError(
+            f"unknown scheme {scheme!r}; known: {sorted(CORRECTION_SCHEMES)}. "
+            f"Each is described in mv.thermo.CORRECTION_SCHEMES.")
+    module_name, class_name, description = CORRECTION_SCHEMES[key]
+    energy_key = f"energy_{level}"
+    if energy_key not in md.obs:
+        raise ValueError(
+            f"obs[{energy_key!r}] absent; there is nothing to correct. Run "
+            f"mv.calc.energy or mv.dft.read_outputs at level={level!r} first.")
+
+    target = key_added or f"{level}-{key}"
+    compatibility = getattr(importlib.import_module(module_name), class_name)(
+        check_potcar=False)
+
+    raw = md.obs[energy_key].to_numpy(dtype=float)
+    corrected = np.full(md.n_obs, np.nan)
+    delta = np.full(md.n_obs, np.nan)
+    per_atom = np.full(md.n_obs, np.nan)
+    delta_per_atom = np.full(md.n_obs, np.nan)
+    inferred = np.empty(md.n_obs, dtype=object)
+    failed = []
+
+    for i, structure in enumerate(structures(md, source)):
+        if not np.isfinite(raw[i]):
+            inferred[i] = ""
+            continue
+        kind = run_type or _infer_run_type(structure)
+        u_values = (dict(hubbards) if hubbards is not None
+                    else _default_hubbards(structure))
+        inferred[i] = kind
+        entry = ComputedEntry(
+            structure.composition, float(raw[i]),
+            parameters={"run_type": kind,
+                        "is_hubbard": kind.endswith("+U"),
+                        "hubbards": u_values if kind.endswith("+U") else {},
+                        "potcar_symbols": []})
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                processed = compatibility.process_entries(
+                    [entry], clean=True, on_error="raise")
+        except Exception as exc:
+            failed.append(f"{structure.composition.reduced_formula}: {exc}")
+            continue
+        if not processed:
+            failed.append(f"{structure.composition.reduced_formula}: the "
+                          f"scheme rejected this entry")
+            continue
+        n = len(structure)
+        corrected[i] = float(processed[0].energy)
+        delta[i] = float(processed[0].correction)
+        per_atom[i] = corrected[i] / n
+        delta_per_atom[i] = delta[i] / n
+
+    md.obs[f"energy_{target}"] = corrected
+    md.obs[f"energy_per_atom_{target}"] = per_atom
+    md.obs[f"correction_{target}"] = delta
+    md.obs[f"correction_per_atom_{target}"] = delta_per_atom
+    md.obs[f"run_type_{target}"] = inferred.astype(str)
+    md.uns.setdefault("corrections", {})[target] = {
+        "scheme": key, "from_level": level, "source": source,
+        "n_corrected": int(np.isfinite(delta).sum()),
+        "n_failed": len(failed),
+        "failures": failed[:20],
+    }
+    set_level(md, target, kind="corrected", method=description,
+              reference=level, surrogate=False, license=None,
+              uncertainty=None, scheme=key, corrected_from=level)
+    record(md, "thermo.corrections", level=level, scheme=key,
+           key_added=target)
+
+
+#: Elements the Materials Project applies a Hubbard U to, and with what value,
+#: read from MP's own VASP input set rather than copied.
+def _mp_hubbards() -> dict:
+    from pymatgen.io.vasp.sets import MPRelaxSet
+    return MPRelaxSet.CONFIG.get("INCAR", {}).get("LDAUU", {})
+
+
+def _default_hubbards(structure) -> dict:
+    """MP's U values for the elements in this structure, by its own rule.
+
+    MP applies +U only when an oxide or fluoride anion is present, and only to
+    the transition metals in its table. Guessing differently from MP means the
+    corrections are applied to a calculation MP would not have run.
+    """
+    table = _mp_hubbards()
+    symbols = {site.specie.symbol for site in structure
+               if hasattr(site, "specie")}
+    for anion in ("O", "F"):
+        if anion in symbols and anion in table:
+            return {s: table[anion][s] for s in symbols if s in table[anion]}
+    return {}
+
+
+def _infer_run_type(structure) -> str:
+    return "GGA+U" if _default_hubbards(structure) else "GGA"

@@ -159,6 +159,22 @@ def relaxed_metal():
     return md
 
 
+def oxides():
+    """An oxide MP applies +U to, one it does not, and a metal."""
+    from pymatgen.core import Lattice, Structure
+    def cell(symbols):
+        return Structure(Lattice.cubic(5.0), symbols,
+                         [[0, 0, 0], [.5, .5, .5], [.25, .25, .25],
+                          [.5, 0, 0], [0, .5, 0]][:len(symbols)])
+    md = mv.data.from_structures([
+        cell(["Fe", "Fe", "O", "O", "O"]),
+        cell(["Al", "Al", "O", "O", "O"]),
+        cell(["Cu", "Cu"])])
+    mv.pp.describe(md)
+    md.obs["energy_pbe"] = [-50.0, -60.0, -10.0]
+    return md
+
+
 def quartz():
     """alpha-quartz, the textbook piezoelectric and a non-centrosymmetric one."""
     from pymatgen.core import Lattice, Structure
@@ -495,6 +511,8 @@ def cases(tmp):
          {"level": "emt", "source": "relaxed_emt",
           "scales": [0.96, 0.98, 1.0, 1.02, 1.04]}),
         (mv.prop.dimensionality, described, (), {}),
+        (mv.thermo.corrections, oxides, (), {"level": "pbe",
+                                             "scheme": "mp2020"}),
         (mv.prop.piezoelectric, quartz, (QUARTZ_PIEZO,), {"level": "exp"}),
         (mv.prop.dielectric, described,
          (OPTICS_GRID, np.tile(4.0, (3, OPTICS_GRID.size)),

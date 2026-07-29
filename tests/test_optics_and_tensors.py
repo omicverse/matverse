@@ -308,3 +308,89 @@ class TestSolarEfficiency:
                            np.tile(1.0, (1, 200)), level="pbe")
         with pytest.raises(ValueError, match="needs a gap"):
             mv.prop.slme(md, level="pbe")
+
+
+class TestEnergyCorrections:
+    """The corrections that decide whether a hull is right.
+
+    The numbers are the published MP2020 values, so they can be checked without
+    running anything: the oxide anion correction is -0.687 eV per oxygen, and
+    the +U correction applies only where MP itself would have applied a U.
+    """
+
+    #: MP2020, eV per oxygen atom.
+    OXIDE_ANION = -0.687
+
+    @staticmethod
+    def _cell(symbols):
+        from pymatgen.core import Lattice, Structure
+        return Structure(Lattice.cubic(5.0), symbols,
+                         [[0, 0, 0], [.5, .5, .5], [.25, .25, .25],
+                          [.5, 0, 0], [0, .5, 0]][:len(symbols)])
+
+    @pytest.fixture(scope="class")
+    def corrected(self):
+        md = mv.data.from_structures([
+            self._cell(["Fe", "Fe", "O", "O", "O"]),
+            self._cell(["Al", "Al", "O", "O", "O"]),
+            self._cell(["Cu", "Cu"])])
+        mv.pp.describe(md)
+        md.obs["energy_pbe"] = [-50.0, -60.0, -10.0]
+        mv.thermo.corrections(md, level="pbe")
+        return md
+
+    def test_an_oxide_with_no_u_gets_only_the_anion_correction(self, corrected):
+        """Al2O3: three oxygens, no transition metal MP applies a U to."""
+        by_formula = dict(zip(corrected.obs["formula"],
+                              corrected.obs["correction_pbe-mp2020"]))
+        assert by_formula["Al2O3"] == pytest.approx(3 * self.OXIDE_ANION,
+                                                    abs=0.01)
+
+    def test_an_elemental_metal_gets_nothing(self, corrected):
+        by_formula = dict(zip(corrected.obs["formula"],
+                              corrected.obs["correction_pbe-mp2020"]))
+        assert by_formula["Cu"] == pytest.approx(0.0)
+
+    def test_iron_oxide_gets_the_anion_and_the_u_correction(self, corrected):
+        """Fe2O3 moves by 6.6 eV, of which 2.1 is the anion term and the rest
+        the +U term on two irons. Ignoring this is not a small error."""
+        by_formula = dict(zip(corrected.obs["formula"],
+                              corrected.obs["correction_pbe-mp2020"]))
+        assert by_formula["Fe2O3"] < 3 * self.OXIDE_ANION - 3.0
+        assert by_formula["Fe2O3"] == pytest.approx(-6.57, abs=0.1)
+
+    def test_the_run_type_is_inferred_by_mps_own_rule(self, corrected):
+        """+U where MP would use it — a transition metal in its table together
+        with oxygen or fluorine — and plain GGA otherwise."""
+        by_formula = dict(zip(corrected.obs["formula"],
+                              corrected.obs["run_type_pbe-mp2020"]))
+        assert by_formula["Fe2O3"] == "GGA+U"
+        assert by_formula["Al2O3"] == "GGA"
+        assert by_formula["Cu"] == "GGA"
+
+    def test_the_corrected_energy_is_a_new_level(self, corrected):
+        """A raw energy and a corrected one are different quantities, so the
+        corrected one gets its own level rather than overwriting the column it
+        came from — the same rule that keeps emt and pbe apart."""
+        assert "energy_pbe" in corrected.obs
+        assert "energy_pbe-mp2020" in corrected.obs
+        info = mv.level_info(corrected, "pbe-mp2020")
+        assert info["kind"] == "corrected"
+        assert info["reference"] == "pbe"
+
+    def test_the_correction_is_the_difference(self, corrected):
+        raw = corrected.obs["energy_pbe"].to_numpy(dtype=float)
+        new = corrected.obs["energy_pbe-mp2020"].to_numpy(dtype=float)
+        delta = corrected.obs["correction_pbe-mp2020"].to_numpy(dtype=float)
+        assert new - raw == pytest.approx(delta, abs=1e-6)
+
+    def test_an_unknown_scheme_is_refused(self, corrected):
+        with pytest.raises(ValueError, match="unknown scheme"):
+            mv.thermo.corrections(corrected.copy(), level="pbe",
+                                  scheme="handwaving")
+
+    def test_it_refuses_without_an_energy(self):
+        md = mv.datasets.metals(["Cu"])
+        mv.pp.describe(md)
+        with pytest.raises(ValueError, match="nothing to correct"):
+            mv.thermo.corrections(md, level="pbe")

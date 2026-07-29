@@ -1,5 +1,77 @@
 # Release notes
 
+## v0.1.20
+
+### "Is pymatgen covered?" now has a number that cannot drift
+
+Asked directly, the honest answer was no — and the figures quoted earlier in
+this branch were wrong. "15 of 48 analysis modules" counted only the top level
+of `pymatgen.analysis`, where the real tree has 110 leaves. Three pymatgen
+add-ons were installed, counted toward coverage, and never wired into a single
+code path.
+
+`matverse._coverage` classifies every public pymatgen module into one of five
+buckets — WRAPPED, NATIVE, INTERNAL, NOT_A_GOAL, TODO — and
+`tests/test_pymatgen_coverage.py` enforces it:
+
+- an unclassified module fails the test, so TODO cannot quietly shrink
+- a module claimed as WRAPPED must actually be **reached by an import**,
+  resolved at runtime rather than matched textually
+- a matverse function named in the map must actually be registered
+- the covered count may not fall
+
+**56 of 162 in-scope modules, 34.6%.** 107 gaps are listed by name.
+
+Three things the enforcement caught immediately, each of which would have
+inflated the number:
+
+**22 modules are re-export shims.** pymatgen 2026.5 moved much of `analysis`
+into `core`, leaving three-line stubs behind. Counting both names doubles the
+denominator *and* files the real module under TODO while the stub reads as
+covered. Shims are detected by reading the source, so the next reorganisation is
+absorbed rather than mismeasured.
+
+**A package `__init__.py` can hold real API.** pymatgen's correction schemes live
+in `analysis/compatibility/__init__.py`; skipping package inits made the classes
+matverse calls invisible to the count.
+
+**The two supported pymatgen versions ship different trees** — 162 modules in
+scope on 2026.5, 134 on 2025.10 — so a count from one is not a ratchet for the
+other. The number is reported on both and asserted on one.
+
+### `mv.thermo.corrections` — the gap that made hulls wrong
+
+The largest real gap, and it affects correctness rather than convenience.
+Materials Project energies arrive **already corrected**; energies you computed
+yourself and read back through `mv.dft.read_outputs` do not. Putting them on one
+hull is the same class of error as mixing EMT with PBE, except that nothing
+about the column names says so.
+
+`mv.thermo.corrections` applies the published schemes — MP2020, the aqueous
+variant, the legacy set, MIT — and deposits the result as **its own level**:
+`energy_pbe` in, `energy_pbe-mp2020` out, with `uns['levels']['pbe-mp2020']`
+recording the scheme and what it was corrected from. That is the level-of-theory
+rule applied one step further along, and it makes a hull built on the wrong
+column a visible mistake.
+
+The magnitudes are not small. Against the ~0.05 eV/atom threshold a screen calls
+"close to the hull":
+
+| | correction | why |
+|---|---|---|
+| Al₂O₃ | −2.06 eV | 3 × −0.687, the oxide anion correction, once per oxygen |
+| Fe₂O₃ | −6.57 eV | the same anion term plus 4.5 eV of +U correction on two irons |
+| Cu | 0 | an elemental metal has no anion to correct and no U |
+
+`run_type` is inferred by MP's own rule — a transition metal from its table
+together with oxygen or fluorine — and recorded next to the result rather than
+assumed.
+
+The `produces` slots interpolate `level` and `scheme` rather than `key_added`,
+because those are the two parameters the default output name is built from. A
+template naming `key_added` resolves to nothing on the call everybody makes,
+which is what probing the claim showed.
+
 ## v0.1.19
 
 ### The four functions that "would raise on every dataset"
