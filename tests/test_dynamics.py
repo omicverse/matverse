@@ -11,6 +11,7 @@ which.
 from __future__ import annotations
 
 import numpy as np
+import pandas as pd
 import pytest
 
 import matverse as mv
@@ -355,6 +356,145 @@ class TestSurfaces:
         bare = mv.data.from_structures(mv.structures(metals))
         with pytest.raises(ValueError, match="mv.calc.energy"):
             mv.surf.surface_energy(facets, bulk=bare, level="emt")
+
+class TestOffStoichiometricSurfaces:
+    """A symmetrized slab of an ordered alloy is usually not the bulk formula.
+
+    ``E_slab - N * e_bulk`` then leaves the energy of the surplus atoms in the
+    number, which is not a surface energy and is not even close to one. These
+    pin that the plain function refuses rather than answers, and that the
+    chemical-potential version answers correctly.
+    """
+
+    @pytest.fixture
+    def cu3au(self):
+        from pymatgen.core import Lattice, Structure
+        bulk = Structure.from_spacegroup(
+            "Pm-3m", Lattice.cubic(3.75), ["Au", "Cu"],
+            [[0, 0, 0], [0.5, 0.5, 0]])
+        md = mv.data.from_structures(
+            [bulk], pd.DataFrame(index=["Cu3Au"]))
+        mv.calc.energy(md, level="emt")
+        return md
+
+    @pytest.fixture
+    def reservoirs(self):
+        from pymatgen.core import Lattice, Structure
+        fcc = [[0, 0, 0], [0, .5, .5], [.5, 0, .5], [.5, .5, 0]]
+        refs = mv.data.from_structures(
+            [Structure(Lattice.cubic(a), [e] * 4, fcc)
+             for e, a in (("Cu", 3.61), ("Au", 4.08))],
+            pd.DataFrame(index=["Cu", "Au"]))
+        mv.calc.energy(refs, level="emt")
+        return refs
+
+    @pytest.fixture
+    def symmetrized(self, cu3au):
+        cut = mv.surf.slabs(cu3au, max_index=1, min_slab=8.0, min_vacuum=10.0,
+                            symmetrize=True)
+        mv.calc.energy(cut, level="emt")
+        return cut
+
+    def test_symmetrize_really_does_break_stoichiometry(self, symmetrized):
+        """The premise of the rest of this class. If pymatgen ever starts
+        preserving composition under symmetrize, these tests go quiet and this
+        one says why."""
+        off = [s for s in mv.structures(symmetrized, "input")
+               if abs(s.composition["Cu"] / s.composition["Au"] - 3.0) > 1e-6]
+        assert off, "expected symmetrize=True to delete sites off-stoichiometry"
+
+    def test_plain_surface_energy_refuses_off_stoichiometric_slabs(
+            self, cu3au, symmetrized):
+        with pytest.warns(UserWarning, match="surface_energy_chempot"):
+            mv.surf.surface_energy(symmetrized, bulk=cu3au, level="emt")
+        off = symmetrized.obs["surface_energy_emt_off_stoichiometry"].to_numpy(bool)
+        gamma = symmetrized.obs["surface_energy_emt"].to_numpy(dtype=float)
+        assert off.any() and np.isnan(gamma[off]).all()
+        assert np.isfinite(gamma[~off]).all()
+
+    def test_chempot_version_agrees_where_both_are_defined(
+            self, cu3au, symmetrized, reservoirs):
+        """The stoichiometric slab has one surface energy, and two independent
+        routes to it must land on the same number."""
+        with pytest.warns(UserWarning):
+            mv.surf.surface_energy(symmetrized, bulk=cu3au, level="emt")
+        plain = symmetrized.obs["surface_energy_emt"].to_numpy(dtype=float)
+        mv.surf.surface_energy_chempot(symmetrized, bulk=cu3au,
+                                       refs=reservoirs, level="emt",
+                                       key_added="gamma_mu")
+        viac = symmetrized.obs["gamma_mu"].to_numpy(dtype=float)
+        both = np.isfinite(plain)
+        assert both.any()
+        assert np.allclose(plain[both], viac[both], rtol=1e-9)
+        assert np.isfinite(viac).all(), "chempot route should answer everywhere"
+
+    def test_opposite_terminations_carry_opposite_excess(
+            self, cu3au, symmetrized, reservoirs):
+        """Cutting one plane two ways makes one face Au-rich and the other
+        Au-poor by the same amount; the excesses must sum to zero."""
+        mv.surf.surface_energy_chempot(symmetrized, bulk=cu3au,
+                                       refs=reservoirs, level="emt")
+        frame = symmetrized.obs
+        excess = frame["surface_excess_Au_emt"].to_numpy(dtype=float)
+        for miller in frame["miller"].unique():
+            pair = excess[(frame["miller"] == miller).to_numpy()]
+            pair = pair[np.isfinite(pair)]
+            if len(pair) == 2:
+                assert abs(pair.sum()) < 1e-9, f"{miller} excesses do not cancel"
+
+    def test_the_facet_ordering_depends_on_the_chemical_potential(
+            self, cu3au, symmetrized, reservoirs):
+        """This is the reason the module exists. At the Au-rich end the
+        Au-rich termination is cheaper; drive the reservoir down and the
+        ordering inverts. A single 'the surface energy' would hide it."""
+        mv.surf.surface_energy_chempot(symmetrized, bulk=cu3au,
+                                       refs=reservoirs, level="emt",
+                                       key_added="rich")
+        mv.surf.surface_energy_chempot(symmetrized, bulk=cu3au,
+                                       refs=reservoirs, level="emt",
+                                       chempot={"Au": -0.5}, key_added="poor")
+        frame = symmetrized.obs
+        pair = frame[np.isfinite(frame["surface_excess_Au_emt"])
+                     & (frame["miller"] == "1_0_0")]
+        assert len(pair) == 2
+        rich = pair["rich"].to_numpy(dtype=float)
+        poor = pair["poor"].to_numpy(dtype=float)
+        assert np.argmin(rich) != np.argmin(poor), \
+            "expected the cheaper (100) termination to change with delta-mu"
+
+    def test_gamma_is_linear_in_the_chemical_potential(
+            self, cu3au, symmetrized, reservoirs):
+        """gamma(dmu) = gamma_0 - Gamma * dmu, so the deposited excess must
+        reproduce the shift without recomputing an energy."""
+        mv.surf.surface_energy_chempot(symmetrized, bulk=cu3au,
+                                       refs=reservoirs, level="emt",
+                                       key_added="at_zero")
+        mv.surf.surface_energy_chempot(symmetrized, bulk=cu3au,
+                                       refs=reservoirs, level="emt",
+                                       chempot={"Au": -0.37}, key_added="at_mu")
+        frame = symmetrized.obs
+        excess = frame["surface_excess_Au_emt"].to_numpy(dtype=float)
+        moved = np.isfinite(excess)
+        predicted = (frame["at_zero"].to_numpy(dtype=float)[moved]
+                     - excess[moved] * -0.37)
+        assert np.allclose(predicted, frame["at_mu"].to_numpy(dtype=float)[moved],
+                           rtol=1e-9)
+
+    def test_reservoirs_must_be_elemental(self, cu3au, symmetrized):
+        with pytest.raises(ValueError, match="not an element"):
+            mv.surf.surface_energy_chempot(symmetrized, bulk=cu3au,
+                                           refs=cu3au, level="emt")
+
+
+class TestSurfacesContinued:
+    @pytest.fixture
+    def facets(self, metals):
+        mv.pp.describe(metals)
+        mv.calc.energy(metals, level="emt")
+        cut = mv.surf.slabs(metals, max_index=1, min_slab=8.0,
+                            min_vacuum=10.0)
+        mv.calc.energy(cut, level="emt")
+        return cut
 
     def test_wulff_expresses_the_low_energy_facets(self, metals, facets):
         mv.surf.surface_energy(facets, bulk=metals, level="emt")

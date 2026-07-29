@@ -75,6 +75,13 @@ WRAPPED: Dict[str, List[str]] = {
         "PourbaixDiagram represents its aqueous species as Ion objects, so "
         "mv.thermo.pourbaix rests on this module even though the diagram "
         "itself needs Materials Project entries to build",
+    "analysis.chemenv.coordination_environments.coordination_geometries":
+        "the model polyhedra ChemEnv fits are defined here, so the O:6 and T:4 "
+        "that mv.env.chemenv reports are this module's data - "
+        "LocalGeometryFinder imports it",
+    "analysis.chemenv.connectivity.environment_nodes":
+        "StructureConnectivity builds its graph out of these nodes, so "
+        "mv.env.connectivity walks them",
     "symmetry.structure": ["mv.pp.symmetry"],
     "symmetry.site_symmetries": ["mv.pp.symmetry"],
     "symmetry.settings": ["mv.transform.setting"],
@@ -92,6 +99,10 @@ WRAPPED: Dict[str, List[str]] = {
     "analysis.defects.core": ["mv.pp.defects"],
     "analysis.defects.supercells": ["mv.pp.defects"],
     "electronic_structure.cohp": ["mv.elec.cohp"],
+    "analysis.chemenv.coordination_environments.coordination_geometries":
+        ["mv.env.chemenv"],
+    "analysis.chemenv.connectivity.environment_nodes":
+        ["mv.env.connectivity"],
     "core.ion": ["mv.thermo.pourbaix"],
     "core.interface": ["mv.iface.build"],
     "analysis.chemenv.connectivity.connectivity_finder":
@@ -129,6 +140,7 @@ WRAPPED: Dict[str, List[str]] = {
     "analysis.reaction_calculator": ["mv.thermo.reaction"],
     "analysis.solar.slme": ["mv.prop.slme"],
     "analysis.structure_matcher": ["mv.pp.dedup", "mv.gen.validate"],
+    "analysis.surface_analysis": ["mv.surf.surface_energy_chempot"],
     "analysis.wulff": ["mv.surf.wulff"],
     "core.composition": ["mv.data.from_structures"],
     "core.periodic_table": ["mv.multi.sites", "mv.pl.periodic_table"],
@@ -187,6 +199,13 @@ TRANSITIVE: Dict[str, str] = {
         "PourbaixDiagram represents its aqueous species as Ion objects, so "
         "mv.thermo.pourbaix rests on this module even though the diagram "
         "itself needs Materials Project entries to build",
+    "analysis.chemenv.coordination_environments.coordination_geometries":
+        "the model polyhedra ChemEnv fits are defined here, so the O:6 and T:4 "
+        "that mv.env.chemenv reports are this module's data - "
+        "LocalGeometryFinder imports it",
+    "analysis.chemenv.connectivity.environment_nodes":
+        "StructureConnectivity builds its graph out of these nodes, so "
+        "mv.env.connectivity walks them",
     "symmetry.structure":
         "SpacegroupAnalyzer.get_symmetrized_structure returns a "
         "SymmetrizedStructure, and mv.pp.symmetry reads wyckoff_symbols off "
@@ -439,6 +458,11 @@ BLOCKED: Dict[str, str] = {
 
 #: Individual modules that are plumbing despite not matching a marker.
 INTERNAL = {
+    # A convenience namespace, not an API. Its own docstring says it
+    # "imports the key classes from both vasp_input and vasp_output ... to
+    # retain backwards compatibility"; matverse imports io.vasp.outputs and
+    # io.vasp.sets directly, which executes this __init__ on the way in.
+    "io.vasp",
     # pymatgen's data types and enums rather than capabilities. matverse uses
     # Sites and SymmOps constantly - every Structure is made of them - but
     # there is nothing here to wrap, in the same way transformation_abc has

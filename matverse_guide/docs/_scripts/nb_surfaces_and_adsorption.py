@@ -107,6 +107,94 @@ ax.set_title("close-packed is cheapest, for both metals")
 ax.legend()"""),
 
     ("markdown", """\
+## When a slab is not the bulk formula
+
+Everything above rests on an assumption worth making explicit: that the slab is
+the bulk formula times a whole number. Subtracting `N × e_bulk` only removes the
+bulk cost if that holds. It does for an elemental metal however you cut it, and
+it does for most default cuts of a compound, because `SlabGenerator` chooses
+shifts that keep the composition.
+
+It stops holding the moment you ask for symmetric slabs. `symmetrize=True`
+deletes sites until the two faces are equivalent, and on an ordered alloy that
+routinely leaves the slab off-stoichiometry."""),
+
+    ("code", """\
+from pymatgen.core import Lattice, Structure
+
+cu3au = mv.data.from_structures([Structure.from_spacegroup(
+    "Pm-3m", Lattice.cubic(3.75), ["Au", "Cu"], [[0, 0, 0], [0.5, 0.5, 0]])])
+mv.calc.energy(cu3au, level="emt")
+
+alloy_facets = mv.surf.slabs(cu3au, max_index=1, min_slab=8.0,
+                             min_vacuum=10.0, symmetrize=True)
+mv.calc.energy(alloy_facets, level="emt")
+
+alloy_facets.obs["formula"] = [s.composition.formula
+                               for s in mv.structures(alloy_facets, "input")]
+alloy_facets.obs[["miller", "formula"]]"""),
+
+    ("markdown", """\
+Four of these five are not Cu₃Au. The leftover atoms have to come from somewhere
+or go somewhere, and their energy depends on that reservoir — so there is no
+single surface energy to report. `mv.surf.surface_energy` says so rather than
+returning a number that looks like one:"""),
+
+    ("code", """\
+mv.surf.surface_energy(alloy_facets, bulk=cu3au, level="emt")
+
+alloy_facets.obs[["miller", "formula", "surface_energy_emt",
+                  "surface_energy_emt_off_stoichiometry"]].round(4)"""),
+
+    ("markdown", """\
+### Referencing the surplus to a reservoir
+
+What those slabs have is not a surface energy but a line:
+
+$$\\gamma(\\Delta\\mu) = \\gamma_0 - \\Gamma\\,\\Delta\\mu$$
+
+where $\\Gamma$ is the surface excess of the element in surplus and
+$\\Delta\\mu$ is how far its reservoir sits below the pure element.
+`mv.surf.surface_energy_chempot` needs elemental structures to measure that
+against, at the same level of theory as everything else."""),
+
+    ("code", """\
+fcc = [[0, 0, 0], [0, .5, .5], [.5, 0, .5], [.5, .5, 0]]
+reservoirs = mv.data.from_structures(
+    [Structure(Lattice.cubic(a), [e] * 4, fcc)
+     for e, a in (("Cu", 3.61), ("Au", 4.08))])
+mv.calc.energy(reservoirs, level="emt")
+
+mv.surf.surface_energy_chempot(alloy_facets, bulk=cu3au, refs=reservoirs,
+                               level="emt", key_added="gamma_au_rich")
+mv.surf.surface_energy_chempot(alloy_facets, bulk=cu3au, refs=reservoirs,
+                               level="emt", chempot={"Au": -0.5},
+                               key_added="gamma_au_poor")
+
+alloy_facets.obs[["miller", "formula", "surface_excess_Au_emt",
+                  "gamma_au_rich", "gamma_au_poor"]].round(4)"""),
+
+    ("markdown", """\
+Two things to read off. The two (100) terminations carry equal and opposite Au
+excess — one face is Au-rich exactly as much as the other is Au-poor, which is
+what cutting one plane two ways has to mean.
+
+And the ordering **inverts**. In the Au-rich limit the Au-rich termination is the
+cheaper one; pull the gold reservoir down by half an electronvolt and the Au-poor
+termination wins instead. Which facet a crystal of this alloy shows is not a fact
+about the alloy — it is a fact about the atmosphere you grew it in. A Wulff shape
+built from one of these columns is a shape at one chemical potential, and saying
+which one is part of the result.
+
+The stoichiometric (111) slab gets the same number from both routes, which is the
+consistency check worth doing whenever two methods overlap."""),
+
+    ("code", """\
+stoich = alloy_facets.obs["miller"] == "1_1_1"
+alloy_facets.obs.loc[stoich, ["surface_energy_emt", "gamma_au_rich",
+                              "gamma_au_poor"]].round(6)"""),
+
+    ("markdown", """\
 ## The equilibrium crystal shape
 
 A crystal at equilibrium minimises total surface energy at fixed volume, and the

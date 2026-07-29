@@ -461,6 +461,24 @@ def cases(tmp):
         mv.surf.surface_energy(out, bulk, level="emt")
         return out
 
+    # The off-stoichiometry route needs slabs that are actually off it, and an
+    # elemental structure has none: every cut of Cu is Cu. Ordered Cu3Au cut
+    # with symmetrize=True is the smallest case that produces a surface excess,
+    # so it is what the probe has to use for that claim to be exercised at all.
+    from pymatgen.core import Lattice, Structure
+    _fcc = [[0, 0, 0], [0, .5, .5], [.5, 0, .5], [.5, .5, 0]]
+    alloy = mv.data.from_structures([Structure.from_spacegroup(
+        "Pm-3m", Lattice.cubic(3.75), ["Au", "Cu"],
+        [[0, 0, 0], [0.5, 0.5, 0]])])
+    mv.calc.energy(alloy, level="emt")
+    reservoirs = mv.data.from_structures(
+        [Structure(Lattice.cubic(a), [e] * 4, _fcc)
+         for e, a in (("Cu", 3.61), ("Au", 4.08))])
+    mv.calc.energy(reservoirs, level="emt")
+    alloy_facets = mv.surf.slabs(alloy, max_index=1, min_slab=8.0,
+                                 min_vacuum=10.0, symmetrize=True)
+    mv.calc.energy(alloy_facets, level="emt")
+
     configs = mv.surf.adsorption_sites(facets[:1].copy(), "H", max_sites=2)
     mv.calc.energy(configs, level="emt")
 
@@ -611,6 +629,8 @@ def cases(tmp):
         (mv.surf.slabs, one_metal, (), {"max_index": 1, "returns": "new"}),
         (mv.surf.surface_energy, facets.copy, (bulk,), {}),
         (mv.surf.wulff, wulffable, (bulk,), {}),
+        (mv.surf.surface_energy_chempot, alloy_facets.copy,
+         (alloy, reservoirs), {}),
         (mv.surf.adsorption_sites, lambda: facets[:1].copy(), ("H",),
          {"returns": "new"}),
         (mv.surf.adsorption_energy, configs.copy,
