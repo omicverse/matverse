@@ -627,6 +627,8 @@ def cases(tmp):
 
         (mv.neb.percolation, one_metal, ("Cu",), {}),
 
+        (mv.disorder.sro, one_metal, (), {}),
+
         # mv.surf
         (mv.surf.slabs, one_metal, (), {"max_index": 1, "returns": "new"}),
         (mv.surf.surface_energy, facets.copy, (bulk,), {}),
@@ -673,6 +675,7 @@ def cases(tmp):
         (mv.md.rdf, one_licl, (licl_frames(), "Li"),
          {"r_max": 8.0}),
         (mv.md.sites, one_licl, (licl_frames(), "Li"), {}),
+        (mv.md.van_hove, one_licl, (licl_frames(),), {"r_max": 8.0}),
         (mv.md.melt_quench, one_metal, (),
          {"level": "emt", "melt_steps": 20, "quench_steps": 20,
           "equilibrate_steps": 10, "supercell": (1, 1, 1)}),

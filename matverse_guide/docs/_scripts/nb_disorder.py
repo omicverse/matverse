@@ -243,4 +243,81 @@ for step in mv.provenance(ordered):
 shape applied to spin. [Screening, end to end](screening.ipynb) is the hull this
 entropy term belongs in.
 ```"""),
+
+    ("markdown", """\
+## Did the disorder work?
+
+Everything above produces a cell that is *supposed* to stand for a solid
+solution. Nothing so far checks whether it does. The measure for that is the
+Warren–Cowley short-range order parameter, one per ordered pair of elements:
+
+$$\\alpha_{AB} = 1 - \\frac{P(B \\mid A)}{c_B}$$
+
+where $P(B\\mid A)$ is the chance that a neighbour of an A atom is a B atom and
+$c_B$ is B's overall fraction. **Zero is random.** Negative means A prefers B —
+ordering. Positive means A avoids B, so A clusters with its own kind.
+
+The structure that fixes the signs in your head is B2 brass, where every nearest
+neighbour of a copper is a zinc:"""),
+
+    ("code", """\
+from pymatgen.core import Lattice, Structure
+
+b2 = Structure(Lattice.cubic(2.95), ["Cu", "Zn"], [[0, 0, 0], [.5, .5, .5]])
+
+# the same lattice, same composition, atoms thrown on at random
+base = b2.copy()
+base.make_supercell([4, 4, 4])
+pick = np.random.RandomState(0).permutation(len(base))
+solution = Structure(
+    base.lattice,
+    ["Cu" if pick[i] < len(base) // 2 else "Zn" for i in range(len(base))],
+    base.frac_coords)
+
+alloys = mv.data.from_structures([b2, solution])
+alloys.obs_names = ["B2 CuZn", "random CuZn"]
+
+mv.disorder.sro(alloys)
+pd.DataFrame(alloys.obsm["sro_shell1"], index=alloys.obs_names,
+             columns=alloys.uns["sro"]["shell1"]["pairs"]).round(3)"""),
+
+    ("markdown", """\
+**+1 for the like pairs and −1 for the unlike ones** on B2, which is what
+perfect ordering means, and 0.03 across the board for the random arrangement —
+zero to within the noise of a 128-site cell.
+
+Two properties worth knowing are visible in that table. The matrix is symmetric
+here because the two concentrations are equal, and each row satisfies
+$\\sum_B c_B \\alpha_{AB} = 0$: the neighbours of a copper are *some* element,
+whatever the ordering. That sum rule is the one identity that catches a
+normalisation mistake, and it is checked in the test suite rather than left to
+the eye.
+
+The shell matters, and it is the second argument:"""),
+
+    ("code", """\
+for k in (1, 2, 3):
+    mv.disorder.sro(alloys, shell=k, key_added=f"shell{k}")
+
+pd.DataFrame(
+    {f"shell {k}": alloys.obsm[f"sro_shell{k}"][0] for k in (1, 2, 3)},
+    index=alloys.uns["sro"]["shell1"]["pairs"]).round(3)"""),
+
+    ("markdown", """\
+The sign **inverts** between the first shell and the second. In bcc the eight
+nearest neighbours sit along $\\langle 111\\rangle$ and in B2 they are the other
+species; the six second neighbours sit along $\\langle 100\\rangle$ and are the
+same species. So $\\alpha_{\\mathrm{CuCu}}$ goes from $+1$ to $-1$. A short-range
+order parameter quoted without its shell is half a number.
+
+```{note}
+Computed from the definition rather than through pymatgen's
+`analysis.disorder`, whose `get_warren_cowley_parameters` returns the same value
+for every pair — on this B2 cell it gives −1 for the like pairs as well as the
+unlike ones. A wrapper around output that cannot be reproduced from the
+definition is worse than the gap.
+```
+
+`obs['sro_rms_shell1']` is the single number to sort on: near zero for a good
+solid solution, large for anything that has ordered or clustered."""),
 ]

@@ -35,7 +35,7 @@ warnings.filterwarnings("ignore")
 #: Modules covered on this branch. Raise it as batches land; a drop is a
 #: regression. A count rather than a fraction, because the denominator moves
 #: when pymatgen adds modules and a ratchet that slips on rounding is not one.
-COVERED_FLOOR = 107
+COVERED_FLOOR = 109
 
 #: The pymatgen the floor was recorded against. matverse supports two, and they
 #: ship different module trees — 162 modules in scope against 134 — so a count

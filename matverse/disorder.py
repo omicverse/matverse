@@ -331,4 +331,136 @@ def dope(md: AnnData, dopant: str, source: str = "input",
     return out
 
 
-__all__ = ["KB_EV", "describe", "orderings", "sqs", "dope"]
+__all__ = ["KB_EV", "describe", "orderings", "sqs", "dope", "sro"]
+
+
+@register_function(
+    aliases=["sro", "short range order", "warren-cowley", "warren cowley",
+             "chemical order", "sro parameter", "is my sqs random",
+             "clustering tendency", "ordering tendency"],
+    category="disorder",
+    description="Measure the chemical short-range order of a structure — "
+                "whether like atoms sit next to like, next to unlike, or at "
+                "random — as Warren-Cowley parameters per element pair.",
+    requires={"structures": ["{source}"]},
+    produces={"obsm": ["sro_shell{shell}"], "uns": ["sro"],
+              "obs": ["sro_max_shell{shell}", "sro_rms_shell{shell}"]},
+    prerequisites=["mv.disorder.sqs"],
+    examples=["mv.disorder.sro(md)",
+              "mv.disorder.sro(md, source='sqs_2x2x2', shell=1)"],
+    related=["mv.disorder.sqs", "mv.disorder.orderings", "mv.env.coordination"],
+    notes="The Warren-Cowley parameter for an ordered pair (A, B) in shell k "
+          "is\n\n"
+          "    alpha_AB = 1 - P(B | A) / c_B\n\n"
+          "where P(B|A) is the chance that a shell-k neighbour of an A atom is "
+          "a B atom, and c_B is B's overall fraction. **Zero is random.** "
+          "Negative means A prefers B as a neighbour — ordering. Positive "
+          "means A avoids B, so A clusters with itself.\n\n"
+          "The check that fixes the sign convention in your head: B2 brass, "
+          "where every nearest neighbour of a copper is a zinc, gives -1 for "
+          "the unlike pair and +1 for the like one. A random solid solution "
+          "gives 0 for every pair, to within the noise of a finite cell.\n\n"
+          "This is what an SQS is *for*, and the only way to know whether one "
+          "worked. mv.disorder.sqs returns a cell that is supposed to imitate "
+          "a random alloy; running this on it tells you how well it managed, "
+          "and obs['sro_rms'] is the single number to screen or sort on.\n\n"
+          "Computed here from the definition rather than through pymatgen's "
+          "analysis.disorder, whose get_warren_cowley_parameters returns the "
+          "same value for every pair — on B2 it gives -1 for the like pairs as "
+          "well as the unlike ones, where the definition requires +1 and -1.\n\n"
+          "The shell is found from the sorted neighbour distances of each "
+          "site, so it follows the structure rather than a cutoff you have to "
+          "guess. Pass cutoff to override it with a distance in angstroms.",
+)
+def sro(md: AnnData, source: str = "input", shell: int = 1,
+        cutoff: float | None = None, tolerance: float = 0.1,
+        key_added: str | None = None) -> None:
+    """Warren-Cowley short-range order parameters. Deposits; returns ``None``."""
+    elements = sorted({site.specie.symbol
+                       for structure in structures(md, source)
+                       for site in structure})
+    pairs = [(a, b) for a in elements for b in elements]
+    labels = [f"{a}-{b}" for a, b in pairs]
+
+    name = key_added or f"shell{shell}"
+    values = np.full((md.n_obs, len(pairs)), np.nan)
+    failures: list[str] = []
+
+    for row, structure in enumerate(structures(md, source)):
+        symbols = np.array([site.specie.symbol for site in structure])
+        fractions = {el: float((symbols == el).mean()) for el in elements}
+
+        # Counts[a][b] = how many shell-k neighbours of species b an atom of
+        # species a has, summed over every a atom in the cell.
+        counts = {a: {b: 0.0 for b in elements} for a in elements}
+        totals = {a: 0.0 for a in elements}
+
+        for index, site in enumerate(structure):
+            if cutoff is not None:
+                neighbours = structure.get_neighbors(site, cutoff)
+            else:
+                low, high = _shell_band(structure, index, shell, tolerance)
+                # The k-th shell, not the first k shells. Taking everything
+                # inside the outer radius mixes them: on B2 the second shell is
+                # six like neighbours and the first is eight unlike ones, and
+                # pooling them turns an alpha of -1 into +0.14.
+                neighbours = [n for n in structure.get_neighbors(site, high + 1e-9)
+                              if n.nn_distance >= low - 1e-9]
+            if not neighbours:
+                continue
+            a = symbols[index]
+            for neighbour in neighbours:
+                counts[a][neighbour.specie.symbol] += 1.0
+                totals[a] += 1.0
+
+        for column, (a, b) in enumerate(pairs):
+            if totals[a] <= 0 or fractions.get(b, 0.0) <= 0:
+                continue
+            probability = counts[a][b] / totals[a]
+            values[row, column] = 1.0 - probability / fractions[b]
+
+        if not np.isfinite(values[row]).any():
+            failures.append(str(md.obs_names[row]))
+
+    # Not deposit_grid: that axis is numeric — a 2-theta, an energy — and this
+    # one is a list of element pairs. The matrix goes to obsm all the same, so
+    # the level suffix keeps working, and the pair names go beside it.
+    md.obsm[f"sro_{name}"] = values
+    md.uns.setdefault("sro", {})[name] = {
+        "pairs": labels, "shell": int(shell), "cutoff": cutoff,
+        "definition": "alpha_AB = 1 - P(B|A) / c_B; 0 is random, negative is "
+                      "ordering, positive is clustering",
+        "errors": failures,
+    }
+
+    with np.errstate(invalid="ignore"):
+        md.obs[f"sro_max_{name}"] = np.nanmax(np.abs(values), axis=1)
+        md.obs[f"sro_rms_{name}"] = np.sqrt(np.nanmean(values ** 2, axis=1))
+    record(md, "disorder.sro", source=source, shell=shell, cutoff=cutoff,
+           key_added=name)
+
+
+def _shell_band(structure, index: int, shell: int,
+                tolerance: float) -> tuple[float, float]:
+    """The inner and outer radius of the nth distinct neighbour shell.
+
+    Distances are grouped rather than taken one at a time: the twelve
+    neighbours of an fcc site are one shell, not twelve, and a cell relaxed off
+    its ideal geometry spreads them by a little. `tolerance` is that little, as
+    a fraction of the distance.
+    """
+    site = structure[index]
+    distances = sorted(n.nn_distance
+                       for n in structure.get_neighbors(site, 12.0))
+    if not distances:
+        return 0.0, 0.0
+    shells, current = [], [distances[0]]
+    for distance in distances[1:]:
+        if distance - current[0] > tolerance * current[0]:
+            shells.append(current)
+            current = [distance]
+        else:
+            current.append(distance)
+    shells.append(current)
+    index_ = min(max(int(shell), 1), len(shells)) - 1
+    return float(min(shells[index_])), float(max(shells[index_]))

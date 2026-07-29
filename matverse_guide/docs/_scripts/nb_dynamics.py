@@ -313,6 +313,89 @@ cell — twelve neighbours spread over three reference sites — pymatgen return
 ```"""),
 
     ("markdown", """\
+## The shape of the motion
+
+A diffusivity is one number and it averages over everything. The van Hove
+correlation function keeps the shape.
+
+Its **self** part is the distribution of how far one atom moved in a time `dt`.
+Its **distinct** part is where the *other* atoms were relative to it — and at
+`dt = 0` that is exactly the radial distribution function, which is the identity
+worth checking rather than trusting."""),
+
+    ("code", """\
+from pymatgen.core import Lattice, Structure
+
+salt = Structure(Lattice.cubic(4.2), ["Li", "Cl", "Cl", "Cl"],
+                 [[0, 0, 0], [.5, .5, 0], [.5, 0, .5], [0, .5, .5]])
+salt.make_supercell([3, 3, 3])
+vh = mv.data.from_structures([salt])
+coords = np.array(salt.frac_coords)
+
+mv.md.van_hove(vh, coords[None].repeat(3, axis=0), dt=0, r_max=8.0,
+               n_grid=401, sigma=0.05, level="static")
+
+r = mv.grid_of(vh, "van_hove_distinct")
+g_d = vh.obsm["van_hove_distinct_static"][0]
+rho = len(salt) / salt.lattice.volume
+
+# int 4 pi r^2 rho G_d dr out to R is the number of neighbours within R
+for radius in (3.5, 5.0, 6.5):
+    inside = r <= radius
+    counted = np.trapezoid(4 * np.pi * r[inside] ** 2 * rho * g_d[inside],
+                           r[inside])
+    actual = np.mean([len(salt.get_neighbors(s, radius)) for s in salt])
+    print(f"R = {radius} A   integral {counted:6.2f}   actual {actual:6.2f}")"""),
+
+    ("markdown", """\
+Twelve, eighteen, fifty-four — the neighbour counts of a rocksalt lattice,
+recovered from the correlation function by integration. The small excess is the
+Gaussian smearing spilling past each cutoff, the same effect that puts
+`first_shell_coordination` at 11.7 rather than 12 above.
+
+That is what fixes the normalisation. It is easy to write a van Hove function
+whose *shape* is right and whose scale is off by a power of r or a factor of N,
+and nothing about the plot would tell you.
+
+Now the self part, which is where the interesting shape lives:"""),
+
+    ("code", """\
+rng = np.random.default_rng(0)
+wobble = (coords[None] + rng.normal(0, 0.01, (20, len(salt), 3))) % 1.0
+
+# and the same thing with six ions displaced by one nearest-neighbour vector
+jumped = wobble.copy()
+jumped[10:, :6, :] = (wobble[10:, :6, :] + np.array([.5, .5, 0]) / 3) % 1.0
+
+mv.md.van_hove(vh, wobble, dt=15, r_max=8.0, n_grid=401, sigma=0.1,
+               level="rattling")
+mv.md.van_hove(vh, jumped, dt=15, r_max=8.0, n_grid=401, sigma=0.1,
+               level="hopping")
+
+vh.obs[["van_hove_rms_rattling", "van_hove_peak_rattling",
+        "van_hove_jump_rattling", "van_hove_rms_hopping",
+        "van_hove_peak_hopping", "van_hove_jump_hopping"]].round(3)"""),
+
+    ("markdown", """\
+Two things to read.
+
+`van_hove_peak` is the **most probable** displacement, and it is not zero even
+for a solid that only vibrates. A shell at radius $r$ has area $4\pi r^2$, so
+the shell volume beats the falling Gaussian and the mode sits near $\sqrt{2}$
+times the one-dimensional amplitude. A van Hove function peaking at zero would
+mean the $r^2$ weighting had been dropped somewhere.
+
+`van_hove_jump` is the outermost local maximum, and it is **NaN for the
+rattling run and 3.0 Å for the hopping one** — the nearest-neighbour distance
+of this lattice is $a/\\sqrt{2} = 2.97$ Å, and the reported value sits one grid
+point away because the curve was smeared with $\\sigma = 0.1$ Å. Six ions in a hundred and eight moved; they contribute a few
+percent of the weight and never come close to outranking the vibrational peak,
+which is why this is found by position rather than by height.
+
+That is the distinction a diffusivity cannot draw. Both runs have a raised
+mean-squared displacement. Only one of them is transport."""),
+
+    ("markdown", """\
 ## Rattling or hopping?
 
 Both raise the mean-squared displacement, and only one of them is diffusion. An

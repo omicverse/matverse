@@ -364,6 +364,152 @@ def _has_diffusion_addon() -> bool:
     return True
 
 
+class TestVanHove:
+    """Both parts are checked against identities, not against stored output.
+
+    The self part is a probability density over displacement magnitude, so it
+    integrates to one whatever the trajectory. The distinct part is normalised
+    like a radial distribution function, so integrating 4 pi r^2 rho G_d out to
+    R has to give the number of neighbours actually within R. Those two pin the
+    normalisation, which is the only part of this that is easy to get wrong and
+    hard to notice.
+    """
+
+    A = 4.2
+    SIGMA = 0.01
+
+    @pytest.fixture
+    def salt(self):
+        from pymatgen.core import Lattice, Structure
+        cell = Structure(Lattice.cubic(self.A), ["Li", "Cl", "Cl", "Cl"],
+                         [[0, 0, 0], [.5, .5, 0], [.5, 0, .5], [0, .5, .5]])
+        cell.make_supercell([3, 3, 3])
+        md = mv.data.from_structures([cell])
+        return md, cell, np.array(cell.frac_coords)
+
+    def test_the_self_part_is_a_probability_density(self, salt):
+        md, _, base = salt
+        mv.md.van_hove(md, base[None].repeat(3, axis=0), dt=0, r_max=8.0,
+                       n_grid=401, sigma=0.05, level="static")
+        r = mv.grid_of(md, "van_hove_self")
+        assert np.trapezoid(md.obsm["van_hove_self_static"][0], r) == \
+            pytest.approx(1.0, rel=1e-3)
+
+    def test_it_still_integrates_to_one_once_things_move(self, salt):
+        md, cell, base = salt
+        rng = np.random.default_rng(0)
+        frames = (base[None]
+                  + rng.normal(0, self.SIGMA, (20, len(cell), 3))) % 1.0
+        mv.md.van_hove(md, frames, dt=5, r_max=8.0, n_grid=401, sigma=0.05)
+        r = mv.grid_of(md, "van_hove_self")
+        assert np.trapezoid(md.obsm["van_hove_self_md"][0], r) == \
+            pytest.approx(1.0, rel=1e-3)
+
+    def test_a_still_crystal_has_not_moved(self, salt):
+        md, _, base = salt
+        mv.md.van_hove(md, base[None].repeat(3, axis=0), dt=0, r_max=8.0,
+                       n_grid=401, sigma=0.05, level="static")
+        assert float(md.obs["van_hove_rms_static"].iloc[0]) == \
+            pytest.approx(0.0, abs=1e-9)
+
+    def test_the_rms_displacement_is_what_was_injected(self, salt):
+        """Two frames each carry independent Gaussian noise of sigma per
+        fractional component, so their difference has sigma*sqrt(2), and the
+        RMS over three components in a cubic cell of side a is
+        a*sigma*sqrt(2)*sqrt(3)."""
+        md, cell, base = salt
+        rng = np.random.default_rng(0)
+        frames = (base[None]
+                  + rng.normal(0, self.SIGMA, (20, len(cell), 3))) % 1.0
+        mv.md.van_hove(md, frames, dt=5, r_max=8.0)
+        expected = self.A * 3 * self.SIGMA * np.sqrt(2) * np.sqrt(3)
+        assert float(md.obs["van_hove_rms_md"].iloc[0]) == \
+            pytest.approx(expected, rel=0.05)
+
+    def test_the_distinct_part_counts_the_right_neighbours(self, salt):
+        """The identity that fixes the normalisation. Integrating the distinct
+        part against the shell volume must return the neighbour count, and it
+        must do so at more than one radius or a wrong power of r would pass."""
+        md, cell, base = salt
+        mv.md.van_hove(md, base[None].repeat(3, axis=0), dt=0, r_max=8.0,
+                       n_grid=401, sigma=0.05, level="static")
+        r = mv.grid_of(md, "van_hove_distinct")
+        g = md.obsm["van_hove_distinct_static"][0]
+        rho = len(cell) / cell.lattice.volume
+        for radius in (3.5, 5.0, 6.5):
+            inside = r <= radius
+            integral = np.trapezoid(
+                4 * np.pi * r[inside] ** 2 * rho * g[inside], r[inside])
+            actual = np.mean([len(cell.get_neighbors(site, radius))
+                              for site in cell])
+            assert integral == pytest.approx(actual, rel=0.05), \
+                f"neighbour count wrong at {radius} A"
+
+    def test_a_hop_shows_up_as_a_second_feature(self, salt):
+        """The shape a diffusivity throws away. Most ions stay put and a few
+        move a lattice spacing, so the self part keeps its peak at zero and
+        grows a bump at the jump distance — which is what obs['van_hove_peak']
+        reports."""
+        md, cell, base = salt
+        rng = np.random.default_rng(0)
+        frames = (base[None]
+                  + rng.normal(0, self.SIGMA, (20, len(cell), 3))) % 1.0
+        # move a handful of ions by one nearest-neighbour vector part way
+        jump = np.array([0.5, 0.5, 0.0]) / 3.0        # a/2 in the 3x3x3 cell
+        hopped = frames.copy()
+        hopped[10:, :6, :] = (frames[10:, :6, :] + jump) % 1.0
+        mv.md.van_hove(md, hopped, dt=15, r_max=8.0, n_grid=401, sigma=0.1,
+                       level="hop")
+        assert float(md.obs["van_hove_jump_hop"].iloc[0]) == \
+            pytest.approx(self.A * np.sqrt(0.5), rel=0.1), \
+            "expected a feature at the nearest-neighbour jump distance"
+        # and the tallest feature is still the vibration, not the jump
+        assert float(md.obs["van_hove_peak_hop"].iloc[0]) < 1.0
+
+    def test_a_rattling_solid_reports_no_jump(self, salt):
+        """The negative half of the previous test, and the one that makes it
+        mean something: if every trajectory produced a jump distance, finding
+        one would say nothing."""
+        md, cell, base = salt
+        rng = np.random.default_rng(0)
+        frames = (base[None]
+                  + rng.normal(0, self.SIGMA, (20, len(cell), 3))) % 1.0
+        mv.md.van_hove(md, frames, dt=15, r_max=8.0, n_grid=401, sigma=0.1,
+                       level="still")
+        assert np.isnan(float(md.obs["van_hove_jump_still"].iloc[0]))
+        assert np.isfinite(float(md.obs["van_hove_peak_still"].iloc[0]))
+
+    def test_the_most_probable_displacement_is_not_zero(self, salt):
+        """A shell at radius r has area 4 pi r^2, so even for a Gaussian
+        centred on the origin the most likely *distance* is finite — the mode
+        of a Maxwell distribution, sqrt(2) times the one-dimensional width.
+        Reporting zero here would mean the r^2 weighting had been dropped."""
+        md, cell, base = salt
+        rng = np.random.default_rng(0)
+        frames = (base[None]
+                  + rng.normal(0, self.SIGMA, (20, len(cell), 3))) % 1.0
+        mv.md.van_hove(md, frames, dt=5, r_max=8.0, n_grid=401, sigma=0.02,
+                       level="vib")
+        one_d = self.A * 3 * self.SIGMA * np.sqrt(2)     # per component
+        assert float(md.obs["van_hove_peak_vib"].iloc[0]) == \
+            pytest.approx(np.sqrt(2) * one_d, rel=0.25)
+
+    def test_a_bad_trajectory_shape_is_refused(self, salt):
+        md, _, base = salt
+        with pytest.raises(ValueError, match="fractional coordinates"):
+            mv.md.van_hove(md, base, dt=0)
+
+    def test_an_impossible_interval_is_refused(self, salt):
+        md, _, base = salt
+        with pytest.raises(ValueError, match="dt must be between"):
+            mv.md.van_hove(md, base[None].repeat(3, axis=0), dt=9)
+
+    def test_a_mismatched_cell_is_refused(self, salt):
+        md, cell, base = salt
+        with pytest.raises(ValueError, match="must be the same"):
+            mv.md.van_hove(md, base[None, :10, :].repeat(3, axis=0), dt=0)
+
+
 @pytest.mark.skipif(not _has_diffusion_addon(),
                     reason="pymatgen-analysis-diffusion is an optional extra")
 class TestTrajectorySites:
@@ -442,6 +588,21 @@ class TestTrajectorySites:
         assert float(md.obs["md_site_spread_hop"].iloc[0]) == \
             pytest.approx(float(md.obs["md_site_spread_still"].iloc[0]),
                           rel=0.1)
+
+    def test_the_same_trajectory_gives_the_same_answer(self, vibrating):
+        """KmeansPBC seeds itself with an unseeded random.sample, so the
+        default path returns a different clustering on every call. This one
+        caught it: the same input gave 1.0 and 1.25 on different runs of the
+        suite. Centroids are seeded at the crystallographic sites instead."""
+        md, frames, _ = vibrating
+        answers = set()
+        for trial in range(6):
+            fresh = mv.data.from_structures(mv.structures(md, "input"))
+            mv.md.sites(fresh, frames, species="Li")
+            answers.add((int(fresh.obs["md_sites_Li_md"].iloc[0]),
+                         round(float(fresh.obs["md_site_visits_Li_md"].iloc[0]), 6),
+                         round(float(fresh.obs["md_site_spread_Li_md"].iloc[0]), 6)))
+        assert len(answers) == 1, f"clustering is not deterministic: {answers}"
 
     def test_a_mismatched_trajectory_is_refused(self, vibrating):
         md, frames, _ = vibrating

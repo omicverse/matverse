@@ -255,6 +255,24 @@ def equivalents(module: str) -> frozenset:
 # ---------------------------------------------------------------- NATIVE
 #: Capability present in matverse, implemented without pymatgen's module.
 NATIVE: Dict[str, str] = {
+    "analysis.diffusion.aimd.van_hove":
+        "mv.md.van_hove computes both parts from the definition off a "
+        "trajectory. Not a wrapper, deliberately: VanHoveAnalysis exposes "
+        "get_1d_plot and get_3d_plot and no data accessor, so wrapping it "
+        "would mean reading private attributes, and matverse deposits data "
+        "rather than pictures. The normalisation is pinned by two "
+        "identities rather than by agreement with anything: the self part "
+        "integrates to one, and integrating the distinct part against the "
+        "shell volume returns the neighbour count at three radii",
+    "analysis.disorder":
+        "mv.disorder.sro computes Warren-Cowley parameters from the "
+        "definition, alpha_AB = 1 - P(B|A)/c_B, off matverse's own "
+        "neighbour lists. Not a wrapper, deliberately: pymatgen's "
+        "get_warren_cowley_parameters returns the same value for every "
+        "pair, and on B2 - where every nearest neighbour is unlike - gives "
+        "-1 for the like pairs as well as the unlike ones, where the "
+        "definition requires +1 and -1. mv.disorder.sro gives +1 and -1, "
+        "and inverts on the second shell as bcc geometry requires",
     "analysis.compatibility.entry_tools":
         "EntrySet's two useful answers are already matverse's. "
         "get_subset_in_chemsys is a composition filter, which "
@@ -399,21 +417,11 @@ BLOCKED: Dict[str, str] = {
         "- and one well-localised site is the commonest case there is. The "
         "probability density itself is reachable; the sites it exists to "
         "find are not.",
-    "analysis.diffusion.aimd.van_hove":
-        "VanHoveAnalysis exposes get_1d_plot and get_3d_plot and no data "
-        "accessor, so storing the correlation functions would mean reading "
-        "private attributes. matverse deposits data rather than pictures.",
     "analysis.diffusion.neb.full_path_mapper":
         "pymatgen-analysis-diffusion 2025.11 calls "
         "StructureGraph.with_local_env_strategy, renamed upstream to "
         "from_local_env_strategy, so every migration-graph entry point "
         "raises AttributeError against the pymatgen installed here.",
-    "analysis.disorder":
-        "get_warren_cowley_parameters returns the same value for every "
-        "pair, and on B2 - where every nearest neighbour is unlike - it "
-        "gives -1 for the like pairs as well as the unlike ones, where the "
-        "definition requires +1 and -1. A wrapper around output that cannot "
-        "be reproduced from the definition is worse than the gap.",
     "analysis.magnetism.heisenberg":
         "fitting exchange couplings needs spin-polarised energies, and no "
         "calculator matverse ships is spin-polarised, so nothing here can "

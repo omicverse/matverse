@@ -663,7 +663,8 @@ def _quench(cell, adaptor, calculator, melt_t, final_t, melt_steps,
     return adaptor.get_structure(atoms)
 
 
-__all__ = ["run", "sweep", "rdf", "sites", "conductivity", "melt_quench",
+__all__ = ["run", "sweep", "rdf", "sites", "van_hove", "conductivity",
+           "melt_quench",
            "register_batched", "batched_available"]
 
 
@@ -887,10 +888,25 @@ def sites(md: AnnData, trajectories, species: str, source: str = "input",
         k = int(n_sites) if n_sites else len(mobile)
         k = max(1, min(k, len(flat)))
 
+        # Seed the search at the crystallographic sites of the species, not at
+        # random points. KmeansPBC's default picks k of the input points with
+        # an unseeded random.sample, so the same trajectory gives a different
+        # answer on every call - unacceptable for a number anyone reports.
+        # Starting from the sites is also the right guess: the question is
+        # whether the ions stayed near them.
+        seed = np.asarray([structure[i].frac_coords for i in mobile],
+                          dtype=float) % 1.0
+        if k <= len(seed):
+            start = seed[:k]
+        else:
+            extra = flat[np.linspace(0, len(flat) - 1, k - len(seed),
+                                     dtype=int)]
+            start = np.vstack([seed, extra])
+
         try:
             centroids, labels, _ = KmeansPBC(
                 structure.lattice, max_iterations=max_iterations
-            ).cluster(flat, k)
+            ).cluster(flat, k, initial_centroids=start)
         except Exception:
             counts.append(0)
             spreads.append(np.nan)
@@ -923,3 +939,190 @@ def sites(md: AnnData, trajectories, species: str, source: str = "input",
     }
     record(md, "md.sites", species=species, source=source, level=level,
            n_sites=n_sites, key_added=name)
+
+
+@register_function(
+    aliases=["van hove", "van hove correlation", "self correlation",
+             "distinct correlation", "displacement distribution",
+             "how far did they move", "Gs", "Gd"],
+    category="md",
+    description="Van Hove correlation function from a trajectory: how the "
+                "distribution of where an atom is, relative to where it or "
+                "its neighbours were, spreads out with time.",
+    requires={"structures": ["{source}"]},
+    produces={"obsm": ["van_hove_self_{level}", "van_hove_distinct_{level}"],
+              "uns": ["grids"],
+              "obs": ["van_hove_rms_{level}", "van_hove_peak_{level}",
+                      "van_hove_jump_{level}"]},
+    prerequisites=["mv.md.run"],
+    examples=["mv.md.van_hove(md, trajectories, species='Li')",
+              "mv.md.van_hove(md, trajectories, species='Li', dt=20)"],
+    related=["mv.md.rdf", "mv.md.sites", "mv.md.run", "mv.prop.rdf"],
+    notes="Two functions, both on the shared r grid. The **self** part is the "
+          "distribution of how far one atom moved in time dt — it starts as a "
+          "spike at r=0 and spreads. The **distinct** part is where the other "
+          "atoms were relative to it, and at dt=0 it is exactly the radial "
+          "distribution function, which is the check worth running: "
+          "obsm['van_hove_distinct'] at dt=0 must reproduce mv.prop.rdf on "
+          "the same cell.\n\n"
+          "What it tells you that a diffusivity cannot: the *shape*. In a "
+          "liquid the self part stays a single spreading Gaussian. In a "
+          "hopping solid it grows a second bump at the jump distance while "
+          "the peak at zero survives, because most ions did not move and the "
+          "few that did moved a lattice spacing. A diffusivity averages those "
+          "two populations into one number that describes neither.\n\n"
+          "Three scalars come off it. obs['van_hove_rms'] is the "
+          "root-mean-square displacement over dt in angstroms. "
+          "obs['van_hove_peak'] is where the self part is largest — the *most "
+          "probable* displacement, which for a vibrating solid sits near "
+          "sqrt(2) times the one-dimensional amplitude rather than at zero, "
+          "because the volume of a shell grows as r^2 and beats the falling "
+          "Gaussian. obs['van_hove_jump'] is the outermost local maximum "
+          "worth more than a hundredth of the largest one, which is the "
+          "jump distance when ions hop and NaN when they only rattle.\n\n"
+          "Computed here from the definition. pymatgen's VanHoveAnalysis "
+          "exposes get_1d_plot and get_3d_plot and no data accessor, so "
+          "wrapping it would mean reading private attributes, and matverse "
+          "deposits data rather than pictures.\n\n"
+          "**Displacements use the minimum image convention**, so a "
+          "displacement longer than half the shortest cell vector folds back "
+          "and is reported short. That is a property of the cell, not of this "
+          "function: run a bigger box or a shorter dt.",
+)
+def van_hove(md: AnnData, trajectories, species: str | None = None,
+             source: str = "input", level: str = "md", dt: int = 1,
+             r_max: float = 10.0, n_grid: int = 101, sigma: float = 0.1
+             ) -> None:
+    """Self and distinct van Hove functions. Deposits; returns ``None``."""
+    frames = np.asarray(trajectories, dtype=float)
+    if frames.ndim != 3 or frames.shape[2] != 3:
+        raise ValueError(f"trajectories must be (frames, atoms, 3) fractional "
+                         f"coordinates, got shape {frames.shape}")
+    if dt < 0 or dt >= frames.shape[0]:
+        raise ValueError(f"dt must be between 0 and {frames.shape[0] - 1} "
+                         f"frames, got {dt}")
+
+    grid = np.linspace(0.0, float(r_max), int(n_grid))
+    self_part = np.zeros((md.n_obs, len(grid)))
+    distinct = np.zeros((md.n_obs, len(grid)))
+    rms = np.full(md.n_obs, np.nan)
+    peak = np.full(md.n_obs, np.nan)
+    jump = np.full(md.n_obs, np.nan)
+
+    for row, structure in enumerate(structures(md, source)):
+        if frames.shape[1] != len(structure):
+            raise ValueError(
+                f"row {row}: the trajectory has {frames.shape[1]} atoms and "
+                f"the structure has {len(structure)}; they must be the same "
+                f"cell")
+        chosen = [i for i, site in enumerate(structure)
+                  if species is None or site.specie.symbol == species]
+        if not chosen:
+            continue
+
+        matrix = np.asarray(structure.lattice.matrix, dtype=float)
+        volume = float(structure.lattice.volume)
+        positions = frames[:, chosen, :]
+        n_pairs_self, n_pairs_distinct = 0, 0
+        self_distances, distinct_distances = [], []
+
+        # Average over every start frame that admits an interval of dt, which
+        # is what makes this a correlation function rather than one snapshot
+        # of one displacement.
+        for start in range(frames.shape[0] - dt):
+            delta = positions[start + dt] - positions[start]
+            delta -= np.round(delta)                     # minimum image
+            self_distances.append(
+                np.linalg.norm(delta @ matrix, axis=1))
+            n_pairs_self += len(chosen)
+
+            cross = positions[start + dt][:, None, :] - positions[start][None]
+            cross -= np.round(cross)
+            lengths = np.linalg.norm(cross @ matrix, axis=2)
+            off = ~np.eye(len(chosen), dtype=bool)
+            distinct_distances.append(lengths[off])
+            n_pairs_distinct += int(off.sum())
+
+        self_distances = np.concatenate(self_distances)
+        distinct_distances = np.concatenate(distinct_distances)
+
+        self_part[row] = _smear(self_distances, grid, sigma) / max(
+            n_pairs_self, 1)
+        # The distinct part is normalised to the ideal-gas count, so that a
+        # structureless system gives 1 and the dt=0 curve is the RDF itself
+        # rather than an unnormalised histogram of pair separations.
+        density = len(chosen) / volume
+        shell = 4.0 * np.pi * np.maximum(grid, 1e-8) ** 2
+        with np.errstate(divide="ignore", invalid="ignore"):
+            distinct[row] = (_smear(distinct_distances, grid, sigma)
+                             / max(n_pairs_distinct, 1)
+                             / (shell * density) * len(chosen))
+
+        rms[row] = float(np.sqrt((self_distances ** 2).mean()))
+        finite = np.isfinite(self_part[row])
+        if finite.any():
+            peak[row] = float(grid[np.argmax(np.where(finite, self_part[row],
+                                                      -np.inf))])
+        jump[row] = _outer_feature(grid, self_part[row])
+
+    deposit_grid(md, "van_hove_self", level, self_part, grid, unit="1/A",
+                 dt=int(dt), species=species, sigma=float(sigma))
+    deposit_grid(md, "van_hove_distinct", level, distinct, grid, unit="",
+                 dt=int(dt), species=species, sigma=float(sigma))
+    md.obs[f"van_hove_rms_{level}"] = rms
+    md.obs[f"van_hove_peak_{level}"] = peak
+    md.obs[f"van_hove_jump_{level}"] = jump
+    record(md, "md.van_hove", species=species, source=source, level=level,
+           dt=int(dt), r_max=float(r_max))
+
+
+def _smear(distances, grid, sigma: float):
+    """Distances onto a grid as normalised Gaussians rather than a histogram.
+
+    A histogram of a few thousand distances is mostly empty bins and its shape
+    depends on where the bin edges fell. Each distance contributes a unit
+    Gaussian instead, so the curve is smooth and integrates to the number of
+    distances however the grid was chosen.
+    """
+    distances = np.asarray(distances, dtype=float)
+    if not len(distances):
+        return np.zeros(len(grid))
+    inside = distances <= grid[-1] + 5.0 * sigma
+    distances = distances[inside]
+    if not len(distances):
+        return np.zeros(len(grid))
+    # Reflected at r = 0. A distance is a magnitude, so a Gaussian placed at
+    # d leaks into r < 0, where nothing can live; the mirror image folds that
+    # weight back. Without it a displacement of zero - every atom, at dt = 0 -
+    # keeps only the half of its Gaussian above the origin and the self part
+    # integrates to 0.5 rather than 1.
+    delta = grid[None, :] - distances[:, None]
+    mirror = grid[None, :] + distances[:, None]
+    weight = (np.exp(-0.5 * (delta / sigma) ** 2)
+              + np.exp(-0.5 * (mirror / sigma) ** 2)) / (sigma * np.sqrt(2 * np.pi))
+    return weight.sum(axis=0)
+
+
+def _outer_feature(grid, curve, threshold: float = 0.01) -> float:
+    """The outermost local maximum of the self part, or NaN if there is none.
+
+    Not the largest one. At any useful dt most atoms have not hopped, and the
+    self part's tallest feature is the vibrational peak near sqrt(2) times the
+    one-dimensional amplitude — the r^2 shell volume puts it there rather than
+    at the origin. A jump shows up as a *further out* bump carrying only the
+    fraction of atoms that moved, so it is found by position, not by height,
+    with a threshold to keep numerical ripple from qualifying.
+    """
+    curve = np.asarray(curve, dtype=float)
+    if len(curve) < 5 or not np.isfinite(curve).any():
+        return float("nan")
+    tallest = float(np.nanmax(curve))
+    if not np.isfinite(tallest) or tallest <= 0:
+        return float("nan")
+    interior = np.arange(1, len(curve) - 1)
+    maxima = interior[(curve[1:-1] > curve[:-2]) & (curve[1:-1] >= curve[2:])
+                      & (curve[1:-1] > threshold * tallest)]
+    if len(maxima) < 2:
+        # One maximum is the vibrational peak itself; there is no jump.
+        return float("nan")
+    return float(grid[maxima[-1]])
