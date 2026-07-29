@@ -180,8 +180,10 @@ class TestDefects:
             mv.pp.defects(md, kinds=("substitution",))
 
     def test_an_unknown_kind_is_named(self, md):
+        """'interstitial' was an unknown kind until v0.1.24 and is now one of
+        four, so the check needs a kind that really does not exist."""
         with pytest.raises(ValueError, match="unknown defect kind"):
-            mv.pp.defects(md, kinds=("interstitial",))
+            mv.pp.defects(md, kinds=("frenkel",))
 
     def test_a_defect_dataset_is_an_ordinary_dataset(self, md):
         defective = mv.pp.defects(md, supercell=(1, 1, 1))

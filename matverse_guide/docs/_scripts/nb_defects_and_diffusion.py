@@ -110,6 +110,49 @@ everywhere else for the same one.
 ```"""),
 
     ("markdown", """\
+### Two kinds that are not a site you already have
+
+A vacancy or a substitution is a site you can point at. An **interstitial** has
+to be *found* — it is a hole in the structure, and the Voronoi construction
+locates them. An **antisite** is the cross product of the species present, which
+for a quaternary is more combinations than anyone enumerates by hand.
+
+Both go through `pymatgen-analysis-defects`, which also picks the supercell
+itself — targeting a minimum image distance rather than a fixed multiple, so the
+`supercell=` argument does not apply to these two."""),
+
+    ("code", """\
+cathode = mv.datasets.load("battery_cathodes")[:1].copy()
+mv.pp.describe(cathode)
+
+antisites = mv.pp.defects(cathode, kinds=("antisite",))
+mv.pp.describe(antisites)
+antisites.obs[["defect", "removed", "added", "nsites"]].head(6)"""),
+
+    ("markdown", """\
+Twenty-four antisites from a four-species cathode, each an ordered swap — Fe on
+the Li site is a different defect from Li on the Fe site, and in LiFePO₄ the
+Li/Fe antisite is *the* defect that blocks the one-dimensional lithium channel.
+
+Interstitials need to know what to insert:"""),
+
+    ("code", """\
+interstitials = mv.pp.defects(cathode, kinds=("interstitial",),
+                              interstitial_species=["Li"])
+mv.pp.describe(interstitials)
+interstitials.obs[["defect", "added", "nsites"]].head(4)"""),
+
+    ("markdown", """\
+One more atom than the host supercell, which is what an interstitial is.
+
+```{note}
+Ask for a supercell window nothing can satisfy and it says so — the generator
+targets a minimum image distance as well as an atom count, so a small
+`max_atoms` can leave no legal cell. It used to report "no defect was
+generated", which blames the chemistry for an argument problem.
+```"""),
+
+    ("markdown", """\
 The raw energy of a cell with one atom missing is not a formation energy. A
 defect changes the number of atoms, so what the missing atom is *worth* has to
 come from somewhere else — and it cannot be derived from the defective cell

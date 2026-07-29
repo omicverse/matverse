@@ -1,5 +1,50 @@
 # Release notes
 
+## v0.1.24
+
+**65 of 142 in-scope pymatgen modules, 45.8%.**
+
+### Interstitials and antisites
+
+`mv.pp.defects` built vacancies and substitutions. Both are a site you can point
+at. The two it could not build are the ones that are not: an **interstitial**
+has to be *found* — it is a hole, and the Voronoi construction locates them —
+and an **antisite** is the cross product of the species present, which for a
+quaternary is more combinations than anyone enumerates by hand.
+
+On LiFePO₄: 24 antisites and 12 lithium interstitials. The Fe-on-Li antisite
+among them is *the* defect that blocks the one-dimensional lithium channel that
+cathode conducts through.
+
+Both route through `pymatgen-analysis-defects`, which also picks the supercell
+itself — targeting a minimum image distance rather than a fixed multiple — so
+`supercell=` does not apply to those two kinds. Vacancies and substitutions
+still need no extra package.
+
+A supercell window nothing can satisfy now says so. It used to report "no defect
+was generated", which blames the chemistry for what is an argument problem: the
+generator targets an image distance as well as an atom count, so a small
+`max_atoms` can leave no legal cell. The message names the count, the window and
+the first real failure.
+
+### One of the three add-ons does not work
+
+`pymatgen-analysis-diffusion` 2025.11.15 calls
+`StructureGraph.with_local_env_strategy`, which pymatgen renamed to
+`from_local_env_strategy`. Against the installed pymatgen 2026.5.4 every entry
+point that builds a migration graph raises `AttributeError`.
+
+That is worth stating plainly, because these three add-ons were installed
+earlier on this branch *to count toward coverage* and never wired into a code
+path. One of them could not have been. `MigrationGraph` is the capability worth
+having — it finds every symmetry-distinct hop and whether they percolate, where
+`mv.neb.hop_endpoints` finds one — and it stays in the gap list until the
+upstream package catches up rather than being wrapped into a function that
+raises on every call.
+
+`pymatgen-analysis-alloys` is installed and its `AlloyPair.from_structures`
+signature does not match its documentation either; it is unwrapped for now.
+
 ## v0.1.23
 
 **64 of 142 in-scope pymatgen modules, 45.1%** — of which 39.5% was new

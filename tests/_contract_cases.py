@@ -197,6 +197,15 @@ def perovskites():
     return md
 
 
+def alni():
+    """B2 AlNi: two sites, two species — the smallest cell with an antisite."""
+    from pymatgen.core import Lattice, Structure
+    md = mv.data.from_structures([Structure(
+        Lattice.cubic(2.89), ["Al", "Ni"], [[0, 0, 0], [.5, .5, .5]])])
+    mv.pp.describe(md)
+    return md
+
+
 def quartz():
     """alpha-quartz, the textbook piezoelectric and a non-centrosymmetric one."""
     from pymatgen.core import Lattice, Structure
@@ -512,6 +521,9 @@ def cases(tmp):
         (mv.gen.substitute, described, ({"Al": ["Ga"]},), {"returns": "new"}),
         (mv.pp.defects, described, (),
          {"kinds": ("vacancy",), "returns": "new"}),
+        (mv.pp.defects, alni, (),
+         {"kinds": ("antisite",), "min_atoms": 8, "max_atoms": 200,
+          "returns": "new"}),
         (mv.pp.filter_elements, described, (), {"returns": "new"}),
         (mv.pp.predict_volume, described, (), {}),
         (mv.gen.predict_dopants, oxidized, (),

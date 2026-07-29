@@ -185,3 +185,86 @@ class TestJahnTeller:
         mv.screen.filter(perovskites, jahn_teller_active__eq=True,
                          name="distorting")
         assert list(perovskites.obs["distorting"]) == [True, False, True]
+
+
+class TestInterstitialsAndAntisites:
+    """Two defect kinds that are not a site the input already has.
+
+    A vacancy or a substitution is a site you can point at. An interstitial has
+    to be located — the Voronoi construction finds the holes — and an antisite
+    is the cross product of the species present, which for a quaternary is more
+    combinations than anyone enumerates by hand.
+    """
+
+    @pytest.fixture(scope="class")
+    def host(self):
+        """B2 AlNi: two sites, two species — the smallest cell that has an
+        antisite at all, so the mechanics are tested without paying for a
+        168-site supercell four times."""
+        from pymatgen.core import Lattice, Structure
+        md = mv.data.from_structures([Structure(
+            Lattice.cubic(2.89), ["Al", "Ni"], [[0, 0, 0], [.5, .5, .5]])])
+        mv.pp.describe(md)
+        return md
+
+    @pytest.fixture(scope="class")
+    def cathode(self):
+        md = mv.datasets.load("battery_cathodes")[:1].copy()
+        mv.pp.describe(md)
+        return md
+
+    def test_antisites_cover_the_species_cross_product(self, cathode):
+        """LiFePO4 has four species, so every ordered pair is a candidate
+        swap — and Fe on the Li site is the defect that blocks its
+        one-dimensional lithium channel."""
+        out = mv.pp.defects(cathode, kinds=("antisite",), min_atoms=60,
+                            max_atoms=260)
+        assert out.n_obs > 10
+        swaps = {(r, a) for r, a in zip(out.obs["removed"], out.obs["added"])}
+        assert ("Fe", "Li") in swaps
+        assert all(r != a for r, a in swaps)
+
+    def test_interstitials_add_an_atom(self, host):
+        """The defining property: one more atom than the host supercell."""
+        out = mv.pp.defects(host, kinds=("interstitial",),
+                            interstitial_species=["Al"], min_atoms=8,
+                            max_atoms=200)
+        mv.pp.describe(out)
+        assert out.n_obs > 0
+        assert set(out.obs["added"]) == {"Al"}
+        assert all(r == "" for r in out.obs["removed"])
+
+    def test_a_vacancy_still_needs_no_extra_package(self, cathode):
+        """The kinds matverse builds itself keep working, and honour the
+        supercell you asked for."""
+        out = mv.pp.defects(cathode, kinds=("vacancy",), supercell=(1, 1, 1))
+        mv.pp.describe(out)
+        parent = len(mv.structures(cathode)[0])
+        assert set(out.obs["nsites"]) == {parent - 1}
+
+    def test_the_defect_kind_is_recorded(self, host):
+        out = mv.pp.defects(host, kinds=("antisite",), min_atoms=8,
+                            max_atoms=200)
+        assert set(out.obs["defect"]) == {"antisite"}
+        assert set(out.obs["parent"]) == {str(host.obs_names[0])}
+
+    def test_an_unknown_kind_is_refused(self, host):
+        with pytest.raises(ValueError, match="unknown defect kind"):
+            mv.pp.defects(host, kinds=("frenkel",))
+
+    def test_the_result_is_an_ordinary_dataset(self, host):
+        out = mv.pp.defects(host, kinds=("interstitial",),
+                            interstitial_species=["Al"], min_atoms=8,
+                            max_atoms=200)
+        mv.pp.describe(out)
+        mv.pp.qc(out)
+        assert "is_valid" in out.obs
+
+
+    def test_an_impossible_supercell_window_says_so(self):
+        """It used to report "no defect was generated", which blames the
+        chemistry for what is an argument problem."""
+        md = mv.datasets.load("battery_cathodes")[:1].copy()
+        mv.pp.describe(md)
+        with pytest.raises(ValueError, match="none produced a supercell"):
+            mv.pp.defects(md, kinds=("antisite",), min_atoms=2, max_atoms=5)

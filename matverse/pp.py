@@ -571,35 +571,54 @@ def rattle(md: AnnData, stdev: float = 0.03, source: str = "input",
 
 @register_function(
     aliases=["defects", "vacancies", "substitutions", "point defects",
-             "enumerate defects", "doping", "make defects"],
+             "enumerate defects", "doping", "make defects", "interstitials",
+             "antisites", "self interstitial"],
     category="pp",
-    description="Enumerate point defects — vacancies and substitutions — in a "
-                "supercell of every structure, returning them as a new dataset "
-                "with the parent and defect type recorded.",
+    description="Enumerate point defects — vacancies, substitutions, "
+                "interstitials and antisites — in a supercell of every "
+                "structure, returning them as a new dataset with the parent "
+                "and defect type recorded.",
     requires={"structures": ["{source}"]},
     examples=["defective = mv.pp.defects(md, kinds=('vacancy',))",
-              "defective = mv.pp.defects(md, substitutions={'Al': ['Mg']})"],
-    related=["mv.calc.relax", "mv.pp.supercell"],
+              "defective = mv.pp.defects(md, substitutions={'Al': ['Mg']})",
+              "defective = mv.pp.defects(md, kinds=('interstitial',), "
+              "interstitial_species=['Li'])",
+              "defective = mv.pp.defects(md, kinds=('antisite',))"],
+    related=["mv.calc.relax", "mv.pp.supercell", "mv.thermo.defect_formation"],
     notes="Returns a new dataset rather than depositing, because there are more "
           "defects than parents. Symmetry-inequivalent sites are enumerated "
           "once each; without that a 32-atom supercell yields 32 identical "
           "vacancies and wastes a calculator on 31 of them.\n\n"
+          "**Vacancies and substitutions** are built here: remove or replace "
+          "one site of each inequivalent kind in a supercell you specify.\n\n"
+          "**Interstitials and antisites** go through "
+          "pymatgen-analysis-defects, because neither is a site you already "
+          "have. An interstitial has to be *found* — the Voronoi construction "
+          "locates the holes — and an antisite is the cross product of the "
+          "species already present, which for a quaternary is more "
+          "combinations than anyone enumerates by hand. That package also "
+          "picks the supercell itself, targeting a minimum image distance "
+          "rather than a fixed multiple, so the supercell= argument does not "
+          "apply to those two kinds and the cell you get back may differ in "
+          "size between them.\n\n"
           "Defect *formation energies* need charge states, a chemical "
-          "potential and a finite-size correction, which is what doped and "
-          "pydefect exist for. This builds the structures.",
+          "potential and a finite-size correction. mv.thermo.defect_formation "
+          "does the first two and records that it does not do the third.",
 )
 def defects(md: AnnData, source: str = "input", supercell=(2, 2, 2),
             kinds=("vacancy",), substitutions: dict | None = None,
-            symprec: float = 0.1) -> AnnData:
+            interstitial_species=None, symprec: float = 0.1,
+            min_atoms: int = 60, max_atoms: int = 240) -> AnnData:
     """Enumerate point defects. Returns a new dataset of defective cells."""
     from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
 
     from .data import from_structures  # noqa: F401  (imported for clarity)
 
-    unknown = set(kinds) - {"vacancy", "substitution"}
+    known = {"vacancy", "substitution", "interstitial", "antisite"}
+    unknown = set(kinds) - known
     if unknown:
         raise ValueError(f"unknown defect kind(s) {sorted(unknown)}; use "
-                         f"'vacancy' and 'substitution'")
+                         f"{sorted(known)}")
     if "substitution" in kinds and not substitutions:
         raise ValueError("kinds includes 'substitution' but no substitutions "
                          "were given, e.g. substitutions={'Al': ['Mg']}")
@@ -624,6 +643,16 @@ def defects(md: AnnData, source: str = "input", supercell=(2, 2, 2),
                 rows.append({"parent": str(name), "defect": "substitution",
                              "site": int(site_index), "removed": symbol,
                              "added": str(replacement)})
+
+        for kind in ("interstitial", "antisite"):
+            if kind not in kinds:
+                continue
+            for built, removed, added in _generated_defects(
+                    structure, kind, interstitial_species, min_atoms,
+                    max_atoms):
+                out.append(built)
+                rows.append({"parent": str(name), "defect": kind,
+                             "site": -1, "removed": removed, "added": added})
 
     if not out:
         raise ValueError("no defect was generated; check kinds= and "
@@ -754,3 +783,56 @@ def predict_volume(md: AnnData, source: str = "input",
     md.uns["predict_volume"] = {"source": source, "key_added": key_added,
                                 "n_failed": int(failed)}
     record(md, "pp.predict_volume", source=source, key_added=key_added)
+
+
+def _generated_defects(structure, kind: str, interstitial_species,
+                       min_atoms: int, max_atoms: int):
+    """Interstitials or antisites, via pymatgen-analysis-defects.
+
+    Yields ``(supercell, removed, added)``. Neither kind is a site the input
+    already has: an interstitial has to be located, and an antisite is a cross
+    product over the species present.
+    """
+    try:
+        from pymatgen.analysis.defects.generators import (
+            AntiSiteGenerator, VoronoiInterstitialGenerator)
+    except ImportError as exc:
+        raise ImportError(
+            f"kinds includes {kind!r}, which needs pymatgen-analysis-defects. "
+            f"Install it with `pip install pymatgen-analysis-defects`. "
+            f"Vacancies and substitutions need no extra package. ({exc})"
+        ) from exc
+
+    if kind == "antisite":
+        generated = AntiSiteGenerator().generate(structure)
+    else:
+        species = (list(interstitial_species) if interstitial_species
+                   else sorted({site.specie.symbol for site in structure}))
+        generated = VoronoiInterstitialGenerator().generate(structure, species)
+
+    reasons: list[str] = []
+    produced = 0
+    for defect in generated:
+        try:
+            cell = defect.get_supercell_structure(min_atoms=min_atoms,
+                                                  max_atoms=max_atoms)
+        except Exception as exc:
+            reasons.append(f"{getattr(defect, 'name', kind)}: "
+                           f"{type(exc).__name__}: {exc}")
+            continue
+        produced += 1
+        changes = getattr(defect, "element_changes", {}) or {}
+        removed = ", ".join(str(k) for k, v in changes.items() if v < 0)
+        added = ", ".join(str(k) for k, v in changes.items() if v > 0)
+        yield cell, removed, added
+
+    if not produced and reasons:
+        # Every candidate failed for the same reason nearly always: no
+        # supercell satisfies both the atom-count window and the minimum image
+        # distance. Saying "no defect was generated" would blame the chemistry.
+        raise ValueError(
+            f"{len(reasons)} {kind} candidate(s) were enumerated and none "
+            f"produced a supercell with min_atoms={min_atoms}, "
+            f"max_atoms={max_atoms}. Widen that window — the generator also "
+            f"targets a minimum image distance, so a small max_atoms can "
+            f"leave nothing legal. First failure: {reasons[0]}")
