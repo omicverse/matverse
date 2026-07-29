@@ -183,6 +183,20 @@ def oxidized():
     return md
 
 
+def perovskites():
+    """LaMnO3 (Mn3+, the textbook Jahn-Teller ion) against SrTiO3 (d0)."""
+    from pymatgen.core import Lattice, Structure
+
+    def perovskite(a_site, b_site, a):
+        return Structure(Lattice.cubic(a), [a_site, b_site, "O", "O", "O"],
+                         [[0, 0, 0], [.5, .5, .5], [.5, .5, 0],
+                          [.5, 0, .5], [0, .5, .5]])
+    md = mv.data.from_structures([perovskite("La", "Mn", 3.9),
+                                  perovskite("Sr", "Ti", 3.905)])
+    mv.pp.describe(md)
+    return md
+
+
 def quartz():
     """alpha-quartz, the textbook piezoelectric and a non-centrosymmetric one."""
     from pymatgen.core import Lattice, Structure
@@ -573,6 +587,7 @@ def cases(tmp):
         (mv.elec.dos_fingerprint, with_dos, (), {"level": "tb"}),
 
         # mv.mag
+        (mv.mag.jahn_teller, perovskites, (), {}),
         (mv.mag.orderings, magnetic, (),
          {"max_orderings": 2, "returns": "new"}),
         (mv.mag.ground_state, orderings.copy, (magnetic(),), {"level": "emt"}),

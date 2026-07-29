@@ -75,6 +75,7 @@ WRAPPED: Dict[str, List[str]] = {
     "analysis.local_env": ["mv.env.coordination", "mv.env.bonds",
                            "mv.prop.dimensionality"],
     "analysis.magnetism.analyzer": ["mv.mag.orderings", "mv.mag.describe"],
+    "analysis.magnetism.jahnteller": ["mv.mag.jahn_teller"],
     "analysis.nmr": ["mv.prop.nmr", "mv.prop.efg"],
     "analysis.phase_diagram": ["mv.thermo.hull", "mv.thermo.chempot_limits"],
     "analysis.piezo": ["mv.prop.piezoelectric"],

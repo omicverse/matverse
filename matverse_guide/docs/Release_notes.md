@@ -1,5 +1,40 @@
 # Release notes
 
+## v0.1.23
+
+**64 of 162 in-scope pymatgen modules, 39.5%.**
+
+### `mv.mag.jahn_teller`
+
+Magnetic ordering is one consequence of a partly filled d shell; distortion is
+the other, and it is structural rather than magnetic. A degenerate electronic
+ground state in an octahedral site lowers its energy by distorting the
+octahedron — which is why LaMnO₃ is orthorhombic rather than cubic and why
+manganese spinel cathodes fade on cycling.
+
+LaMnO₃ and LaNiO₃ come out strong and SrTiO₃ inactive: Mn³⁺ and Ni³⁺ both put an
+electron in a doubly degenerate e_g level, and Ti⁴⁺ is d⁰ with no degeneracy to
+lift. `jahn_teller_species` names the ion responsible, because knowing a
+material distorts is not useful without knowing which site is doing it; the
+ligand bond lengths, which are the distortion rather than a label for it, stay
+in `uns`.
+
+### Two capabilities deliberately not shipped, with the reason
+
+**Exchange couplings.** `pymatgen.analysis.magnetism.heisenberg` maps a set of
+ordered magnetic structures and their energies onto a Heisenberg model. matverse
+has the orderings and the energies, so the fit is available — but **EMT is not
+spin-polarised**, so every ordering matverse can compute has the same energy and
+the couplings that come out are meaningless. There is no calculator shipped here
+that can verify the function, so it is not shipped either. With DFT energies it
+would work, and that is a different claim from "it works".
+
+**Freysoldt and Kumagai image-charge corrections.** `mv.thermo.defect_formation`
+already records `image_charge_correction: False` and says so in its notes; the
+corrections need the electrostatic potential from a real DFT run, which is the
+`mv.dft` boundary. Upgrading a declared limitation to a capability is worth
+doing and is not doable offline.
+
 ## v0.1.22
 
 Where the candidates come from. **63 of 162 in-scope pymatgen modules, 38.9%**,

@@ -377,4 +377,80 @@ def _order_from_moments(values: np.ndarray) -> str:
     return "FiM" if abs(significant.sum()) > 0.05 else "AFM"
 
 
-__all__ = ["orderings", "ground_state", "describe", "MAGNETIC_ELEMENTS"]
+__all__ = ["orderings", "ground_state", "describe", "jahn_teller",
+           "MAGNETIC_ELEMENTS"]
+
+
+@register_function(
+    aliases=["jahn teller", "jahn-teller", "jt distortion",
+             "orbital degeneracy", "is it jahn teller active",
+             "octahedral distortion"],
+    category="mag",
+    description="Whether each material contains an ion whose partly filled d "
+                "shell makes its coordination octahedron unstable against "
+                "distortion, and how strongly.",
+    requires={"structures": ["{source}"]},
+    produces={"obs": ["jahn_teller_active", "jahn_teller_strength",
+                      "jahn_teller_species"],
+              "uns": ["jahn_teller"]},
+    examples=["mv.mag.jahn_teller(md)",
+              "mv.mag.jahn_teller(md, guess_spin=True)"],
+    related=["mv.env.chemenv", "mv.mag.describe", "mv.transform.oxidation_states"],
+    notes="A degenerate electronic ground state in an octahedral site lowers "
+          "its energy by distorting, and the distortion is not a detail: it is "
+          "why LaMnO3 is orthorhombic rather than cubic, why manganese "
+          "spinels fade on cycling, and why a structure prediction that "
+          "assumed the ideal polyhedron can be qualitatively wrong.\n\n"
+          "The answer depends on the oxidation state and the spin state. "
+          "Valences are assigned from the structure by bond valence sums; "
+          "guess_spin=True additionally guesses high or low spin from the "
+          "species, which is a further assumption and off by default. A "
+          "structure that already carries oxidation states — from "
+          "mv.transform.oxidation_states — is used as given.\n\n"
+          "'strong' means an e_g degeneracy, which distorts markedly; 'weak' "
+          "means a t_2g one, which usually does not survive room temperature. "
+          "Reading 'weak' as 'distorted' is the common mistake.",
+)
+def jahn_teller(md: AnnData, source: str = "input", guess_spin: bool = False,
+                tolerance: float = 0.1) -> None:
+    """Jahn-Teller activity per material. Deposits; returns ``None``."""
+    from pymatgen.analysis.magnetism.jahnteller import JahnTellerAnalyzer
+
+    analyzer = JahnTellerAnalyzer()
+    active = np.zeros(md.n_obs, dtype=bool)
+    strength = np.empty(md.n_obs, dtype=object)
+    species = np.empty(md.n_obs, dtype=object)
+    detail: dict = {}
+    failed = 0
+
+    for i, (row, structure) in enumerate(
+            zip(md.obs_names, structures(md, source))):
+        strength[i] = "none"
+        species[i] = ""
+        try:
+            result = analyzer.get_analysis(
+                structure, calculate_valences=True,
+                guesstimate_spin=guess_spin, op_threshold=tolerance)
+        except Exception:
+            strength[i] = "unknown"
+            failed += 1
+            continue
+        active[i] = bool(result.get("active", False))
+        if active[i]:
+            strength[i] = str(result.get("strength", "unknown"))
+            # The list holds the active sites only, each with the ion, the
+            # ligand it is coordinated by and the spread of those bond
+            # lengths — which is the distortion itself.
+            sites = result.get("sites") or []
+            names = sorted({str(site.get("species", "")) for site in sites})
+            species[i] = ", ".join(n for n in names if n)
+        detail[str(row)] = {"active": bool(active[i]),
+                            "strength": str(strength[i]),
+                            "sites": result.get("sites", [])}
+
+    md.obs["jahn_teller_active"] = active
+    md.obs["jahn_teller_strength"] = strength.astype(str)
+    md.obs["jahn_teller_species"] = species.astype(str)
+    md.uns["jahn_teller"] = {"source": source, "guess_spin": bool(guess_spin),
+                             "n_failed": int(failed), "per_material": detail}
+    record(md, "mag.jahn_teller", source=source, guess_spin=guess_spin)
