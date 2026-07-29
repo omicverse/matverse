@@ -583,6 +583,61 @@ These come from `MVLCINEBEndPointSet`, the VTST-tested settings in
 and `mv.dft.read_outputs` brings the energies back onto the same rows."""),
 
     ("markdown", """\
+## Is it a killer?
+
+A defect level in the gap is not automatically a problem. What decides whether
+it ruins a solar cell is how fast it captures carriers, and that turns on how
+far the lattice relaxes when the charge state changes — a deep level with little
+relaxation is harmless, and a shallow one with a lot is not.
+
+`mv.prop.capture` gives the Shockley–Read–Hall coefficient in the
+one-dimensional configuration-coordinate approximation:"""),
+
+    ("code", """\
+traps = mv.data.from_structures(mv.structures(copper, "input") * 2)
+traps.obs_names = ["weakly coupled", "strongly coupled"]
+
+mv.prop.capture(traps, dQ=1.0, dE=1.0, omega_i=0.02, omega_f=0.02,
+                coupling=[1e-3, 2e-3], temperature=300.0)
+
+traps.obs[["capture_coefficient_srh"]]"""),
+
+    ("markdown", """\
+Doubling the electron–phonon matrix element multiplies the capture rate by
+**four** — it enters squared — so a factor of two in a quantity nobody computes
+very precisely is a factor of four in the answer. Worth knowing before ranking
+defects on it.
+
+It is also thermally activated, steeply:"""),
+
+    ("code", """\
+for T in (200.0, 300.0, 600.0):
+    mv.prop.capture(traps, dQ=1.0, dE=1.0, omega_i=0.02, omega_f=0.02,
+                    coupling=1e-3, temperature=T, key_added=f"T{int(T)}")
+
+traps.obs[[f"capture_coefficient_T{int(T)}"
+           for T in (200, 300, 600)]].iloc[[0]]"""),
+
+    ("markdown", """\
+Orders of magnitude across a few hundred kelvin, which is why a capture
+coefficient quoted without its temperature is not a quantity. The temperature
+is stored in `uns['capture']` beside every column.
+
+```{note}
+**The configuration-coordinate parameters are arguments.** dQ is the
+mass-weighted displacement between the two relaxed charge states, dE their
+separation, omega_i and omega_f the two harmonic frequencies, and `coupling` the
+electron–phonon matrix element — all from a calculation matverse does not do.
+Only the cell volume is taken from the structure, because that is the one thing
+already here.
+
+`kind='radiative'` switches to the radiative channel, where `coupling` is read
+as a dipole matrix element. Ask for a photon more energetic than the transition
+and matverse refuses: pymatgen returns NaN for that case without comment, which
+would arrive as a silently blank column.
+```"""),
+
+    ("markdown", """\
 ## What the object remembers"""),
 
     ("code", """\

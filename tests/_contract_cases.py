@@ -674,6 +674,9 @@ def cases(tmp):
         (mv.neb.hops, one_metal, ("Cu",), {"returns": "new"}),
 
         (mv.disorder.sro, one_metal, (), {}),
+        (mv.prop.capture, one_metal, (), 
+         {"dQ": 1.0, "dE": 1.0, "omega_i": 0.02, "omega_f": 0.02,
+          "coupling": 1e-3}),
         (mv.elec.xps, one_metal, (model_dos(),), {"level": "model"}),
         (mv.mol.quasirrho, water_with_energy,
          ([[1595.0, 3657.0, 3756.0]],), {"energy": "e"}),

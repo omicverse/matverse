@@ -1861,3 +1861,129 @@ def electrostatic(md: AnnData, source: str = "input",
                 "repulsion",
     }
     record(md, "prop.electrostatic", source=source)
+
+
+@register_function(
+    aliases=["capture", "capture coefficient", "srh", "recombination",
+             "non-radiative", "killer defect", "carrier lifetime",
+             "shockley-read-hall", "trap"],
+    category="prop",
+    description="Carrier capture coefficient of a defect, radiative or "
+                "non-radiative, from its configuration-coordinate parameters.",
+    requires={"structures": ["{source}"]},
+    produces={"obs": ["capture_coefficient_{kind}"]},
+    prerequisites=[],
+    examples=["mv.prop.capture(md, dQ=1.2, dE=0.8, omega_i=0.03, "
+              "omega_f=0.025, coupling=2e-3)",
+              "mv.prop.capture(md, dQ=1.2, dE=0.8, omega_i=0.03, "
+              "omega_f=0.025, coupling=1e-3, temperature=500.0)"],
+    related=["mv.thermo.defect_formation", "mv.prop.slme", "mv.pp.defects"],
+    notes="A defect level in the gap is not automatically a problem. What "
+          "decides whether it kills a solar cell is how fast it captures "
+          "carriers, and that depends on how far the lattice relaxes when the "
+          "charge state changes — a deep level with little relaxation is "
+          "harmless and a shallow one with a lot is not. This is the "
+          "Shockley-Read-Hall coefficient in the one-dimensional "
+          "configuration-coordinate approximation.\\n\\n"
+          "It scales as the square of the electron-phonon matrix element and "
+          "is thermally activated, so a coefficient quoted without its "
+          "temperature says little. Both are arguments and both are "
+          "recorded.\\n\\n"
+          "**The configuration-coordinate parameters are arguments**, because "
+          "they come from a calculation matverse does not do: dQ is the mass-"
+          "weighted displacement between the two relaxed charge states in "
+          "amu^(1/2) angstrom, dE their energy separation in eV, omega_i and "
+          "omega_f the two harmonic frequencies in eV, and coupling the "
+          "electron-phonon matrix element. Each may be one number for the "
+          "whole dataset or one per row. The cell volume is taken from the "
+          "structure, which is the one thing that is already here.\\n\\n"
+          "kind='radiative' switches to the radiative coefficient instead, "
+          "where `coupling` is read as the dipole matrix element and a photon "
+          "energy is required.\\n\\n"
+          "Numba is optional and only makes this faster; pymatgen prints a "
+          "notice when it is absent and computes the same numbers either way.",
+)
+def capture(md: AnnData, dQ, dE, omega_i, omega_f, coupling,
+            temperature: float = 300.0, kind: str = "srh",
+            degeneracy: int = 1, omega_photon=None, source: str = "input",
+            key_added: str | None = None) -> None:
+    """Carrier capture coefficient in cm^3/s. Deposits; returns ``None``."""
+    try:
+        from pymatgen.analysis.defects.recombination import (get_Rad_coef,
+                                                             get_SRH_coef)
+    except ImportError as exc:                             # pragma: no cover
+        raise ImportError(
+            f"mv.prop.capture needs pymatgen-analysis-defects. Install it "
+            f"with `pip install pymatgen-analysis-defects`. ({exc})") from exc
+
+    if kind not in ("srh", "radiative"):
+        raise ValueError(f"kind must be 'srh' or 'radiative', got {kind!r}")
+    if kind == "radiative" and omega_photon is None:
+        raise ValueError("kind='radiative' needs omega_photon, the emitted "
+                         "photon energy in eV")
+
+    def spread(value, name):
+        """One number for everyone, or one each — anything else is a mistake."""
+        array = np.atleast_1d(np.asarray(value, dtype=float))
+        if array.size == 1:
+            return np.full(md.n_obs, float(array[0]))
+        if array.size != md.n_obs:
+            raise ValueError(f"{name} has {array.size} values for "
+                             f"{md.n_obs} rows; pass one or one per row")
+        return array.astype(float)
+
+    fields = {n: spread(v, n) for n, v in
+              (("dQ", dQ), ("dE", dE), ("omega_i", omega_i),
+               ("omega_f", omega_f), ("coupling", coupling))}
+    photons = (spread(omega_photon, "omega_photon")
+               if omega_photon is not None else None)
+    if photons is not None:
+        # A photon cannot carry away more than the transition provides.
+        # get_Rad_coef returns NaN for that rather than raising, which would
+        # arrive here as a silent blank column.
+        impossible = np.where(photons > fields["dE"] + 1e-12)[0]
+        if len(impossible):
+            raise ValueError(
+                f"omega_photon exceeds dE on {len(impossible)} row(s) "
+                f"(first: row {int(impossible[0])}, photon "
+                f"{photons[impossible[0]]:.3f} eV from a "
+                f"{fields['dE'][impossible[0]]:.3f} eV transition). The "
+                f"emitted photon cannot be more energetic than the level "
+                f"separation; upstream returns NaN for this rather than "
+                f"saying so.")
+
+    coefficients = np.full(md.n_obs, np.nan)
+    failed: list[str] = []
+
+    for row, structure in enumerate(structures(md, source)):
+        volume = float(structure.lattice.volume)
+        try:
+            if kind == "srh":
+                value = get_SRH_coef(
+                    T=float(temperature), dQ=fields["dQ"][row],
+                    dE=fields["dE"][row], omega_i=fields["omega_i"][row],
+                    omega_f=fields["omega_f"][row],
+                    elph_me=fields["coupling"][row], volume=volume,
+                    g=int(degeneracy))
+            else:
+                value = get_Rad_coef(
+                    T=float(temperature), dQ=fields["dQ"][row],
+                    dE=fields["dE"][row], omega_i=fields["omega_i"][row],
+                    omega_f=fields["omega_f"][row],
+                    omega_photon=photons[row],
+                    dipole_me=fields["coupling"][row], volume=volume,
+                    g=int(degeneracy))
+            coefficients[row] = float(np.asarray(value).ravel()[0])
+        except Exception as exc:
+            failed.append(f"row {row}: {type(exc).__name__}: {exc}")
+
+    name = key_added or kind
+    md.obs[f"capture_coefficient_{name}"] = coefficients
+    md.uns.setdefault("capture", {})[name] = {
+        "kind": kind, "temperature": float(temperature),
+        "degeneracy": int(degeneracy), "unit": "cm^3/s",
+        "parameters": {k: v.tolist() for k, v in fields.items()},
+        "errors": failed,
+    }
+    record(md, "prop.capture", kind=kind, temperature=float(temperature),
+           key_added=name)

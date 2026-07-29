@@ -664,3 +664,84 @@ class TestImageChargeCorrection:
         assert record["dielectric"] == 10.0
         assert "LOCPOT" in record["correction_terms"]
         assert record["correction_error"] is None
+
+
+@pytest.mark.skipif(not _has_defects_addon(),
+                    reason="pymatgen-analysis-defects is an optional extra")
+class TestCaptureCoefficient:
+    """Checked against exact scaling laws rather than a reference number.
+
+    The Shockley-Read-Hall coefficient is quadratic in the electron-phonon
+    matrix element and thermally activated. Both are properties of the
+    expression, not of any particular defect, so they hold whatever the inputs.
+    """
+
+    BASE = dict(dQ=1.0, dE=1.0, omega_i=0.02, omega_f=0.02)
+
+    @staticmethod
+    def _cell(n=1):
+        from pymatgen.core import Lattice, Structure
+        st = Structure(Lattice.cubic(10.0), ["Ga", "N"],
+                       [[0, 0, 0], [.5, .5, .5]])
+        return mv.data.from_structures([st] * n)
+
+    def test_it_is_quadratic_in_the_coupling(self):
+        md = self._cell(2)
+        mv.prop.capture(md, coupling=[1e-3, 2e-3], **self.BASE)
+        c = md.obs["capture_coefficient_srh"].to_numpy()
+        assert c[1] / c[0] == pytest.approx(4.0, rel=1e-6)
+
+    def test_no_coupling_means_no_capture(self):
+        md = self._cell()
+        mv.prop.capture(md, coupling=0.0, **self.BASE)
+        assert float(md.obs["capture_coefficient_srh"].iloc[0]) == \
+            pytest.approx(0.0, abs=1e-30)
+
+    def test_it_is_thermally_activated(self):
+        md = self._cell()
+        mv.prop.capture(md, coupling=1e-3, temperature=300.0, key_added="cold",
+                        **self.BASE)
+        mv.prop.capture(md, coupling=1e-3, temperature=600.0, key_added="hot",
+                        **self.BASE)
+        assert float(md.obs["capture_coefficient_hot"].iloc[0]) > \
+            float(md.obs["capture_coefficient_cold"].iloc[0])
+
+    def test_the_temperature_is_recorded_with_the_number(self):
+        """A capture coefficient without its temperature is not a quantity."""
+        md = self._cell()
+        mv.prop.capture(md, coupling=1e-3, temperature=450.0, **self.BASE)
+        assert md.uns["capture"]["srh"]["temperature"] == 450.0
+        assert md.uns["capture"]["srh"]["unit"] == "cm^3/s"
+
+    def test_one_value_or_one_per_row(self):
+        md = self._cell(3)
+        mv.prop.capture(md, coupling=1e-3, **self.BASE)
+        assert np.isfinite(md.obs["capture_coefficient_srh"]).all()
+        with pytest.raises(ValueError, match="one or one per row"):
+            mv.prop.capture(md, coupling=[1e-3, 2e-3], **self.BASE)
+
+    def test_the_radiative_channel_needs_a_photon_energy(self):
+        md = self._cell()
+        with pytest.raises(ValueError, match="omega_photon"):
+            mv.prop.capture(md, coupling=1e-3, kind="radiative", **self.BASE)
+
+    def test_the_radiative_channel_computes(self):
+        md = self._cell()
+        mv.prop.capture(md, coupling=1e-3, kind="radiative",
+                        omega_photon=0.8, **self.BASE)
+        assert np.isfinite(
+            float(md.obs["capture_coefficient_radiative"].iloc[0]))
+
+    def test_an_impossible_photon_is_refused_not_returned_as_nan(self):
+        """dE is 1.0 eV here, so a 1.5 eV photon carries away more than the
+        transition provides. get_Rad_coef returns NaN for that without
+        complaint, which would arrive as a silently blank column."""
+        md = self._cell()
+        with pytest.raises(ValueError, match="exceeds dE"):
+            mv.prop.capture(md, coupling=1e-3, kind="radiative",
+                            omega_photon=1.5, **self.BASE)
+
+    def test_an_unknown_channel_is_refused(self):
+        md = self._cell()
+        with pytest.raises(ValueError, match="'srh' or 'radiative'"):
+            mv.prop.capture(md, coupling=1e-3, kind="auger", **self.BASE)

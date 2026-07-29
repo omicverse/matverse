@@ -144,6 +144,7 @@ WRAPPED: Dict[str, List[str]] = {
     "analysis.alloys.core": ["mv.gen.alloy_pairs"],
     "analysis.quasirrho": ["mv.mol.quasirrho"],
     "analysis.xps": ["mv.elec.xps"],
+    "analysis.defects.recombination": ["mv.prop.capture"],
     "analysis.defects.corrections.freysoldt":
         ["mv.thermo.defect_formation"],
     "analysis.diffusion.aimd.clustering": ["mv.md.sites"],
@@ -501,13 +502,6 @@ BLOCKED: Dict[str, str] = {
         "blocked by what matverse is. It is blocked by verification: a "
         "configuration-coordinate diagram needs the potential energy "
         "surfaces of two charge states along a distortion, from real runs.",
-    "analysis.defects.recombination":
-        "matverse reads external first-principles output as a matter of "
-        "course - mv.dft.read_outputs, mv.dft.read_dos, mv.elec.read_bands "
-        "and mv.elec.cohp all take a directory of runs - so this is not "
-        "blocked by what matverse is. It is blocked by verification: "
-        "non-radiative capture coefficients need electron-phonon coupling "
-        "matrix elements, which no calculator matverse ships computes.",
     "analysis.excitation":
         "matverse reads external first-principles output as a matter of "
         "course - mv.dft.read_outputs, mv.dft.read_dos, mv.elec.read_bands "
