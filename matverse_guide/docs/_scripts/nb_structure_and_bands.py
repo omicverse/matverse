@@ -167,6 +167,34 @@ md.obs[["name", "has_octahedra"]]"""),
 in the same environment, which is what a high-symmetry structure looks like
 from the inside.
 
+## Do the polyhedra connect?
+
+`mv.env.chemenv` said each site is an octahedron or a tetrahedron. The next
+question is whether those polyhedra join up, and in how many directions — which
+is not the same as whether the *bonds* do."""),
+
+    ("code", """\
+mv.env.connectivity(md)
+md.obs[["name", "n_polyhedral_components", "connectivity_dimension",
+        "largest_component_sites", "is_3d_connected"]]"""),
+
+    ("markdown", """\
+For an ion conductor this is the question. A framework whose octahedra share
+corners in only two directions cannot conduct in the third, however low the
+individual hop barrier is — and a hop barrier is the expensive thing to compute.
+
+```{warning}
+This function and `mv.env.chemenv` both had an order-dependence bug until
+v0.1.26, and it is worth knowing about because of how it hid.
+
+`LocalGeometryFinder` keeps state that `setup_structure` does not clear. Reusing
+one across a dataset returned **empty** environments for every material after
+the first — as a blank string, not an error. Nothing caught it because every
+test and every notebook cell used a single-material dataset. Both functions now
+build a fresh finder per structure, and the test suite pins the answer against
+dataset order.
+```
+
 ## The same graph, asked a global question
 
 Coordination is local: how many neighbours does this atom have. The bond graph

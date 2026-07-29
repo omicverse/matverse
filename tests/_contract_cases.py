@@ -514,6 +514,7 @@ def cases(tmp):
         (mv.env.coordination, olivine, (mv.multi.sites(olivine()),), {}),
         (mv.env.bonds, olivine, (mv.multi.sites(olivine()),), {}),
         (mv.env.chemenv, olivine, (mv.multi.sites(olivine()),), {}),
+        (mv.env.connectivity, perovskites, (), {}),
         (mv.env.summarise, olivine_sites.copy, (olivine_md,), {}),
 
         # mv.tl, mv.gen, mv.pp

@@ -60,6 +60,12 @@ WRAPPED: Dict[str, List[str]] = {
     "analysis.eos": ["mv.prop.eos", "mv.prop.quasiharmonic"],
     "analysis.cost": ["mv.prop.cost"],
     "analysis.prototypes": ["mv.pp.prototype"],
+    "analysis.chemenv.connectivity.connectivity_finder":
+        ["mv.env.connectivity"],
+    "analysis.chemenv.connectivity.structure_connectivity":
+        ["mv.env.connectivity"],
+    "analysis.chemenv.connectivity.connected_components":
+        ["mv.env.connectivity"],
     "analysis.defects.generators": ["mv.pp.defects"],
     "analysis.structure_prediction.substitution_probability":
         ["mv.gen.predict_substitutions"],
@@ -114,6 +120,20 @@ WRAPPED: Dict[str, List[str]] = {
     "transformations.standard_transformations": ["mv.transform.apply"],
     "transformations.site_transformations": ["mv.transform.apply"],
 }
+
+#: Modules matverse reaches through an object another module handed it, rather
+#: than by importing them. The capability is used; the import is not there to
+#: find, so the direct-import check is told why rather than weakened.
+TRANSITIVE: Dict[str, str] = {
+    "analysis.chemenv.connectivity.structure_connectivity":
+        "ConnectivityFinder.get_structure_connectivity returns a "
+        "StructureConnectivity, and mv.env.connectivity calls "
+        "get_connected_components on it",
+    "analysis.chemenv.connectivity.connected_components":
+        "the components that call returns are ConnectedComponent objects, and "
+        "mv.env.connectivity reads periodicity_vectors off each one",
+}
+
 
 #: Names that mean the same capability in different pymatgen layouts. matverse
 #: supports two pymatgen versions and they disagree about where several modules
@@ -478,5 +498,6 @@ def summary(root: str | None = None) -> str:
 
 
 __all__ = ["WRAPPED", "NATIVE", "NOT_A_GOAL", "INTERNAL", "EQUIVALENT",
+           "TRANSITIVE",
            "equivalents", "public_modules",
            "aliases", "canonical", "classify", "report", "summary"]

@@ -35,7 +35,7 @@ warnings.filterwarnings("ignore")
 #: Modules covered on this branch. Raise it as batches land; a drop is a
 #: regression. A count rather than a fraction, because the denominator moves
 #: when pymatgen adds modules and a ratchet that slips on rounding is not one.
-COVERED_FLOOR = 69
+COVERED_FLOOR = 72
 
 #: The pymatgen the floor was recorded against. matverse supports two, and they
 #: ship different module trees — 162 modules in scope against 134 — so a count
@@ -78,6 +78,8 @@ class TestTheMapIsHonest:
         # and the map lists both names.
         unbacked = []
         for module in _coverage.WRAPPED:
+            if module in _coverage.TRANSITIVE:
+                continue          # reached through a returned object; see below
             group = {_coverage.canonical(n, alias_map)
                      for n in _coverage.equivalents(module)}
             if group & present and not (group & reached):
@@ -97,6 +99,14 @@ class TestTheMapIsHonest:
         assert not missing, (
             "the coverage map names functions that are not registered:\n  "
             + "\n  ".join(missing))
+
+    def test_transitive_reach_names_what_hands_the_object_over(self):
+        """A module reached through an object rather than an import is still
+        used, but the import is not there to find. Saying so beats weakening
+        the check that caught it."""
+        for module, reason in _coverage.TRANSITIVE.items():
+            assert module in _coverage.WRAPPED, module
+            assert reason.strip(), module
 
     def test_every_exemption_carries_a_reason(self):
         for mapping in (_coverage.NATIVE, _coverage.NOT_A_GOAL):

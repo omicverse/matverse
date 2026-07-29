@@ -1,5 +1,52 @@
 # Release notes
 
+## v0.1.26
+
+**72 of 142 in-scope pymatgen modules, 50.7%.**
+
+### `mv.env.chemenv` was returning empty results, silently
+
+Building `mv.env.connectivity` on top of ChemEnv exposed a bug in the ChemEnv
+wrapper that has been shipped since v0.1.15.
+
+`LocalGeometryFinder` keeps state that `setup_structure` does not clear.
+`mv.env.chemenv` built one and reused it across the dataset, so **every material
+after the first got empty environments** — a blank string, not an error, not a
+warning, not a count in `n_failed`.
+
+Nothing caught it because **every test and every notebook cell used a
+single-material dataset**. The olivine fixture is `[:1]`. The tutorial loads
+`[:1]`. A bug that only appears from the second row onward was invisible to a
+suite that never had a second row.
+
+Both functions now build a fresh finder per structure, and
+`TestOrderIndependence` pins the answer against dataset order rather than
+against a stored value.
+
+### `mv.env.connectivity`
+
+`mv.prop.dimensionality` asks whether the *bonds* close in three directions.
+This asks whether the **polyhedra** do, which is a different question and the
+one an ion conductor turns on: a framework whose octahedra share corners in only
+two directions cannot conduct in the third, however low the individual hop
+barrier is — and the hop barrier is the expensive thing to compute.
+
+Rocksalt and cubic perovskite both come back 3D-connected, which is what
+edge-sharing and corner-sharing octahedral frameworks are.
+
+The alias collision check fired for the fourth time on this branch:
+`mv.env.bonds` already owned "connectivity" for the same idea one level down —
+which *atoms* connect rather than which polyhedra — so this one is reached as
+"polyhedral connectivity".
+
+### A third kind of coverage claim
+
+Two chemenv connectivity modules are reached through objects a third hands over,
+never by an import: `ConnectivityFinder` returns a `StructureConnectivity`, and
+the components it yields are `ConnectedComponent`s. The direct-import check
+caught the overclaim, and the answer was to record *how* they are reached rather
+than to weaken the check.
+
 ## v0.1.25
 
 **69 of 142 in-scope pymatgen modules, 48.6%.**

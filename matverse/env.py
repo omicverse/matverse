@@ -183,10 +183,6 @@ def chemenv(md: AnnData, sites: AnnData, source: str = "input",
     from pymatgen.analysis.chemenv.coordination_environments.\
         structure_environments import LightStructureEnvironments
 
-    finder = LocalGeometryFinder()
-    strategy = SimplestChemenvStrategy(distance_cutoff=distance_cutoff,
-                                       angle_cutoff=angle_cutoff)
-
     symbols = np.full(sites.n_obs, "", dtype=object)
     measures = np.full(sites.n_obs, np.nan)
     counts = np.full(sites.n_obs, np.nan)
@@ -198,6 +194,13 @@ def chemenv(md: AnnData, sites: AnnData, source: str = "input",
         try:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
+                # Fresh objects per structure. LocalGeometryFinder keeps state
+                # that setup_structure does not clear, and reusing one across a
+                # dataset returns empty environments for every material after
+                # the first — silently, as a blank string rather than an error.
+                finder = LocalGeometryFinder()
+                strategy = SimplestChemenvStrategy(
+                    distance_cutoff=distance_cutoff, angle_cutoff=angle_cutoff)
                 finder.setup_structure(structure=structure)
                 environments = finder.compute_structure_environments(
                     maximum_distance_factor=distance_cutoff + 0.2,
@@ -340,4 +343,119 @@ def summarise(sites: AnnData, md: AnnData) -> None:
     record(md, "env.summarise")
 
 
-__all__ = ["STRATEGIES", "coordination", "chemenv", "bonds", "summarise"]
+__all__ = ["STRATEGIES", "coordination", "chemenv", "bonds", "summarise",
+           "connectivity"]
+
+
+@register_function(
+    aliases=["polyhedral connectivity", "corner sharing",
+             "framework connectivity", "migration channels",
+             "connected polyhedra", "is the network 3d",
+             "polyhedral network"],
+    category="env",
+    description="Build the network of connected coordination polyhedra and "
+                "report how many pieces it falls into and in how many "
+                "directions the largest one extends.",
+    requires={"structures": ["{source}"]},
+    produces={"obs": ["n_polyhedral_components", "connectivity_dimension",
+                      "largest_component_sites", "is_3d_connected"]},
+    examples=["mv.env.connectivity(md)",
+              "mv.env.connectivity(md, source='primitive')"],
+    related=["mv.env.chemenv", "mv.prop.dimensionality", "mv.neb.barrier"],
+    notes="mv.prop.dimensionality asks whether the *bonds* close in three "
+          "directions. This asks whether the **polyhedra** do, which is a "
+          "different question and the one an ion conductor turns on: a "
+          "framework whose octahedra share only corners in two directions "
+          "cannot conduct in the third no matter how low the individual hop "
+          "barrier is.\n\n"
+          "The distinction matters for exactly the materials people screen. "
+          "LiFePO4 is a dense 3D-bonded solid, and its lithium moves along "
+          "**one** direction only — which is why an antisite on the Li site is "
+          "the defect that kills it, and why mv.pp.defects grew an antisite "
+          "generator.\n\n"
+          "Built on ChemEnv, so it inherits its cost — seconds per structure — "
+          "and its assumption that a coordination polyhedron is a meaningful "
+          "object, which is true for oxides and framework materials and much "
+          "less so for metals and molecular crystals.\n\n"
+          "The bare alias 'connectivity' belongs to mv.env.bonds, which builds "
+          "the same idea one level down — which *atoms* are connected rather "
+          "than which polyhedra. Both are connectivity and the registry gives "
+          "one name to one function, so this one is reached as 'polyhedral "
+          "connectivity'.",
+)
+def connectivity(md: AnnData, source: str = "input",
+                 distance_cutoff: float = 1.4,
+                 angle_cutoff: float = 0.3) -> None:
+    """Connected polyhedral network per material. Deposits; returns ``None``."""
+    from pymatgen.analysis.chemenv.connectivity.connectivity_finder import (
+        ConnectivityFinder)
+    from pymatgen.analysis.chemenv.coordination_environments.\
+        chemenv_strategies import SimplestChemenvStrategy
+    from pymatgen.analysis.chemenv.coordination_environments.\
+        coordination_geometry_finder import LocalGeometryFinder
+    from pymatgen.analysis.chemenv.coordination_environments.\
+        structure_environments import LightStructureEnvironments
+
+    counts = np.full(md.n_obs, -1, dtype=int)
+    dimension = np.full(md.n_obs, -1, dtype=int)
+    largest = np.full(md.n_obs, -1, dtype=int)
+    failures = []
+
+    for i, (row, structure) in enumerate(
+            zip(md.obs_names, structures(md, source))):
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                strategy = SimplestChemenvStrategy(
+                    distance_cutoff=distance_cutoff, angle_cutoff=angle_cutoff)
+                geometry = LocalGeometryFinder()
+                geometry.setup_structure(structure=structure)
+                environments = geometry.compute_structure_environments(
+                    maximum_distance_factor=1.41, only_cations=False)
+                light = LightStructureEnvironments.\
+                    from_structure_environments(
+                        strategy=strategy,
+                        structure_environments=environments)
+                # A fresh ConnectivityFinder per structure: it keeps state,
+                # and reusing one across a dataset silently corrupts every
+                # material after the first — rocksalt came back with zero
+                # connected polyhedra when it followed three phosphates.
+                components = ConnectivityFinder().get_structure_connectivity(
+                    light).get_connected_components()
+        except Exception as exc:
+            failures.append(f"{row}: {type(exc).__name__}: {exc}".split("\n")[0])
+            continue
+
+        if not components:
+            counts[i] = 0
+            dimension[i] = 0
+            largest[i] = 0
+            continue
+        counts[i] = len(components)
+        sizes = [len(c.graph) for c in components]
+        largest[i] = int(max(sizes))
+        dimension[i] = int(max(_periodicity(c) for c in components))
+
+    md.obs["n_polyhedral_components"] = counts
+    md.obs["connectivity_dimension"] = dimension
+    md.obs["largest_component_sites"] = largest
+    md.obs["is_3d_connected"] = dimension == 3
+    md.uns["connectivity"] = {"source": source,
+                              "distance_cutoff": float(distance_cutoff),
+                              "angle_cutoff": float(angle_cutoff),
+                              "n_failed": len(failures),
+                              "failures": failures[:10]}
+    record(md, "env.connectivity", source=source,
+           distance_cutoff=distance_cutoff, angle_cutoff=angle_cutoff)
+
+
+def _periodicity(component) -> int:
+    """How many independent directions a connected component extends in."""
+    vectors = getattr(component, "periodicity_vectors", None)
+    if vectors is not None:
+        try:
+            return int(np.linalg.matrix_rank(np.asarray(vectors, dtype=float)))
+        except Exception:
+            pass
+    label = str(getattr(component, "periodicity", "0D"))
+    return {"0D": 0, "1D": 1, "2D": 2, "3D": 3}.get(label, 0)

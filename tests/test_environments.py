@@ -234,3 +234,105 @@ class TestDimensionality:
         mv.prop.dimensionality(md)
         assert list(md.obs["dimensionality"]) == [2, 3]
         assert (md.X[0].toarray() > 0).sum() == (md.X[1].toarray() > 0).sum()
+
+
+class TestOrderIndependence:
+    """ChemEnv results must not depend on what was computed before them.
+
+    `LocalGeometryFinder` keeps state that `setup_structure` does not clear, so
+    reusing one across a dataset returned **empty** environments for every
+    material after the first — silently, as a blank string rather than an
+    error. Nothing caught it because every test and every notebook cell used a
+    single-material dataset.
+    """
+
+    @staticmethod
+    def _rocksalt():
+        from pymatgen.core import Lattice, Structure
+        return Structure.from_spacegroup("Fm-3m", Lattice.cubic(5.64),
+                                         ["Na", "Cl"],
+                                         [[0, 0, 0], [.5, .5, .5]])
+
+    def test_chemenv_gives_the_same_answer_in_any_position(self):
+        cathode = mv.structures(mv.datasets.load("battery_cathodes"))[0]
+
+        alone = mv.data.from_structures([cathode])
+        mv.pp.describe(alone)
+        sites_alone = mv.multi.sites(alone)
+        mv.env.chemenv(alone, sites_alone)
+
+        second = mv.data.from_structures([self._rocksalt(), cathode])
+        mv.pp.describe(second)
+        sites_second = mv.multi.sites(second)
+        mv.env.chemenv(second, sites_second)
+
+        offset = len(self._rocksalt())
+        assert list(sites_second.obs["environment"])[offset:] == \
+            list(sites_alone.obs["environment"])
+
+    def test_environments_are_not_silently_empty(self):
+        """The failure mode was a blank string, which reads as 'unclassified'
+        rather than 'the machinery broke'."""
+        md = mv.data.from_structures(
+            [self._rocksalt()]
+            + mv.structures(mv.datasets.load("battery_cathodes"))[:1])
+        mv.pp.describe(md)
+        sites = mv.multi.sites(md)
+        mv.env.chemenv(md, sites)
+        assert (sites.obs["environment"].astype(str) != "").all()
+
+
+class TestPolyhedralConnectivity:
+    """Whether the polyhedra connect, which is not whether the bonds do."""
+
+    @staticmethod
+    def _small():
+        """Rocksalt and a cubic perovskite: eight and five sites, both dense
+        3D frameworks. ChemEnv costs seconds per structure, so the cells here
+        are the smallest that make the point."""
+        from pymatgen.core import Lattice, Structure
+        return [
+            Structure.from_spacegroup("Fm-3m", Lattice.cubic(5.64),
+                                      ["Na", "Cl"],
+                                      [[0, 0, 0], [.5, .5, .5]]),
+            Structure(Lattice.cubic(3.905), ["Sr", "Ti", "O", "O", "O"],
+                      [[0, 0, 0], [.5, .5, .5], [.5, .5, 0],
+                       [.5, 0, .5], [0, .5, .5]]),
+        ]
+
+    @pytest.fixture(scope="class")
+    def frameworks(self):
+        md = mv.data.from_structures(self._small())
+        mv.pp.describe(md)
+        mv.env.connectivity(md)
+        return md
+
+    def test_a_dense_framework_connects_in_three_directions(self, frameworks):
+        """Rocksalt is edge-sharing octahedra in every direction, and a cubic
+        perovskite is corner-sharing ones."""
+        assert list(frameworks.obs["is_3d_connected"]) == [True, True]
+
+    def test_the_components_are_counted(self, frameworks):
+        assert (frameworks.obs["n_polyhedral_components"] > 0).all()
+        assert (frameworks.obs["largest_component_sites"] > 0).all()
+
+    def test_the_answer_does_not_depend_on_dataset_order(self):
+        """The same leak that broke chemenv broke this, and it is the kind of
+        bug that only a multi-material dataset can show."""
+        a, b = self._small()
+
+        forward = mv.data.from_structures([a, b])
+        mv.pp.describe(forward)
+        mv.env.connectivity(forward)
+        backward = mv.data.from_structures([b, a])
+        mv.pp.describe(backward)
+        mv.env.connectivity(backward)
+
+        first = dict(zip(forward.obs["formula"],
+                         forward.obs["connectivity_dimension"]))
+        second = dict(zip(backward.obs["formula"],
+                          backward.obs["connectivity_dimension"]))
+        assert first == second
+
+    def test_nothing_failed_silently(self, frameworks):
+        assert frameworks.uns["connectivity"]["n_failed"] == 0
