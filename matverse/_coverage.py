@@ -216,6 +216,15 @@ NATIVE: Dict[str, str] = {
     "electronic_structure.dos":
         "a density of states arrives through mv.dft.read_dos as an array on "
         "the grid convention rather than as pymatgen's Dos object",
+    "analysis.compatibility.mixing_scheme":
+        "mv.pp.harmonize solves the same problem by matverse's own route - "
+        "fit a per-element offset for each source against a reference using "
+        "the compositions they have in common - and works on any batch key "
+        "rather than only on a GGA/r2SCAN pair. pymatgen's scheme also could "
+        "not be made to emit a single entry here: get_mixing_state_data builds "
+        "the comparison table correctly from a set of entries that "
+        "process_entries then reports as zero GGA and zero r2SCAN",
+    "entries.mixing_scheme": "see analysis.compatibility.mixing_scheme",
     "analysis.disorder":
         "not wrapped: get_warren_cowley_parameters returns the same value for "
         "every pair, and on B2 - where every nearest neighbour is unlike - it "

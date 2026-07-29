@@ -1,5 +1,33 @@
 # Release notes
 
+## v0.1.31
+
+**89 of 136 in-scope pymatgen modules, 65.4%.** 29 open gaps, 18 blocked.
+
+### The DFT mixing scheme, and why it is NATIVE rather than wrapped
+
+Combining two levels of theory on one hull is the thing matverse polices hardest
+— `mv.thermo.hull` raises `LevelMismatch` rather than let it happen quietly — so
+pymatgen's `MaterialsProjectDFTMixingScheme`, which mixes GGA(+U) and r2SCAN
+entries, looked like the obvious thing to wrap.
+
+It could not be made to emit a single entry. Given five entries covering two
+elements in both run types, `get_mixing_state_data` builds the comparison table
+correctly — formulae, space groups, both energies, both hull energies — and
+`process_entries` on the *same list* logs "Processing 0 GGA(+U) and 0 r2SCAN
+entries" and returns nothing. Passing `compat_1` explicitly, so the
+`check_potcar=False` flag reaches the internal compatibility object rather than
+the default instance built at import time, does not change it.
+
+`mv.pp.harmonize` already solves the same problem by matverse's own route: fit a
+per-element offset for each source against a reference, using the compositions
+they have in common. It works on any batch key rather than only on a
+GGA/r2SCAN pair, which is the more general form of the same idea — a database
+and a run type are both just a label on where the number came from.
+
+So this is NATIVE: the capability is present, implemented here, and the module
+is recorded with what was tried.
+
 ## v0.1.30
 
 **87 of 136 in-scope pymatgen modules, 64.0%.** 31 open gaps, 18 blocked.
