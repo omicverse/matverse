@@ -526,6 +526,7 @@ def cases(tmp):
           "returns": "new"}),
         (mv.pp.filter_elements, described, (), {"returns": "new"}),
         (mv.pp.predict_volume, described, (), {}),
+        (mv.pp.prototype, described, (), {}),
         (mv.gen.predict_dopants, oxidized, (),
          {"source": "oxidized", "n": 2}),
         (mv.gen.predict_substitutions, oxidized, (),

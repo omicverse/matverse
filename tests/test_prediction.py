@@ -268,3 +268,59 @@ class TestInterstitialsAndAntisites:
         mv.pp.describe(md)
         with pytest.raises(ValueError, match="none produced a supercell"):
             mv.pp.defects(md, kinds=("antisite",), min_atoms=2, max_atoms=5)
+
+
+class TestPrototype:
+    """A space group says which symmetries a structure has; a prototype says
+    which structure it *is*. Fm-3m covers rocksalt, fcc and half-Heusler alike.
+    """
+
+    @pytest.fixture(scope="class")
+    def named(self):
+        from pymatgen.core import Lattice, Structure
+        md = mv.data.from_structures([
+            Structure.from_spacegroup("Fm-3m", Lattice.cubic(5.64),
+                                      ["Na", "Cl"], [[0, 0, 0], [.5, .5, .5]]),
+            Structure.from_spacegroup("Fd-3m", Lattice.cubic(3.567), ["C"],
+                                      [[0, 0, 0]]),
+            Structure.from_spacegroup("F-43m", Lattice.cubic(5.65),
+                                      ["Ga", "As"],
+                                      [[0, 0, 0], [.25, .25, .25]]),
+            Structure(Lattice.cubic(3.61), ["Cu"] * 4,
+                      [[0, 0, 0], [0, .5, .5], [.5, 0, .5], [.5, .5, 0]]),
+        ])
+        mv.pp.describe(md)
+        mv.pp.prototype(md)
+        return md
+
+    def test_the_strukturbericht_symbols_are_the_textbook_ones(self, named):
+        assert list(named.obs["strukturbericht"]) == ["B1", "A4", "B3", "A1"]
+
+    def test_the_minerals_are_named(self, named):
+        minerals = list(named.obs["prototype_mineral"])
+        assert "Halite" in minerals[0]
+        assert minerals[1] == "diamond"
+        assert "Zincblende" in minerals[2]
+
+    def test_a_space_group_does_not_determine_the_prototype(self, named):
+        """Rocksalt and fcc copper are both Fm-3m and are not the same
+        structure — which is the reason this function exists."""
+        by_symbol = dict(zip(named.obs["formula"],
+                             named.obs["strukturbericht"]))
+        assert by_symbol["NaCl"] != by_symbol["Cu"]
+
+    def test_everything_matched_is_counted(self, named):
+        assert named.uns["prototype"]["n_matched"] == named.n_obs
+        assert named.uns["prototype"]["n_unmatched"] == 0
+
+    def test_an_unmatched_structure_gets_no_guess(self):
+        """'not in AFLOW' is a fact worth keeping distinct from a wrong label,
+        so a miss is an empty string."""
+        from pymatgen.core import Lattice, Structure
+        odd = Structure(Lattice.cubic(9.0), ["Cu", "Al", "Ni", "Ag", "Au"],
+                        [[0, 0, 0], [.13, .27, .41], [.55, .61, .07],
+                         [.29, .83, .66], [.71, .19, .92]])
+        md = mv.data.from_structures([odd])
+        mv.pp.prototype(md)
+        assert list(md.obs["prototype"]) == [""]
+        assert md.uns["prototype"]["n_unmatched"] == 1

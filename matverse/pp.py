@@ -722,7 +722,7 @@ def strain(md: AnnData, amount, source: str = "input",
 __all__ = ["standardize", "describe", "qc", "filter_materials", "harmonize",
            "defects",
            "filter_elements", "normalize_composition", "dedup", "supercell",
-           "rattle", "strain", "predict_volume"]
+           "rattle", "strain", "predict_volume", "prototype"]
 
 
 @register_function(
@@ -836,3 +836,67 @@ def _generated_defects(structure, kind: str, interstitial_species,
             f"max_atoms={max_atoms}. Widen that window — the generator also "
             f"targets a minimum image distance, so a small max_atoms can "
             f"leave nothing legal. First failure: {reasons[0]}")
+
+
+@register_function(
+    aliases=["prototype", "structure type", "what structure is this",
+             "aflow prototype", "strukturbericht", "structure prototype",
+             "which prototype"],
+    category="pp",
+    description="Name the structure prototype of every material — rocksalt, "
+                "perovskite, spinel — by matching it against the AFLOW "
+                "prototype library.",
+    requires={"structures": ["{source}"]},
+    produces={"obs": ["prototype", "prototype_mineral",
+                      "strukturbericht"]},
+    examples=["mv.pp.prototype(md)",
+              "mv.pp.prototype(md, source='primitive')"],
+    related=["mv.pp.standardize", "mv.pp.describe", "mv.tl.novelty"],
+    notes="A space group says which symmetries a structure has; a prototype "
+          "says which structure it *is*. Fm-3m covers rocksalt, fcc and "
+          "half-Heusler alike, and a screen that groups by space group puts "
+          "them in one bin.\n\n"
+          "This is also what makes a generative model's output legible. "
+          "'Novel composition in a known prototype' and 'novel prototype' are "
+          "different claims, and the second is rare — the 2026 stress tests "
+          "that found generative models recombining within known structural "
+          "families were measuring exactly this.\n\n"
+          "An unmatched structure gets an empty string rather than a guess. "
+          "The library is large but finite, and 'not in AFLOW' is a fact "
+          "worth keeping distinct from 'not matched because the tolerance was "
+          "too tight'. Run mv.pp.standardize first if the cell came from a "
+          "file with an unusual setting.",
+)
+def prototype(md: AnnData, source: str = "input") -> None:
+    """Structure prototype per material. Deposits; returns ``None``."""
+    from pymatgen.analysis.prototypes import AflowPrototypeMatcher
+
+    matcher = AflowPrototypeMatcher()
+    names = np.empty(md.n_obs, dtype=object)
+    minerals = np.empty(md.n_obs, dtype=object)
+    symbols = np.empty(md.n_obs, dtype=object)
+    matched = 0
+
+    for i, structure in enumerate(structures(md, source)):
+        names[i] = ""
+        minerals[i] = ""
+        symbols[i] = ""
+        try:
+            found = matcher.get_prototypes(structure)
+        except Exception:
+            continue
+        if not found:
+            continue
+        tags = found[0].get("tags", {}) or {}
+        names[i] = str(tags.get("aflow", ""))
+        minerals[i] = str(tags.get("mineral", ""))
+        symbols[i] = str(tags.get("strukturbericht", ""))
+        matched += 1
+
+    md.obs["prototype"] = names.astype(str)
+    md.obs["prototype_mineral"] = minerals.astype(str)
+    md.obs["strukturbericht"] = symbols.astype(str)
+    md.uns["prototype"] = {"source": source, "n_matched": int(matched),
+                           "n_unmatched": int(md.n_obs - matched),
+                           "library": "AFLOW prototype encyclopedia"}
+    record(md, "pp.prototype", source=source)

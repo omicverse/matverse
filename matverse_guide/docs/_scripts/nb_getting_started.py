@@ -115,6 +115,24 @@ mv.pp.qc(md)
 
 md.obs[["name", "spacegroup", "formula", "nsites", "density", "is_valid"]]"""),
 
+    ("code", """\
+mv.pp.prototype(md)
+md.obs[["name", "spacegroup", "prototype_mineral", "strukturbericht"]]"""),
+
+    ("markdown", """\
+A space group says which symmetries a structure has. A **prototype** says which
+structure it *is* — and the two are not the same question: Fm-3m covers
+rocksalt, face-centred cubic and half-Heusler alike, so a screen that groups by
+space group puts them in one bin.
+
+This is also what makes a generative model's output legible. "Novel composition
+in a known prototype" and "novel prototype" are different claims, and the second
+is rare.
+
+An unmatched structure gets an empty string rather than a guess — the AFLOW
+library is large but finite, and "not in it" is worth keeping distinct from a
+wrong label."""),
+
     ("markdown", """\
 `spacegroup` is determined from the deposited coordinates, not copied from a
 label — which is why LiFePO₄ comes out as P2₁/c rather than the Pnma the olivine

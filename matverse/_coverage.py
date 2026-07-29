@@ -59,6 +59,7 @@ WRAPPED: Dict[str, List[str]] = {
     "analysis.dimensionality": ["mv.prop.dimensionality"],
     "analysis.eos": ["mv.prop.eos", "mv.prop.quasiharmonic"],
     "analysis.cost": ["mv.prop.cost"],
+    "analysis.prototypes": ["mv.pp.prototype"],
     "analysis.defects.generators": ["mv.pp.defects"],
     "analysis.structure_prediction.substitution_probability":
         ["mv.gen.predict_substitutions"],
@@ -168,6 +169,21 @@ NATIVE: Dict[str, str] = {
     "electronic_structure.dos":
         "a density of states arrives through mv.dft.read_dos as an array on "
         "the grid convention rather than as pymatgen's Dos object",
+    "analysis.disorder":
+        "not wrapped: get_warren_cowley_parameters returns the same value for "
+        "every pair, and on B2 - where every nearest neighbour is unlike - it "
+        "gives -1 for the like pairs as well as the unlike ones, where the "
+        "definition requires +1 and -1. A wrapper around output that cannot "
+        "be reproduced from the definition is worse than the gap",
+    "analysis.diffusion.neb.full_path_mapper":
+        "not wrapped: pymatgen-analysis-diffusion 2025.11 calls "
+        "StructureGraph.with_local_env_strategy, renamed upstream to "
+        "from_local_env_strategy, so every migration-graph entry point raises "
+        "AttributeError against the pymatgen installed here",
+    "analysis.magnetism.heisenberg":
+        "not wrapped: fitting exchange couplings needs spin-polarised "
+        "energies, and no calculator matverse ships is spin-polarised, so "
+        "nothing here can verify the result",
     "analysis.xas.spectrum":
         "an XAS spectrum is a curve on an energy grid, which uns['grids'] and "
         "an obsm block already are: mv.exp.attach stores one and "

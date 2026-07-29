@@ -1,5 +1,47 @@
 # Release notes
 
+## v0.1.25
+
+**69 of 142 in-scope pymatgen modules, 48.6%.**
+
+### `mv.pp.prototype`
+
+A space group says which symmetries a structure has. A prototype says which
+structure it *is*, and the two are different questions: Fm-3m covers rocksalt,
+face-centred cubic and half-Heusler alike, so a screen that groups by space
+group puts them in one bin.
+
+Matched against the AFLOW prototype encyclopedia, and the textbook symbols come
+back: NaCl → B1 Halite, diamond → A4, GaAs → B3 Zincblende, fcc Cu → A1 Copper.
+
+An unmatched structure gets an empty string rather than a guess. The library is
+large but finite, and "not in AFLOW" is worth keeping distinct from "matched
+something wrong".
+
+### Three capabilities not wrapped, each with a tested reason
+
+The coverage map now records *why* a gap is a gap, not only that it is one.
+
+**`analysis.disorder`** — `get_warren_cowley_parameters` returns the same value
+for every pair. On B2, where every nearest neighbour is unlike, the definition
+requires α = −1 for the unlike pairs and **+1** for the like ones; it returns
+−1.0 for all four. It also raises on a genuinely disordered cell, which is what
+the module is named for. A wrapper around output that cannot be reproduced from
+the definition is worse than the gap.
+
+**`analysis.diffusion.neb.full_path_mapper`** — the add-on calls
+`StructureGraph.with_local_env_strategy`, renamed upstream to
+`from_local_env_strategy`, so every migration-graph entry point raises against
+the pymatgen installed here.
+
+**`analysis.magnetism.heisenberg`** — fitting exchange couplings needs
+spin-polarised energies and no calculator matverse ships is spin-polarised.
+
+Three different reasons — upstream is wrong, upstream is stale, and nothing here
+can verify it — and none of them is "we did not get to it". Each was found by
+checking output against a value computed independently, which is the same
+discipline the contract probes apply to matverse's own claims.
+
 ## v0.1.24
 
 **65 of 142 in-scope pymatgen modules, 45.8%.**
