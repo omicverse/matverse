@@ -467,6 +467,17 @@ def cases(tmp):
     # so it is what the probe has to use for that claim to be exercised at all.
     from pymatgen.core import Lattice, Structure
     _fcc = [[0, 0, 0], [0, .5, .5], [.5, 0, .5], [.5, .5, 0]]
+    def model_dos():
+        """A projected DOS built in memory, for mv.elec.xps."""
+        from pymatgen.electronic_structure.core import Orbital, Spin
+        from pymatgen.electronic_structure.dos import CompleteDos, Dos
+        cell = mv.structures(one_metal(), "input")[0]
+        energies = np.linspace(-10, 5, 201)
+        peak = np.exp(-0.5 * ((energies + 3.0) / 0.4) ** 2)
+        return [CompleteDos(
+            cell, Dos(0.0, energies, {Spin.up: peak}),
+            {site: {Orbital.dxy: {Spin.up: peak}} for site in cell})]
+
     def water_with_energy():
         """One molecule with a total energy, for mv.mol.quasirrho."""
         from pymatgen.core import Molecule
@@ -663,6 +674,7 @@ def cases(tmp):
         (mv.neb.hops, one_metal, ("Cu",), {"returns": "new"}),
 
         (mv.disorder.sro, one_metal, (), {}),
+        (mv.elec.xps, one_metal, (model_dos(),), {"level": "model"}),
         (mv.mol.quasirrho, water_with_energy,
          ([[1595.0, 3657.0, 3756.0]],), {"energy": "e"}),
         (mv.gen.alloy_pairs, arsenides, (), {"returns": "new"}),

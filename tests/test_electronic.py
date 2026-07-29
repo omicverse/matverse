@@ -222,3 +222,100 @@ class TestTransport:
         except ImportError:
             with pytest.raises(ImportError, match="BoltzTraP2"):
                 mv.elec.transport(metals, metals, level="tb")
+
+
+class TestXPS:
+    """The thing XPS adds over a density of states is cross-section weighting,
+    so that is what these check: two identical DOS peaks on different orbitals
+    must come out in the tabulated ratio, not equal."""
+
+    #: Yeh and Lindau, as pymatgen ships them.
+    CU_D = 0.0012
+    O_P = 6.0e-05
+
+    @staticmethod
+    def _dos(cu_at=-3.0, o_at=-6.0, width=0.3, scale=1.0):
+        import numpy as np
+        from pymatgen.core import Lattice, Structure
+        from pymatgen.electronic_structure.core import Orbital, Spin
+        from pymatgen.electronic_structure.dos import CompleteDos, Dos
+        energies = np.linspace(-10, 5, 401)
+        cu = np.exp(-0.5 * ((energies - cu_at) / width) ** 2) * scale
+        ox = np.exp(-0.5 * ((energies - o_at) / width) ** 2) * scale
+        st = Structure(Lattice.cubic(4.2), ["Cu", "O"],
+                       [[0, 0, 0], [.5, .5, .5]])
+        return st, CompleteDos(
+            st, Dos(0.0, energies, {Spin.up: cu + ox}),
+            {st[0]: {Orbital.dxy: {Spin.up: cu}},
+             st[1]: {Orbital.px: {Spin.up: ox}}})
+
+    def test_identical_dos_peaks_come_out_in_the_cross_section_ratio(self):
+        """The whole point. Equal contributions to the DOS, twenty to one in
+        the photoemission, because copper's 3d is seen twenty times as
+        strongly as oxygen's 2p."""
+        st, dos = self._dos()
+        md = mv.data.from_structures([st])
+        mv.elec.xps(md, [dos], level="model")
+        grid = mv.grid_of(md, "xps")
+        y = md.obsm["xps_model"][0]
+        at_cu = y[int(np.argmin(abs(grid - 3.0)))]
+        at_o = y[int(np.argmin(abs(grid - 6.0)))]
+        assert at_cu / at_o == pytest.approx(self.CU_D / self.O_P, rel=1e-3)
+
+    def test_the_axis_is_binding_energy(self):
+        """A state 3 eV below the Fermi level appears at +3 eV, not -3."""
+        st, dos = self._dos()
+        md = mv.data.from_structures([st])
+        mv.elec.xps(md, [dos], level="model")
+        assert float(md.obs["xps_peak_model"].iloc[0]) == pytest.approx(3.0,
+                                                                       abs=0.1)
+        assert (mv.grid_of(md, "xps") > 0).any()
+
+    def test_the_stronger_emitter_wins_even_when_it_is_the_smaller_peak(self):
+        """Make the oxygen peak ten times the copper one in the DOS. XPS must
+        still report copper as the main line, because twenty beats ten."""
+        import numpy as np
+        from pymatgen.core import Lattice, Structure
+        from pymatgen.electronic_structure.core import Orbital, Spin
+        from pymatgen.electronic_structure.dos import CompleteDos, Dos
+        energies = np.linspace(-10, 5, 401)
+        cu = np.exp(-0.5 * ((energies + 3.0) / 0.3) ** 2)
+        ox = 10.0 * np.exp(-0.5 * ((energies + 6.0) / 0.3) ** 2)
+        st = Structure(Lattice.cubic(4.2), ["Cu", "O"],
+                       [[0, 0, 0], [.5, .5, .5]])
+        dos = CompleteDos(st, Dos(0.0, energies, {Spin.up: cu + ox}),
+                          {st[0]: {Orbital.dxy: {Spin.up: cu}},
+                           st[1]: {Orbital.px: {Spin.up: ox}}})
+        md = mv.data.from_structures([st])
+        mv.elec.xps(md, [dos], level="model")
+        assert float(md.obs["xps_peak_model"].iloc[0]) == pytest.approx(3.0,
+                                                                       abs=0.1)
+
+    def test_rows_share_one_grid(self):
+        st, first = self._dos(cu_at=-3.0)
+        _, second = self._dos(cu_at=-4.0)
+        md = mv.data.from_structures([st, st])
+        mv.elec.xps(md, [first, second], level="model")
+        assert md.obsm["xps_model"].shape == (2, 301)
+        peaks = md.obs["xps_peak_model"].to_numpy()
+        assert peaks[0] == pytest.approx(3.0, abs=0.15)
+        assert peaks[1] == pytest.approx(4.0, abs=0.15)
+
+    def test_one_dos_per_row_is_required(self):
+        st, dos = self._dos()
+        md = mv.data.from_structures([st, st])
+        with pytest.raises(ValueError, match="one per row"):
+            mv.elec.xps(md, [dos], level="model")
+
+    def test_a_row_without_a_dos_is_recorded_not_guessed(self):
+        st, dos = self._dos()
+        md = mv.data.from_structures([st, st])
+        mv.elec.xps(md, [dos, None], level="model")
+        assert np.isnan(float(md.obs["xps_peak_model"].iloc[1]))
+        assert any("no DOS" in e for e in md.uns["xps"]["model"]["errors"])
+
+    def test_nothing_usable_says_so(self):
+        st, _ = self._dos()
+        md = mv.data.from_structures([st])
+        with pytest.raises(ValueError, match="no XPS could be built"):
+            mv.elec.xps(md, [None], level="model")

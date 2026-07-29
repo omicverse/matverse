@@ -143,6 +143,7 @@ WRAPPED: Dict[str, List[str]] = {
     "analysis.diffusion.neb.periodic_dijkstra": ["mv.neb.percolation"],
     "analysis.alloys.core": ["mv.gen.alloy_pairs"],
     "analysis.quasirrho": ["mv.mol.quasirrho"],
+    "analysis.xps": ["mv.elec.xps"],
     "analysis.defects.corrections.freysoldt":
         ["mv.thermo.defect_formation"],
     "analysis.diffusion.aimd.clustering": ["mv.md.sites"],
@@ -452,16 +453,6 @@ INTERNAL_MARKERS = (
 #: — but they are not "nobody got to it", and the distinction is the difference
 #: between a backlog and a wish.
 BLOCKED: Dict[str, str] = {
-    "analysis.xps":
-        "matverse reads external first-principles output as a matter of "
-        "course - mv.dft.read_outputs, mv.dft.read_dos, mv.elec.read_bands "
-        "and mv.elec.cohp all take a directory of runs - so this is not "
-        "blocked by what matverse is. It is blocked by verification: XPS is "
-        "the projected density of states weighted by photoionisation "
-        "cross-sections, and nothing here produces a PDOS. mv.dft.read_dos "
-        "parses a vasprun, so a wrapper would fit the existing pattern "
-        "exactly - it needs one real vasprun with projections to be checked "
-        "against, and pymatgen ships no test files in its wheel.",
     "analysis.lobster_env":
         "matverse reads external first-principles output as a matter of "
         "course - mv.dft.read_outputs, mv.dft.read_dos, mv.elec.read_bands "

@@ -517,5 +517,103 @@ def transport(md: AnnData, bands_obj: AnnData, level: str = "dft",
         "open an issue with the code you would like to run.")
 
 
-__all__ = ["AXIS_KEY", "PATH_TYPES", "kpath", "bands", "read_bands",
+__all__ = ["AXIS_KEY", "PATH_TYPES", "kpath", "bands", "read_bands", "xps",
            "band_features", "dos_fingerprint", "cohp", "transport"]
+
+
+@register_function(
+    aliases=["xps", "photoemission", "photoelectron spectrum", "esca",
+             "binding energy spectrum", "core level", "valence band spectrum"],
+    category="elec",
+    description="X-ray photoelectron spectrum from a projected density of "
+                "states, weighted by each orbital's photoionisation cross-"
+                "section.",
+    produces={"obsm": ["xps_{level}"], "uns": ["grids"],
+              "obs": ["xps_peak_{level}"], "levels": ["{level}"]},
+    prerequisites=["mv.dft.read_dos"],
+    examples=["mv.elec.xps(md, doses, level='pbe')",
+              "mv.elec.xps(md, doses, level='pbe', n_points=400)"],
+    related=["mv.dft.read_dos", "mv.elec.dos_fingerprint",
+             "mv.prop.frontier_orbitals"],
+    notes="An XPS spectrum is not a density of states with the axis flipped. "
+          "Photoemission sees each orbital through its photoionisation cross-"
+          "section, and those differ by more than an order of magnitude "
+          "between elements and between shells of the same element: copper's "
+          "3d is 0.0012 and oxygen's 2p is 0.00006, a factor of twenty. Two "
+          "states contributing equally to the DOS of a copper oxide therefore "
+          "contribute twenty-to-one to its photoemission, which is why a "
+          "measured spectrum looks nothing like a plotted DOS and why "
+          "comparing them directly is a mistake people make constantly.\\n\\n"
+          "The cross-sections are Yeh and Lindau's tabulation, shipped with "
+          "pymatgen, per element and orbital type. Elements past uranium are "
+          "not in it and their contribution is dropped.\\n\\n"
+          "**The DOS objects are an argument**, one per row, on the same "
+          "reasoning as mv.elec.bands taking band structures: they come from "
+          "a real calculation. mv.dft.read_dos parses them out of a directory "
+          "of vasprun files, and the projections have to be there — a total "
+          "DOS carries no orbital character and there is nothing to weight.\\n\\n"
+          "The grid is binding energy, so it runs the opposite way to a DOS: "
+          "a state at -3 eV relative to the Fermi level appears at +3 eV.",
+)
+def xps(md: AnnData, doses, level: str = "dft", n_points: int = 301,
+        e_min: float | None = None, e_max: float | None = None) -> None:
+    """XPS from projected densities of states. Deposits; returns ``None``."""
+    from pymatgen.analysis.xps import XPS
+
+    if len(doses) != md.n_obs:
+        raise ValueError(f"got {len(doses)} densities of states for "
+                         f"{md.n_obs} rows; one per row is needed")
+
+    spectra, peaks, failed = [], [], []
+    computed = []
+    for row, dos in enumerate(doses):
+        if dos is None:
+            computed.append(None)
+            failed.append(f"row {row}: no DOS")
+            continue
+        try:
+            computed.append(XPS.from_dos(dos))
+        except Exception as exc:
+            computed.append(None)
+            failed.append(f"row {row}: {type(exc).__name__}: {exc}")
+
+    live = [s for s in computed if s is not None]
+    if not live:
+        raise ValueError(f"no XPS could be built from these {md.n_obs} "
+                         f"densities of states: {failed[:3]}")
+
+    low = e_min if e_min is not None else min(float(np.min(s.x)) for s in live)
+    high = e_max if e_max is not None else max(float(np.max(s.x)) for s in live)
+    grid = np.linspace(float(low), float(high), int(n_points))
+
+    for spectrum in computed:
+        if spectrum is None:
+            spectra.append(np.full(len(grid), np.nan))
+            peaks.append(np.nan)
+            continue
+        # Each XPS comes back on its own energy axis, so they are put onto one
+        # shared grid before deposit - the grid convention exists so two rows
+        # can be compared point by point.
+        order = np.argsort(np.asarray(spectrum.x, dtype=float))
+        x = np.asarray(spectrum.x, dtype=float)[order]
+        y = np.asarray(spectrum.y, dtype=float)[order]
+        resampled = np.interp(grid, x, y, left=np.nan, right=np.nan)
+        spectra.append(resampled)
+        finite = np.isfinite(resampled)
+        peaks.append(float(grid[finite][np.argmax(resampled[finite])])
+                     if finite.any() else np.nan)
+
+    deposit_grid(md, "xps", level, np.vstack(spectra), grid,
+                 unit="binding energy (eV)", n_failed=len(failed))
+    set_level(md, level, kind="derived",
+              method="XPS from a projected DOS, weighted by Yeh-Lindau "
+                     "photoionisation cross-sections",
+              note="the level of theory is whatever produced the DOS; this "
+                   "step only reweights it")
+    md.obs[f"xps_peak_{level}"] = np.array(peaks, dtype=float)
+    md.uns.setdefault("xps", {})[level] = {
+        "cross_sections": "Yeh and Lindau, as shipped with pymatgen",
+        "axis": "binding energy, positive below the Fermi level",
+        "errors": failed,
+    }
+    record(md, "elec.xps", level=level, n_points=int(n_points))

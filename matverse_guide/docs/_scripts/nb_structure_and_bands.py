@@ -477,4 +477,74 @@ question — and the reason this page exists is everything composition cannot
 reach. [Beyond one number](beyond_one_number.ipynb) introduces the sites axis
 that `mv.env` writes into.
 ```"""),
+
+    ("markdown", """\
+## What photoemission actually sees
+
+A measured XPS spectrum looks nothing like a plotted density of states, and the
+reason is not broadening. Photoemission sees each orbital through its
+**photoionisation cross-section**, and those differ by more than an order of
+magnitude between elements and between shells of the same element.
+
+Copper's 3d cross-section is 0.0012 and oxygen's 2p is 0.00006 — a factor of
+twenty. Two states contributing equally to the DOS of a copper oxide contribute
+twenty-to-one to its photoemission:"""),
+
+    ("code", """\
+import numpy as np
+from pymatgen.core import Lattice, Structure
+from pymatgen.electronic_structure.core import Orbital, Spin
+from pymatgen.electronic_structure.dos import CompleteDos, Dos
+
+energies = np.linspace(-10, 5, 401)
+cu_band = np.exp(-0.5 * ((energies + 3.0) / 0.3) ** 2)   # Cu 3d at -3 eV
+o_band = np.exp(-0.5 * ((energies + 6.0) / 0.3) ** 2)    # O 2p at -6 eV
+
+cell = Structure(Lattice.cubic(4.2), ["Cu", "O"], [[0, 0, 0], [.5, .5, .5]])
+projected = CompleteDos(
+    cell, Dos(0.0, energies, {Spin.up: cu_band + o_band}),
+    {cell[0]: {Orbital.dxy: {Spin.up: cu_band}},
+     cell[1]: {Orbital.px: {Spin.up: o_band}}})
+
+oxide = mv.data.from_structures([cell])
+mv.elec.xps(oxide, [projected], level="model")
+
+binding = mv.grid_of(oxide, "xps")
+spectrum = oxide.obsm["xps_model"][0]
+cu = spectrum[int(np.argmin(abs(binding - 3.0)))]
+ox = spectrum[int(np.argmin(abs(binding - 6.0)))]
+print(f"equal in the DOS; in the XPS the ratio is {cu / ox:.1f}")"""),
+
+    ("markdown", """\
+Twenty, exactly the ratio of the two cross-sections. The oxygen states are
+still there and are nearly invisible.
+
+This is the mistake that makes people distrust their own calculations: they plot
+a DOS beside a measured XPS, see a peak in one and not the other, and conclude
+the functional is wrong. Often the functional is fine and the oxygen is simply
+not being seen."""),
+
+    ("code", """\
+import matplotlib.pyplot as plt
+
+fig, (top, bottom) = plt.subplots(2, 1, figsize=(6.4, 5), sharex=True)
+top.plot(-energies, cu_band + o_band, linewidth=1.5)
+top.set_ylabel("DOS")
+top.set_title("the same electrons, seen two ways")
+bottom.plot(binding, spectrum, linewidth=1.5, color="crimson")
+bottom.set_ylabel("XPS intensity")
+bottom.set_xlabel("binding energy (eV)")
+bottom.set_xlim(0, 9)
+top.set_xlim(0, 9)"""),
+
+    ("markdown", """\
+```{note}
+**The DOS objects are an argument**, one per row, like the band structures
+above — they come from a real calculation, and `mv.dft.read_dos` parses them out
+of a directory of vasprun files. The projections have to be present: a total DOS
+carries no orbital character, so there is nothing to weight.
+
+The axis is binding energy, so it runs opposite to a DOS. A state 3 eV below the
+Fermi level appears at +3 eV.
+```"""),
 ]
