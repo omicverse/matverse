@@ -1,5 +1,31 @@
 # Release notes
 
+## v0.1.40
+
+**103 of 136 in-scope pymatgen modules, 75.7%.** 13 open gaps, 20 blocked.
+
+### `mv.gen.predict_hosts` — the inverse question
+
+`mv.gen.predict_substitutions` starts from a structure and asks what could be
+swapped into it. This starts from a **composition** and asks which of the
+structures you already have could hold it, which is the more useful direction
+when you know what you want.
+
+From LiFePO₄ alone, targeting Na⁺/Mn²⁺/P⁵⁺/O²⁻, it builds **NaMnPO₄** — a real
+sodium-ion cathode — because the model has seen Li→Na and Fe→Mn often enough in
+the ICSD. The library you pass *is* the search space.
+
+The species count has to match, because the model substitutes one for one and
+never changes how many there are. A two-species target against a four-species
+library gets a refusal that says exactly that rather than an empty list.
+
+Two things needed reading pymatgen's source to get right, and both would have
+shipped as dead columns otherwise. `pred_from_structures` takes a list of
+**dicts** `{'structure': ..., 'id': ...}` where its own signature says
+`structures` — the parameter name and the docstring disagree. And the id comes
+back in `history[0]['source']` while the substitution probability is in
+`other_parameters['proba']`, neither under the obvious key.
+
 ## v0.1.39
 
 **102 of 136 in-scope pymatgen modules, 75.0%.** 14 open gaps, 20 blocked.

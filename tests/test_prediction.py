@@ -568,3 +568,48 @@ class TestChempotDiagram:
         mv.pp.describe(md)
         with pytest.raises(ValueError, match="built from energies"):
             mv.thermo.chempot_diagram(md, level="nothing")
+
+
+class TestPredictHosts:
+    """The inverse question: I know what I want, what could hold it."""
+
+    @pytest.fixture(scope="class")
+    def hosted(self, cathodes):
+        return mv.gen.predict_hosts(
+            cathodes[:1].copy(), ["Na+", "Mn2+", "P5+", "O2-"],
+            source="oxidized")
+
+    def test_it_reaches_a_real_sodium_cathode(self, hosted):
+        """From LiFePO4 alone, targeting Na/Mn/P/O, it builds NaMnPO4 — a real
+        sodium-ion cathode — because the model has seen those substitutions."""
+        mv.pp.describe(hosted)
+        assert "NaMnPO4" in set(hosted.obs["formula"])
+
+    def test_every_column_is_populated(self, hosted):
+        """parent travels in history[0]['source'] and the probability in
+        other_parameters['proba'], neither where the obvious key would be."""
+        assert (hosted.obs["parent"].astype(str) != "").all()
+        assert (hosted.obs["host_probability"] > 0).all()
+        assert (hosted.obs["target"].astype(str) != "").all()
+
+    def test_a_species_count_mismatch_explains_itself(self, cathodes):
+        """The model substitutes one for one, so a two-species target cannot
+        use a four-species host — and saying so beats returning nothing."""
+        with pytest.raises(ValueError, match="only considers hosts with"):
+            mv.gen.predict_hosts(cathodes[:1].copy(), ["Na+", "Mn2+"],
+                                 source="oxidized")
+
+    def test_it_needs_charges_on_the_target(self, cathodes):
+        with pytest.raises(ValueError, match="ionic species with charges"):
+            mv.gen.predict_hosts(cathodes[:1].copy(), ["Na", "Mn", "P", "O"],
+                                 source="oxidized")
+
+    def test_it_needs_oxidation_states_on_the_library(self, cathodes):
+        with pytest.raises(ValueError, match="oxidation states"):
+            mv.gen.predict_hosts(cathodes[:1].copy(),
+                                 ["Na+", "Mn2+", "P5+", "O2-"], source="input")
+
+    def test_the_result_is_an_ordinary_dataset(self, hosted):
+        mv.pp.describe(hosted)
+        mv.pp.qc(hosted)
+        assert "is_valid" in hosted.obs

@@ -334,7 +334,7 @@ def _plausible(structure) -> bool:
 
 
 __all__ = ["validate", "substitute", "predict_substitutions",
-           "predict_dopants", "DEFAULTS"]
+           "predict_dopants", "predict_hosts", "DEFAULTS"]
 
 
 @register_function(
@@ -512,3 +512,113 @@ def predict_dopants(md: AnnData, source: str = "input", n: int = 5,
                          "threshold": float(threshold),
                          "n_failed": int(failed), "ranked": detail}
     record(md, "gen.predict_dopants", source=source, n=n, threshold=threshold)
+
+
+@register_function(
+    aliases=["predict hosts", "which structure could host this",
+             "target composition", "structure prediction from a target",
+             "find a host structure", "inverse substitution"],
+    category="gen",
+    description="Given a target set of ionic species, find which known "
+                "structures could host it and build the substituted "
+                "candidates.",
+    requires={"structures": ["{source}"]},
+    produces={"obs": ["parent", "target", "host_probability"],
+              "structures": ["input"]},
+    prerequisites=["mv.transform.oxidation_states"],
+    examples=["cand = mv.gen.predict_hosts(md, ['Na+', 'Mn2+', 'P5+', 'O2-'], "
+              "source='oxidized')"],
+    related=["mv.gen.predict_substitutions", "mv.gen.substitute",
+             "mv.pp.predict_volume"],
+    notes="The inverse of mv.gen.predict_substitutions, and the more useful "
+          "direction when you know what you want. That function starts from a "
+          "structure and asks what could be swapped into it; this starts from "
+          "a **composition** and asks which of the structures you already have "
+          "could host it.\\n\\n"
+          "From LiFePO4 alone, targeting Na+/Mn2+/P5+/O2-, it produces "
+          "NaMnPO4 — a real sodium-ion cathode — because the substitution "
+          "model has seen those species replace one another often enough. The "
+          "library you pass is the whole search space, so a bigger one finds "
+          "more; passing a database export rather than three structures is the "
+          "intended use.\\n\\n"
+          "**The species count must match.** A four-species target only "
+          "considers four-species hosts, because the model substitutes species "
+          "one for one and never changes how many there are. A target that "
+          "returns nothing usually means the library has no host with the "
+          "right number of distinct species, not that the chemistry is "
+          "impossible.\\n\\n"
+          "Needs oxidation states on the library, for the same reason "
+          "mv.gen.predict_substitutions does: the model is defined over ions.",
+)
+def predict_hosts(md: AnnData, target, source: str = "input",
+                  threshold: float = 1e-3,
+                  remove_duplicates: bool = True) -> AnnData:
+    """Candidate structures for a target species set. Returns a new dataset."""
+    try:
+        from pymatgen.core.structure_prediction.substitutor import Substitutor
+    except ImportError:
+        from pymatgen.analysis.structure_prediction.substitutor import (
+            Substitutor)
+    from pymatgen.core import Species
+
+    from .data import from_structures
+
+    try:
+        wanted = [s if isinstance(s, Species) else Species.from_str(str(s))
+                  for s in target]
+    except Exception as exc:
+        raise ValueError(
+            f"target must be ionic species with charges, e.g. "
+            f"['Na+', 'Mn2+', 'P5+', 'O2-']; got {list(target)!r} ({exc})"
+        ) from exc
+
+    library, unoxidised = [], []
+    for name, structure in zip(md.obs_names, structures(md, source)):
+        if not all(getattr(site.specie, "oxi_state", None) is not None
+                   for site in structure):
+            unoxidised.append(str(name))
+            continue
+        library.append({"structure": structure, "id": str(name)})
+    if unoxidised:
+        raise ValueError(
+            f"{len(unoxidised)} structure(s) carry no oxidation states, and "
+            f"the substitution model is defined over ions. Run "
+            f"mv.transform.oxidation_states(md) and pass source='oxidized'. "
+            f"Offending rows: {unoxidised[:5]}")
+
+    sizes = {len({site.specie.symbol for site in entry["structure"]})
+             for entry in library}
+    predicted = Substitutor(threshold=threshold).pred_from_structures(
+        wanted, library, remove_duplicates=remove_duplicates)
+    if not predicted:
+        raise ValueError(
+            f"no host found for {[str(s) for s in wanted]}. The model "
+            f"substitutes species one for one, so it only considers hosts with "
+            f"{len(wanted)} distinct species; this library has "
+            f"{sorted(sizes)}. Widen the library or lower threshold "
+            f"(currently {threshold}).")
+
+    built, rows = [], []
+    label = ", ".join(str(s) for s in wanted)
+    for transformed in predicted:
+        built.append(transformed.final_structure)
+        history = transformed.history or [{}]
+        # The id travels in history[0]['source'], not under 'id' — and the
+        # substitution probability is in other_parameters['proba'].
+        extra = getattr(transformed, "other_parameters", {}) or {}
+        rows.append({
+            "parent": str(history[0].get("source", "")),
+            "target": label,
+            "host_probability": float(extra.get("proba", np.nan)),
+        })
+
+    out = from_structures(built, obs=pd.DataFrame(rows))
+    out.uns["predict_hosts"] = {
+        "source": source, "threshold": float(threshold),
+        "target": [str(s) for s in wanted],
+        "library_size": len(library),
+        "model": "Hautier data-mined ionic substitution",
+    }
+    record(out, "gen.predict_hosts", source=source, threshold=threshold,
+           n_library=len(library))
+    return out

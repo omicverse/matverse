@@ -553,6 +553,9 @@ def cases(tmp):
          {"source": "oxidized", "n": 2}),
         (mv.gen.predict_substitutions, oxidized, (),
          {"source": "oxidized", "n": 3, "returns": "new"}),
+        (mv.gen.predict_hosts, oxidized,
+         (["Na+", "Mn2+", "P5+", "O2-"],),
+         {"source": "oxidized", "returns": "new"}),
         (mv.pp.filter_materials, qc_flagged, (), {"returns": "new"}),
 
         # mv.calc

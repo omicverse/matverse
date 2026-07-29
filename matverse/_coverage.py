@@ -104,6 +104,8 @@ WRAPPED: Dict[str, List[str]] = {
         ["mv.gen.predict_substitutions"],
     "analysis.structure_prediction.dopant_predictor":
         ["mv.gen.predict_dopants"],
+    "analysis.structure_prediction.substitutor": ["mv.gen.predict_hosts"],
+    "core.structure_prediction.substitutor": ["mv.gen.predict_hosts"],
     "analysis.structure_prediction.volume_predictor":
         ["mv.pp.predict_volume"],
     "analysis.hhi": ["mv.prop.supply_risk"],
@@ -212,6 +214,8 @@ EQUIVALENT = [
     frozenset({"entries.entry_tools", "analysis.compatibility.entry_tools"}),
     frozenset({"analysis.molecule_matcher", "core.molecule_matcher"}),
     frozenset({"analysis.energy_models", "core.energy_models"}),
+    frozenset({"analysis.structure_prediction.substitutor",
+               "core.structure_prediction.substitutor"}),
     frozenset({"analysis.molecule_structure_comparator",
                "core.molecule_structure_comparator"}),
 ]

@@ -688,6 +688,34 @@ No calculator involved — the prediction comes from tabulated bond lengths — 
 `volume_scale` records how far the cell moved, so a suspicious rescaling is
 visible rather than silent.
 
+### The inverse question
+
+`mv.gen.predict_substitutions` starts from a structure and asks what could be
+swapped into it. `mv.gen.predict_hosts` starts from a **composition** and asks
+which of the structures you already have could hold it — which is the more
+useful direction when you know what you want."""),
+
+    ("code", """\
+hosts = mv.gen.predict_hosts(cathode, ["Na+", "Mn2+", "P5+", "O2-"],
+                             source="oxidized")
+mv.pp.describe(hosts)
+hosts.obs[["parent", "target", "host_probability", "formula"]].round(5)"""),
+
+    ("markdown", """\
+From LiFePO₄ alone it builds **NaMnPO₄** — a real sodium-ion cathode — because
+the model has seen Li→Na and Fe→Mn often enough in the ICSD.
+
+The library you pass *is* the search space, so a database export finds far more
+than three structures will.
+
+```{note}
+The species count has to match. A four-species target only considers
+four-species hosts, because the model substitutes one for one and never changes
+how many there are. Ask for a two-species target against this library and it
+says so rather than returning an empty list — "no host found... it only
+considers hosts with 2 distinct species; this library has [4]".
+```
+
 ```{seealso}
 [Models and campaigns](models_and_campaigns.ipynb) covers the other half:
 predicting what you have not computed, and choosing what to compute next.
