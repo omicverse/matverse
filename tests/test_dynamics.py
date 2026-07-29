@@ -10,6 +10,8 @@ which.
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 import pytest
 
@@ -362,6 +364,103 @@ def _has_diffusion_addon() -> bool:
     except ImportError:
         return False
     return True
+
+
+class TestOccupancy:
+    """Localised, floppy and liquid, in that order — and the sampling trap.
+
+    The metric is a histogram, so it is only about the material when there are
+    enough samples to fill the grid. These pin the ordering and then pin the
+    artefact, because the artefact is what would make the number wrong without
+    making it look wrong.
+    """
+
+    @pytest.fixture
+    def crystal(self):
+        from pymatgen.core import Lattice, Structure
+        fcc = [[0, 0, 0], [0, .5, .5], [.5, 0, .5], [.5, .5, 0]]
+        st = Structure(Lattice.cubic(5.0), ["Li"] * 4, fcc)
+        return mv.data.from_structures([st]), np.array(fcc)
+
+    def test_delocalisation_is_ordered(self, crystal):
+        """Same cell, same grid, same run length — only the amplitude
+        changes, so the comparison is the one this quantity supports."""
+        md, base = crystal
+        rng = np.random.default_rng(0)
+        runs = {
+            "frozen": base[None].repeat(400, axis=0),
+            "tight": (base[None] + rng.normal(0, 0.01, (400, 4, 3))) % 1.0,
+            "floppy": (base[None] + rng.normal(0, 0.05, (400, 4, 3))) % 1.0,
+        }
+        for label, frames in runs.items():
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                mv.md.occupancy(md, frames, species="Li", bins=8,
+                                key_added=label)
+        values = [float(md.obs[f"occupied_fraction_{k}"].iloc[0])
+                  for k in ("frozen", "tight", "floppy")]
+        assert values[0] < values[1] < values[2], values
+        entropies = [float(md.obs[f"occupancy_entropy_{k}"].iloc[0])
+                     for k in ("frozen", "tight", "floppy")]
+        assert entropies[0] < entropies[1] < entropies[2], entropies
+
+    def test_a_frozen_crystal_puts_each_ion_in_one_voxel(self, crystal):
+        md, base = crystal
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            mv.md.occupancy(md, base[None].repeat(400, axis=0), species="Li",
+                            bins=8, key_added="frozen")
+        # four atoms, four voxels, equal weight
+        assert float(md.obs["occupancy_peak_frozen"].iloc[0]) == \
+            pytest.approx(0.25)
+
+    def test_a_well_sampled_uniform_run_approaches_its_limit(self, crystal):
+        """Covering 90% of a uniform probability takes about 87% of the
+        voxels, not 100% — the least-visited tail is what is left out."""
+        md, _ = crystal
+        rng = np.random.default_rng(0)
+        mv.md.occupancy(md, rng.random((4000, 4, 3)), species="Li", bins=8,
+                        key_added="liquid")
+        assert float(md.obs["occupied_fraction_liquid"].iloc[0]) == \
+            pytest.approx(0.87, abs=0.05)
+        assert float(md.obs["occupancy_entropy_liquid"].iloc[0]) > 0.99
+
+    def test_undersampling_is_warned_about_not_reported_as_order(self, crystal):
+        """The trap. The same uniform distribution reads 0.87 on a grid it can
+        fill and near zero on one it cannot, and nothing about the number says
+        which happened — so the function says it."""
+        md, _ = crystal
+        rng = np.random.default_rng(0)
+        sparse = rng.random((100, 4, 3))
+        with pytest.warns(UserWarning, match="per voxel"):
+            mv.md.occupancy(md, sparse, species="Li", bins=24,
+                            key_added="sparse")
+        assert float(md.obs["occupied_fraction_sparse"].iloc[0]) < 0.2
+        assert md.uns["occupancy"]["sparse"]["samples_per_voxel"][0] < 5.0
+
+    def test_enough_sampling_passes_quietly(self, crystal):
+        md, _ = crystal
+        rng = np.random.default_rng(0)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", UserWarning)
+            mv.md.occupancy(md, rng.random((4000, 4, 3)), species="Li",
+                            bins=8, key_added="ok")
+
+    def test_a_bad_coverage_is_refused(self, crystal):
+        md, base = crystal
+        with pytest.raises(ValueError, match="coverage"):
+            mv.md.occupancy(md, base[None].repeat(10, axis=0), coverage=1.5)
+
+    def test_a_bad_shape_is_refused(self, crystal):
+        md, base = crystal
+        with pytest.raises(ValueError, match="fractional coordinates"):
+            mv.md.occupancy(md, base)
+
+    def test_an_absent_species_is_recorded_not_guessed(self, crystal):
+        md, base = crystal
+        mv.md.occupancy(md, base[None].repeat(10, axis=0), species="Na",
+                        key_added="none")
+        assert np.isnan(float(md.obs["occupied_fraction_none"].iloc[0]))
 
 
 class TestVanHove:

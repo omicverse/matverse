@@ -36,6 +36,8 @@ quench, and says so in what it records.
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 from anndata import AnnData
 
@@ -663,7 +665,8 @@ def _quench(cell, adaptor, calculator, melt_t, final_t, melt_steps,
     return adaptor.get_structure(atoms)
 
 
-__all__ = ["run", "sweep", "rdf", "sites", "van_hove", "conductivity",
+__all__ = ["run", "sweep", "rdf", "sites", "van_hove", "occupancy",
+           "conductivity",
            "melt_quench",
            "register_batched", "batched_available"]
 
@@ -1126,3 +1129,140 @@ def _outer_feature(grid, curve, threshold: float = 0.01) -> float:
         # One maximum is the vibrational peak itself; there is no jump.
         return float("nan")
     return float(grid[maxima[-1]])
+
+
+@register_function(
+    aliases=["occupancy", "probability density", "where the ions go",
+             "ion density", "delocalisation", "explored volume",
+             "superionic", "smeared or localised"],
+    category="md",
+    description="How much of the cell the mobile ions actually explore, from "
+                "the probability density of finding one anywhere in it.",
+    requires={"structures": ["{source}"]},
+    produces={"obs": ["occupied_fraction_{level}", "occupancy_entropy_{level}",
+                      "occupancy_peak_{level}"]},
+    prerequisites=["mv.md.run"],
+    examples=["mv.md.occupancy(md, trajectories, species='Li')",
+              "mv.md.occupancy(md, trajectories, species='Li', bins=32)"],
+    related=["mv.md.sites", "mv.md.van_hove", "mv.neb.percolation",
+             "mv.md.conductivity"],
+    notes="Histogram the mobile ions' fractional positions over the run and "
+          "you have the probability of finding one in each corner of the "
+          "cell. A normal solid puts nearly all of it in small blobs at the "
+          "lattice sites; a superionic conductor smears it along the channels "
+          "between them. That difference is visible in the density long "
+          "before it is significant in a diffusivity, because it does not "
+          "need the ion to complete a journey — only to spend time on the "
+          "way.\n\n"
+          "obs['occupied_fraction'] is the fraction of the cell holding 90% "
+          "of the probability, which is the number to read: near zero for "
+          "ions sitting still, rising as they delocalise, and about 0.87 for "
+          "a well-sampled uniform distribution — not 1.0, because covering "
+          "90% of a uniform probability still leaves out the thin tail of "
+          "voxels that happened to be visited least. "
+          "obs['occupancy_entropy'] is the Shannon entropy of the same "
+          "histogram divided by its maximum, so it runs 0 to 1 on any grid "
+          "and can be compared between cells of different size. "
+          "obs['occupancy_peak'] is the largest single-voxel probability, "
+          "which falls as the density spreads.\n\n"
+          "Computed here from the definition. pymatgen's "
+          "ProbabilityDensityAnalysis sits beside generate_stable_sites, "
+          "which raises on a structure with one stable site — the condensed "
+          "distance matrix is empty and scipy's linkage refuses it — and one "
+          "well-localised site is the commonest case there is.\n\n"
+          "**The grid is the parameter that matters, and it interacts with "
+          "how long you ran.** Too coarse and everything looks delocalised "
+          "because one voxel spans several sites. Too fine and everything "
+          "looks localised for a reason that has nothing to do with the "
+          "material: with fewer samples than voxels, most voxels are empty "
+          "however the ions moved. A uniform distribution reads 0.87 at "
+          "sixteen samples per voxel and 0.05 at a tenth of a sample per "
+          "voxel — same physics, same function, different sampling — so this "
+          "warns below five per voxel rather than returning the number "
+          "quietly. bins is per lattice vector; the voxel edge lengths and "
+          "the sampling density are both recorded in uns.\n\n"
+          "Compare these numbers between runs of the same length on the same "
+          "grid. Across different ones they are not comparable, and no "
+          "normalisation makes them so.",
+)
+def occupancy(md: AnnData, trajectories, species: str | None = None,
+              source: str = "input", level: str = "md", bins: int = 24,
+              coverage: float = 0.9, key_added: str | None = None) -> None:
+    """Probability density of the mobile ions. Deposits; returns ``None``."""
+    frames = np.asarray(trajectories, dtype=float)
+    if frames.ndim != 3 or frames.shape[2] != 3:
+        raise ValueError(f"trajectories must be (frames, atoms, 3) fractional "
+                         f"coordinates, got shape {frames.shape}")
+    if not 0.0 < coverage <= 1.0:
+        raise ValueError(f"coverage is a fraction of the probability and must "
+                         f"be in (0, 1], got {coverage}")
+
+    name = key_added or level
+    fraction = np.full(md.n_obs, np.nan)
+    entropy = np.full(md.n_obs, np.nan)
+    peak = np.full(md.n_obs, np.nan)
+    voxels: list = []
+    sampling: list = []
+
+    for row, structure in enumerate(structures(md, source)):
+        if frames.shape[1] != len(structure):
+            raise ValueError(
+                f"row {row}: the trajectory has {frames.shape[1]} atoms and "
+                f"the structure has {len(structure)}; they must be the same "
+                f"cell")
+        mobile = [i for i, site in enumerate(structure)
+                  if species is None or site.specie.symbol == species]
+        if not mobile:
+            voxels.append(None)
+            sampling.append(float("nan"))
+            continue
+
+        points = (frames[:, mobile, :] % 1.0).reshape(-1, 3)
+        per_voxel = len(points) / float(bins ** 3)
+        if per_voxel < 5.0:
+            warnings.warn(
+                f"row {row}: {len(points)} sampled positions over "
+                f"{bins ** 3} voxels is {per_voxel:.2f} per voxel. Below "
+                f"about five, most voxels are empty because the run was "
+                f"short rather than because the ions were localised, and "
+                f"occupied_fraction is driven by the sampling. Use fewer "
+                f"bins or more frames.", stacklevel=2)
+        counts, _ = np.histogramdd(
+            points, bins=(bins, bins, bins),
+            range=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)))
+        total = counts.sum()
+        if total <= 0:
+            voxels.append(None)
+            sampling.append(float("nan"))
+            continue
+        probability = (counts / total).ravel()
+
+        # The smallest set of voxels that between them hold `coverage` of the
+        # probability, as a fraction of the cell. Taking every visited voxel
+        # instead would count the single frame an ion spent in flight the same
+        # as the thousand it spent at rest.
+        ordered = np.sort(probability)[::-1]
+        needed = int(np.searchsorted(np.cumsum(ordered), coverage) + 1)
+        fraction[row] = needed / probability.size
+
+        positive = probability[probability > 0]
+        entropy[row] = float(-(positive * np.log(positive)).sum()
+                             / np.log(probability.size))
+        peak[row] = float(probability.max())
+        voxels.append([float(length / bins)
+                       for length in structure.lattice.abc])
+        sampling.append(float(per_voxel))
+
+    md.obs[f"occupied_fraction_{name}"] = fraction
+    md.obs[f"occupancy_entropy_{name}"] = entropy
+    md.obs[f"occupancy_peak_{name}"] = peak
+    md.uns.setdefault("occupancy", {})[name] = {
+        "species": species, "bins": int(bins), "coverage": float(coverage),
+        "n_frames": int(frames.shape[0]),
+        "voxel_edges_angstrom": voxels,
+        "samples_per_voxel": sampling,
+        "meaning": "occupied_fraction is the fraction of the cell holding "
+                   f"{coverage:.0%} of the probability of finding a mobile ion",
+    }
+    record(md, "md.occupancy", species=species, source=source, level=level,
+           bins=int(bins), coverage=float(coverage), key_added=name)

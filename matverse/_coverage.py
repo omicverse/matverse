@@ -255,6 +255,15 @@ def equivalents(module: str) -> frozenset:
 # ---------------------------------------------------------------- NATIVE
 #: Capability present in matverse, implemented without pymatgen's module.
 NATIVE: Dict[str, str] = {
+    "analysis.diffusion.aimd.pathway":
+        "mv.md.occupancy computes the probability density from the "
+        "definition - a histogram of the mobile ions' fractional positions "
+        "over the run. Not a wrapper: ProbabilityDensityAnalysis sits beside "
+        "generate_stable_sites, which raises on a structure with one stable "
+        "site because the condensed distance matrix is empty and scipy's "
+        "linkage refuses it, and one well-localised site is the commonest "
+        "case there is. The sites that module exists to find are "
+        "mv.md.sites' job instead",
     "analysis.compatibility.exp_entries":
         "mv.exp.formation_hull builds the hull from measured formation "
         "enthalpies directly. Not a wrapper: ExpEntry hands ThermoData.value "
@@ -435,12 +444,6 @@ BLOCKED: Dict[str, str] = {
         "during a mv.env.chemenv call, but pymatgen imports it lazily "
         "inside the finder, so there is no import chain from matverse to "
         "it and no entry point to wrap - only compute_structure_environments",
-    "analysis.diffusion.aimd.pathway":
-        "generate_stable_sites raises on a single stable site - the "
-        "condensed distance matrix is empty and scipy's linkage refuses it "
-        "- and one well-localised site is the commonest case there is. The "
-        "probability density itself is reachable; the sites it exists to "
-        "find are not.",
     "analysis.diffusion.neb.full_path_mapper":
         "pymatgen-analysis-diffusion 2025.11 calls "
         "StructureGraph.with_local_env_strategy, renamed upstream to "

@@ -187,6 +187,16 @@ class TestJahnTeller:
         assert list(perovskites.obs["distorting"]) == [True, False, True]
 
 
+def _has_defects_addon() -> bool:
+    try:
+        import pymatgen.analysis.defects.generators  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+@pytest.mark.skipif(not _has_defects_addon(),
+                    reason="pymatgen-analysis-defects is an optional extra")
 class TestInterstitialsAndAntisites:
     """Two defect kinds that are not a site the input already has.
 

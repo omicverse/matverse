@@ -692,6 +692,7 @@ def cases(tmp):
          {"r_max": 8.0}),
         (mv.md.sites, one_licl, (licl_frames(), "Li"), {}),
         (mv.md.van_hove, one_licl, (licl_frames(),), {"r_max": 8.0}),
+        (mv.md.occupancy, one_licl, (licl_frames(),), {"bins": 4}),
         (mv.md.melt_quench, one_metal, (),
          {"level": "emt", "melt_steps": 20, "quench_steps": 20,
           "equilibrate_steps": 10, "supercell": (1, 1, 1)}),

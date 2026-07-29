@@ -313,6 +313,72 @@ cell — twelve neighbours spread over three reference sites — pymatgen return
 ```"""),
 
     ("markdown", """\
+## How much of the cell do they visit?
+
+Before either of the next two questions there is a blunter one: how much of the
+box do the mobile ions actually go into? Histogram their positions over the run
+and the answer is a probability density — tight blobs at the lattice sites for a
+normal solid, smeared out along the channels for a superionic conductor.
+
+`mv.md.occupancy` reports it as three scalars. The one to read is
+`occupied_fraction`: the fraction of the cell holding 90% of the probability."""),
+
+    ("code", """\
+occ = mv.data.from_structures([Structure(
+    Lattice.cubic(5.0), ["Li"] * 4,
+    [[0, 0, 0], [0, .5, .5], [.5, 0, .5], [.5, .5, 0]])])
+sites_base = np.array(mv.structures(occ, "input")[0].frac_coords)
+gen = np.random.default_rng(0)
+
+runs = {
+    "frozen": sites_base[None].repeat(400, axis=0),
+    "tight": (sites_base[None] + gen.normal(0, 0.01, (400, 4, 3))) % 1.0,
+    "floppy": (sites_base[None] + gen.normal(0, 0.05, (400, 4, 3))) % 1.0,
+    "liquid": gen.random((4000, 4, 3)),
+}
+for label, traj in runs.items():
+    mv.md.occupancy(occ, traj, species="Li", bins=8, key_added=label)
+
+occ.obs[[f"occupied_fraction_{k}" for k in runs]
+        + [f"occupancy_entropy_{k}" for k in runs]].round(4).T"""),
+
+    ("markdown", """\
+Monotonic, from four ions pinned in four voxels to a liquid that has forgotten
+where the sites were. The liquid stops at **0.87 rather than 1.0**, which is not
+an error: covering 90% of a uniform probability still leaves out the tail of
+voxels that happened to be visited least.
+
+Now the part worth being careful about, because it is the way this number lies.
+
+It is a histogram, so it says something about the material only when there are
+enough samples to fill the grid. Ask for a finer grid than the run can populate
+and a liquid will report as beautifully localised — not because the ions stayed
+put but because most voxels were never visited at all:"""),
+
+    ("code", """\
+import warnings
+
+with warnings.catch_warnings(record=True) as caught:
+    warnings.simplefilter("always")
+    mv.md.occupancy(occ, gen.random((100, 4, 3)), species="Li", bins=24,
+                    key_added="undersampled")
+
+print(f"same uniform distribution, finer grid: "
+      f"{float(occ.obs['occupied_fraction_undersampled'].iloc[0]):.3f}")
+print(f"samples per voxel: "
+      f"{occ.uns['occupancy']['undersampled']['samples_per_voxel'][0]:.2f}")
+print(str(caught[-1].message)[:160] if caught else "no warning")"""),
+
+    ("markdown", """\
+0.87 became 0.03 with no change to the physics. That is why the function warns
+below about five samples per voxel and records the sampling density in `uns`
+rather than handing back the number quietly.
+
+The practical consequence: **compare these values between runs of the same
+length on the same grid.** Across different ones they are not comparable, and no
+normalisation makes them so."""),
+
+    ("markdown", """\
 ## The shape of the motion
 
 A diffusivity is one number and it averages over everything. The van Hove

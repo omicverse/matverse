@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "matverse"
-version = "0.1.48"
+version = "0.1.49"
 description = "A materials analysis ecosystem on the AnnData substrate"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -40,7 +40,10 @@ plot = ["matplotlib"]                                # mv.pl
 ml = ["scikit-learn"]                                # mv.model estimators
 matminer = ["matminer"]
 cost = ["bibtexparser"]                               # mv.prop.cost price table
-diffusion = ["pymatgen-analysis-diffusion"]           # mv.md.rdf
+diffusion = ["pymatgen-analysis-diffusion"]           # mv.md.rdf, mv.md.sites,
+                                                     # mv.neb.percolation
+defects = ["pymatgen-analysis-defects"]              # interstitial and antisite
+                                                     # kinds of mv.pp.defects
 mp = ["mp-api>=0.46.2"]                              # Delta-table data products
 mlip = ["mace-torch"]
 # Batched GPU molecular dynamics. torch-sim-atomistic requires Python >= 3.11
