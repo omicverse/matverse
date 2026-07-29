@@ -87,6 +87,7 @@ WRAPPED: Dict[str, List[str]] = {
     "analysis.quasiharmonic": ["mv.prop.quasiharmonic"],
     "analysis.diffraction.neutron": ["mv.prop.neutron"],
     "analysis.diffraction.tem": ["mv.prop.tem"],
+    "analysis.diffusion.aimd.rdf": ["mv.md.rdf"],
     "analysis.graphs": ["mv.prop.dimensionality", "mv.env.bonds"],
     "analysis.interface_reactions": ["mv.iface.reactivity"],
     "analysis.interfaces.coherent_interfaces": ["mv.iface.build"],

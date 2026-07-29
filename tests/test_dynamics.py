@@ -431,3 +431,74 @@ class TestRelaxNaming:
         assert {"a", "b"} <= set(mv.variants(copper))
         assert len(mv.structures(copper, "a")[0]) != \
             len(mv.structures(copper, "b")[0])
+
+
+def _has_diffusion_addon() -> bool:
+    try:
+        import pymatgen.analysis.diffusion.aimd.rdf  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+@pytest.mark.skipif(not _has_diffusion_addon(),
+                    reason="pymatgen-analysis-diffusion is an optional extra")
+class TestTrajectoryRDF:
+    """Averaging over frames, and a coordination number that means what it says."""
+
+    @staticmethod
+    def _cell():
+        from pymatgen.core import Lattice, Structure
+        return Structure(Lattice.cubic(4.2), ["Li", "Cl", "Cl", "Cl"],
+                         [[0, 0, 0], [.5, .5, 0], [.5, 0, .5], [0, .5, .5]])
+
+    @pytest.fixture(scope="class")
+    def averaged(self):
+        cell = self._cell()
+        md = mv.data.from_structures([cell])
+        mv.pp.describe(md)
+        frames = np.tile(np.array(cell.frac_coords), (40, 1, 1))
+        frames = frames + np.random.default_rng(0).normal(0, 0.01,
+                                                          frames.shape)
+        mv.md.rdf(md, frames, species="Li", r_max=8.0)
+        return md
+
+    def test_the_first_peak_is_the_nearest_neighbour_distance(self, averaged):
+        expected = self._cell().get_distance(0, 1)
+        assert averaged.obs["first_shell_md"].iloc[0] == pytest.approx(
+            expected, abs=0.1)
+
+    def test_the_coordination_number_counts_neighbours(self, averaged):
+        """Twelve, from counting. pymatgen's own coordination_number returns
+        4.0 for this cell — the count per reference index, spread over three
+        reference sites — so the integral is taken from its definition here."""
+        true_count = len(self._cell().get_neighbors(self._cell()[0], 3.1))
+        assert true_count == 12
+        assert averaged.obs["first_shell_coordination_md"].iloc[0] == \
+            pytest.approx(12.0, rel=0.1)
+
+    def test_the_curve_lands_on_the_grid_convention(self, averaged):
+        grid = mv.grid_of(averaged, "rdf_md")
+        assert averaged.obsm["rdf_md_md"].shape == (1, grid.size)
+        assert averaged.obsm["coordination_md_md"].shape == (1, grid.size)
+
+    def test_one_trajectory_belongs_to_one_structure(self):
+        cell = self._cell()
+        md = mv.data.from_structures([cell, cell])
+        mv.pp.describe(md)
+        frames = np.tile(np.array(cell.frac_coords), (5, 1, 1))
+        with pytest.raises(ValueError, match="one trajectory belongs"):
+            mv.md.rdf(md, frames, species="Li")
+
+    def test_a_mismatched_trajectory_is_refused(self):
+        md = mv.data.from_structures([self._cell()])
+        mv.pp.describe(md)
+        with pytest.raises(ValueError, match="same cell in the same order"):
+            mv.md.rdf(md, np.zeros((5, 9, 3)), species="Li")
+
+    def test_an_absent_species_is_named(self):
+        md = mv.data.from_structures([self._cell()])
+        mv.pp.describe(md)
+        frames = np.tile(np.array(self._cell().frac_coords), (5, 1, 1))
+        with pytest.raises(ValueError, match="no 'Na' in this structure"):
+            mv.md.rdf(md, frames, species="Na")

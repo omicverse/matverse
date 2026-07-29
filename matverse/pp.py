@@ -474,6 +474,7 @@ def dedup(md: AnnData, source: str = "input", symprec: float = 0.1,
         blocks.setdefault(_fingerprint(s, symprec), []).append(i)
 
     representative = list(range(len(S)))
+    comparison_failures = 0
     for members in blocks.values():
         reps: list[int] = []
         for i in members:
@@ -481,6 +482,10 @@ def dedup(md: AnnData, source: str = "input", symprec: float = 0.1,
                 try:
                     same = matcher.fit(S[i], S[r])
                 except Exception:
+                    # Counted, because a matcher that fails on every pair
+                    # reports "no duplicates" — which is what it reports when
+                    # there really are none.
+                    comparison_failures += 1
                     same = False
                 if same:
                     representative[i] = r
@@ -496,6 +501,7 @@ def dedup(md: AnnData, source: str = "input", symprec: float = 0.1,
         "n_duplicates": int(sum(r != i for i, r in enumerate(representative))),
         "n_unique": len(set(representative)),
         "matcher": {"ltol": ltol, "stol": stol, "angle_tol": angle_tol},
+        "n_comparison_failures": int(comparison_failures),
     }
     record(md, "pp.dedup", source=source, symprec=symprec)
 

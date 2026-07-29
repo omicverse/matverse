@@ -206,6 +206,25 @@ def alni():
     return md
 
 
+def one_licl():
+    """One row, because one trajectory belongs to one structure."""
+    from pymatgen.core import Lattice, Structure
+    md = mv.data.from_structures([Structure(
+        Lattice.cubic(4.2), ["Li", "Cl", "Cl", "Cl"],
+        [[0, 0, 0], [.5, .5, 0], [.5, 0, .5], [0, .5, .5]])])
+    mv.pp.describe(md)
+    return md
+
+
+#: A near-static trajectory: the same cell jittered, 20 frames.
+def licl_frames():
+    from pymatgen.core import Lattice, Structure
+    cell = Structure(Lattice.cubic(4.2), ["Li", "Cl", "Cl", "Cl"],
+                     [[0, 0, 0], [.5, .5, 0], [.5, 0, .5], [0, .5, .5]])
+    frames = np.tile(np.array(cell.frac_coords), (20, 1, 1))
+    return frames + np.random.default_rng(0).normal(0, 0.01, frames.shape)
+
+
 def quartz():
     """alpha-quartz, the textbook piezoelectric and a non-centrosymmetric one."""
     from pymatgen.core import Lattice, Structure
@@ -622,6 +641,8 @@ def cases(tmp):
          {"level": "emt", "temperatures": (300.0, 600.0), "steps": 30,
           "equilibration": 10, "sample_every": 5}),
         (mv.md.conductivity, dynamic, ("Cu",), {"level": "emt"}),
+        (mv.md.rdf, one_licl, (licl_frames(), "Li"),
+         {"r_max": 8.0}),
         (mv.md.melt_quench, one_metal, (),
          {"level": "emt", "melt_steps": 20, "quench_steps": 20,
           "equilibrate_steps": 10, "supercell": (1, 1, 1)}),

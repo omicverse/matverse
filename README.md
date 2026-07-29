@@ -312,7 +312,7 @@ exactly `obs` versus `obsm`.
 
 ## Status
 
-v0.1.33. **174 functions across 27 namespaces**, every one carrying a registry
+v0.1.34. **175 functions across 27 namespaces**, every one carrying a registry
 entry whose claims are verified by execution — currently **480/480**, with
 every claim-making entry either probed or exempted for a stated reason. See
 [DESIGN.md](DESIGN.md) for the full plan and

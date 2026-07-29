@@ -263,4 +263,52 @@ trajectory you cannot defend.
 [Defects and diffusion](defects_and_diffusion.ipynb) reaches diffusion by the
 static route, and explains why the two are complementary rather than redundant.
 ```"""),
+
+    ("markdown", """\
+## Where the atoms spend their time
+
+`mv.prop.rdf` takes one static structure and reports where the atoms *are*.
+`mv.md.rdf` takes a trajectory and reports where they **spend their time**. For
+a crystal near 0 K the two converge; for a liquid, a superionic conductor, or
+anything above half its melting point they do not — and that difference is the
+thermal broadening that makes a measured diffraction pattern wider than a
+simulated one.
+
+The trajectory is an argument, because `mv.md.run` deliberately does not keep
+one: a screening library that materialised every frame would spend its memory on
+positions nobody reads."""),
+
+    ("code", """\
+from pymatgen.core import Lattice, Structure
+
+cell = Structure(Lattice.cubic(4.2), ["Li", "Cl", "Cl", "Cl"],
+                 [[0, 0, 0], [.5, .5, 0], [.5, 0, .5], [0, .5, .5]])
+one = mv.data.from_structures([cell])
+mv.pp.describe(one)
+
+# Stand-in for a real trajectory: the same cell, jittered over 40 frames.
+frames = np.tile(np.array(cell.frac_coords), (40, 1, 1))
+frames = frames + np.random.default_rng(0).normal(0, 0.01, frames.shape)
+
+try:
+    mv.md.rdf(one, frames, species="Li", r_max=8.0)
+    result = one.obs[["formula", "first_shell_md",
+                      "first_shell_coordination_md"]].round(3)
+except ImportError as exc:
+    result = str(exc)          # pymatgen-analysis-diffusion is an extra
+result"""),
+
+    ("markdown", """\
+The first peak lands at 2.96 Å against a nearest-neighbour distance of 2.97, and
+the coordination number comes out at **11.7 against a true 12** — the shortfall
+being the Gaussian smearing spilling past the cutoff.
+
+```{note}
+That integral is computed here from its definition,
+$n(r) = \\int 4\\pi r^2 \\rho\\, g(r)\\, dr$, rather than taken from pymatgen's
+`coordination_number`, which reports the count **per reference index**. On this
+cell — twelve neighbours spread over three reference sites — pymatgen returns
+4.0. Four is not a coordination number for that cell, and a column called
+`first_shell_coordination` had better be one.
+```"""),
 ]

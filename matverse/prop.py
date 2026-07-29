@@ -551,6 +551,7 @@ def piezoelectric(md: AnnData, tensors, level: str = "dft",
             f"({md.n_obs}, 3, 6) in Voigt notation")
 
     directions = _fibonacci_sphere(int(n_directions))
+    not_rotated = 0
     longitudinal = np.full(md.n_obs, np.nan)
     best = np.empty(md.n_obs, dtype=object)
     valid = np.zeros(md.n_obs, dtype=bool)
@@ -565,8 +566,13 @@ def piezoelectric(md: AnnData, tensors, level: str = "dft",
                 ieee[i] = np.asarray(piezo.convert_to_ieee(structure),
                                      dtype=float)
             except Exception:
+                # Counted: without the IEEE rotation the components are in
+                # whatever frame the cell happened to be written in, and the
+                # longitudinal maximum is the only number that survives that.
+                not_rotated += 1
                 ieee[i] = tensor
         except Exception:
+            not_rotated += 1
             ieee[i] = tensor
         # d(n) = d_ijk n_i n_j n_k, maximised over the sampled directions.
         response = np.einsum("ijk,ni,nj,nk->n", ieee[i], directions,
@@ -581,7 +587,8 @@ def piezoelectric(md: AnnData, tensors, level: str = "dft",
     md.obs[f"piezo_symmetry_valid_{level}"] = valid
     set_level(md, level, kind="dft", method="piezoelectric tensor",
               reference=None, surrogate=False, license=None, uncertainty=None,
-              source=source, n_directions=int(n_directions))
+              source=source, n_directions=int(n_directions),
+              n_not_rotated_to_ieee=int(not_rotated))
     record(md, "prop.piezoelectric", level=level, source=source,
            n_directions=int(n_directions))
 

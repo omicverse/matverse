@@ -1,5 +1,50 @@
 # Release notes
 
+## v0.1.34
+
+**92 of 136 in-scope pymatgen modules, 67.6%.** 25 open gaps, 19 blocked.
+
+### `mv.md.rdf`, and a coordination number that is not one
+
+`mv.prop.rdf` takes one static structure and reports where the atoms *are*.
+This takes a trajectory and reports where they **spend their time**. For a
+crystal near 0 K the two converge; for a liquid, a superionic conductor or
+anything above half its melting point they do not, and that difference is the
+thermal broadening that makes a measured pattern wider than a simulated one.
+
+The trajectory is an argument, because `mv.md.run` deliberately keeps none.
+
+The first peak lands at 2.96 Å against a nearest-neighbour distance of 2.97.
+The coordination number is **11.7 against a true 12**, the shortfall being the
+Gaussian smearing spilling past the cutoff.
+
+That integral is computed here from its definition rather than taken from
+pymatgen's `coordination_number`, which reports the count **per reference
+index**: on a cell where the mobile ion has twelve neighbours spread over three
+reference sites it returns 4.0. Four is not a coordination number for that
+cell, and a column called `first_shell_coordination` had better be one.
+
+This is the third pymatgen output on this branch that had to be replaced by
+computing the definition — after the quasi-harmonic thermal expansion and the
+Warren-Cowley parameters.
+
+### A scan for the bug the last release found
+
+v0.1.32 shipped a function that returned NaN for every structure because
+`prop.py` did not import `warnings` and a bare `except Exception` swallowed the
+`NameError`. Rather than rely on catching the next one by luck, every module was
+scanned for names used but never bound: **there are none**, so that was the only
+instance.
+
+The thirty except handlers were then read. Most are intentional and say so —
+`_charge_balanced` returns `None` because a structure that cannot be assigned
+valences is common and not a defect; the dedup blocking key degrades to a
+coarser block; Fisher's exact test returns a conservative p-value. Two degraded
+silently without a count and now carry one: a structure matcher that fails on
+every pair reports "no duplicates", which is what it reports when there are
+none, and a piezoelectric tensor that fails to rotate to the IEEE frame stays in
+whatever frame the cell was written in.
+
 ## v0.1.33
 
 **91 of 136 in-scope pymatgen modules, 66.9%.** 26 open gaps, 19 blocked.
