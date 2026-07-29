@@ -45,7 +45,7 @@ def _importable(module: str) -> bool:
     return True
 
 
-COVERED_FLOOR = 112
+COVERED_FLOOR = 113
 
 #: The pymatgen the floor was recorded against. matverse supports two, and they
 #: ship different module trees — 162 modules in scope against 134 — so a count
@@ -109,8 +109,9 @@ class TestTheMapIsHonest:
             if group & present and not (group & reached):
                 unbacked.append(module)
         missing = [m for m in ("pymatgen.analysis.diffusion.aimd.rdf",
-                       "pymatgen.analysis.defects.generators")
-           if not _importable(m)]
+                               "pymatgen.analysis.defects.generators",
+                               "pymatgen.analysis.alloys.core")
+                   if not _importable(m)]
         if missing:
             pytest.skip("pymatgen add-ons absent, so the modules they "
                         "provide cannot be resolved and every claim "
@@ -192,7 +193,8 @@ class TestCoverage:
     #: measurement is of a smaller pymatgen than the one being claimed, and
     #: the floor is not a meaningful thing to hold it to.
     ADDONS = ("pymatgen.analysis.diffusion.aimd.rdf",
-              "pymatgen.analysis.defects.generators")
+              "pymatgen.analysis.defects.generators",
+              "pymatgen.analysis.alloys.core")
 
     @classmethod
     def _addons_present(cls):

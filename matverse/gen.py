@@ -333,7 +333,7 @@ def _plausible(structure) -> bool:
         return True
 
 
-__all__ = ["validate", "substitute", "predict_substitutions",
+__all__ = ["validate", "substitute", "alloy_pairs", "predict_substitutions",
            "predict_dopants", "predict_hosts", "DEFAULTS"]
 
 
@@ -622,3 +622,113 @@ def predict_hosts(md: AnnData, target, source: str = "input",
     record(out, "gen.predict_hosts", source=source, threshold=threshold,
            n_library=len(library))
     return out
+
+
+@register_function(
+    aliases=["alloy pairs", "alloys", "what can i alloy this with",
+             "pseudobinary", "solid solution partners", "miscible",
+             "substitutable pairs", "vegard"],
+    category="gen",
+    description="Find every pair of materials in a dataset that forms a "
+                "pseudobinary alloy system, and how badly their lattices "
+                "disagree.",
+    requires={"structures": ["{source}"]},
+    examples=["pairs = mv.gen.alloy_pairs(md)",
+              "pairs = mv.gen.alloy_pairs(md, max_mismatch=0.05)"],
+    related=["mv.gen.predict_substitutions", "mv.disorder.sqs",
+             "mv.disorder.sro", "mv.iface.match"],
+    notes="Two materials form an alloy pair when one species can be swapped "
+          "for another on the same structure, leaving the rest of the lattice "
+          "in place — GaAs and AlAs share their arsenic and differ only in the "
+          "cation, so (Ga,Al)As exists across the whole range. Silicon and "
+          "GaAs do not, whatever their lattices look like, and the pairing is "
+          "refused rather than scored badly.\n\n"
+          "Returns rather than deposits, because one dataset of n materials "
+          "gives up to n(n-1)/2 pairs — the same reason mv.iface.match does. "
+          "obs['parent_a'] and obs['parent_b'] point back at the rows.\n\n"
+          "obs['lattice_mismatch'] is the fractional difference in the cube "
+          "root of the cell volume, which is the number that decides whether "
+          "a film will grow strained or relax into misfit dislocations. It is "
+          "not a miscibility criterion: GaAs-AlAs at 0.14% is famously "
+          "lattice-matched and GaAs-InAs at 7% is famously not, and both are "
+          "real alloy systems with real devices built on them. Filter on it "
+          "when you care about epitaxy, not when you care about whether the "
+          "alloy exists.\n\n"
+          "obs['substituting'] names the species being swapped and "
+          "obs['observer'] the ones that stay put, which is what tells you "
+          "which sublattice the disorder lives on — and so what "
+          "mv.disorder.sqs would have to enumerate.",
+)
+def alloy_pairs(md: AnnData, source: str = "input",
+                max_mismatch: float | None = None) -> AnnData:
+    """Pseudobinary alloy systems in a dataset. Returns a pairs object."""
+    try:
+        from pymatgen.analysis.alloys.core import AlloyPair
+    except ImportError as exc:                             # pragma: no cover
+        raise ImportError(
+            f"mv.gen.alloy_pairs needs pymatgen-analysis-alloys, one of "
+            f"pymatgen's own add-on packages. Install it with `pip install "
+            f"pymatgen-analysis-alloys`. ({exc})") from exc
+
+    from .data import from_structures
+
+    names = [str(n) for n in md.obs_names]
+    labels = ([str(v) for v in md.obs["name"]] if "name" in md.obs else names)
+    cells = structures(md, source)
+
+    built, rows, refused = [], [], []
+    for i in range(len(cells)):
+        for j in range(i + 1, len(cells)):
+            try:
+                # from_structures wants the oxidation-decorated structures as a
+                # separate argument and will not derive them; passing the plain
+                # ones is what its own documentation shows.
+                pair = AlloyPair.from_structures(
+                    structures=(cells[i], cells[j]),
+                    structures_with_oxidation_states=(cells[i], cells[j]),
+                    ids=(names[i], names[j]))
+            except Exception as exc:
+                refused.append(f"{labels[i]}/{labels[j]}: {type(exc).__name__}: "
+                               f"{exc}")
+                continue
+
+            a = float(pair.volume_cube_root_a)
+            b = float(pair.volume_cube_root_b)
+            mismatch = abs(a - b) / ((a + b) / 2.0)
+            if max_mismatch is not None and mismatch > max_mismatch:
+                refused.append(f"{labels[i]}/{labels[j]}: lattice mismatch "
+                               f"{mismatch:.3f} over {max_mismatch}")
+                continue
+
+            # AlloyPair sorts its own members, so a and b need not be i and j.
+            first = names.index(pair.id_a) if pair.id_a in names else i
+            second = names.index(pair.id_b) if pair.id_b in names else j
+            built.append(cells[first])
+            rows.append({
+                "parent_a": names[first], "parent_b": names[second],
+                "name": f"{labels[first]}-{labels[second]}",
+                "pair_formula": str(pair.pair_formula),
+                "chemsys": str(pair.chemsys),
+                "substituting": "-".join(sorted(
+                    {str(e) for e in pair.structure_a.composition.elements}
+                    ^ {str(e) for e in pair.structure_b.composition.elements})),
+                "observer": "-".join(str(e) for e in pair.observer_elements),
+                "lattice_mismatch": mismatch,
+                "spacegroup": int(pair.spacegroup_intl_number_a),
+            })
+
+    if not built:
+        raise ValueError(
+            f"no pair of these {md.n_obs} structures forms an alloy system; "
+            f"{len(refused)} were refused, first few: {refused[:3]}")
+
+    pairs = from_structures(built, pd.DataFrame(rows))
+    pairs.uns["alloy_pairs"] = {
+        "source": source, "n_parents": int(md.n_obs),
+        "max_mismatch": max_mismatch,
+        "mismatch_definition": "|a-b| / mean(a,b) on the cube root of the "
+                               "cell volume",
+        "n_refused": len(refused), "refused": refused[:20],
+    }
+    record(pairs, "gen.alloy_pairs", source=source, n_parents=int(md.n_obs))
+    return pairs

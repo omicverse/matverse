@@ -36,12 +36,13 @@ jobs:
           # mv.tl's clustering routes and mv.pl, and skipping them silently
           # would leave the badge green over untested code.
           #
-          # diffusion and defects are pymatgen's own add-on packages. Without
+          # diffusion, defects and alloys are pymatgen's own add-on packages.
+          # Without
           # them roughly forty tests skip, five more fail outright, and the
           # pymatgen coverage meter measures a smaller pymatgen than the one
           # matverse is claiming to cover — it read 100 modules against a floor
           # of 111 purely because half the add-ons were absent.
-          pip install -e ".[dev,analysis,plot,multi,diffusion,defects]"
+          pip install -e ".[dev,analysis,plot,multi,diffusion,defects,alloys]"
 
       - name: Show the environment the results belong to
         run: |
@@ -75,7 +76,7 @@ jobs:
           # Same add-ons as the test job: the tutorials call into both, and a
           # docs build that silently skipped those cells would document a
           # matverse nobody runs.
-          pip install -e ".[diffusion,defects]"
+          pip install -e ".[diffusion,defects,alloys]"
           pip install -r matverse_guide/requirements.txt
 
       - name: Execute the tutorial notebooks

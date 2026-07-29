@@ -141,6 +141,7 @@ WRAPPED: Dict[str, List[str]] = {
     "analysis.solar.slme": ["mv.prop.slme"],
     "analysis.diffusion.neb.io": ["mv.dft.write_inputs"],
     "analysis.diffusion.neb.periodic_dijkstra": ["mv.neb.percolation"],
+    "analysis.alloys.core": ["mv.gen.alloy_pairs"],
     "analysis.diffusion.aimd.clustering": ["mv.md.sites"],
     "analysis.structure_matcher": ["mv.pp.dedup", "mv.gen.validate"],
     "analysis.surface_analysis": ["mv.surf.surface_energy_chempot"],
@@ -494,9 +495,6 @@ BLOCKED: Dict[str, str] = {
     "analysis.functional_groups": "needs openbabel",
     "analysis.quasirrho": "needs molecular vibrational frequencies from a "
                           "quantum-chemistry run",
-    "analysis.alloys.core": "pymatgen-analysis-alloys 0.0.9 has a "
-                            "from_structures signature that does not match "
-                            "its own documentation",
 }
 
 

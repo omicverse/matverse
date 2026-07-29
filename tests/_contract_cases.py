@@ -467,6 +467,14 @@ def cases(tmp):
     # so it is what the probe has to use for that claim to be exercised at all.
     from pymatgen.core import Lattice, Structure
     _fcc = [[0, 0, 0], [0, .5, .5], [.5, 0, .5], [.5, .5, 0]]
+    def arsenides():
+        """Two III-Vs that really do alloy, for mv.gen.alloy_pairs."""
+        def zb(a, cation):
+            return Structure.from_spacegroup(
+                "F-43m", Lattice.cubic(a), [cation, "As"],
+                [[0, 0, 0], [0.25, 0.25, 0.25]])
+        return mv.data.from_structures([zb(5.653, "Ga"), zb(5.661, "Al")])
+
     def measured_alloy():
         """Two compositions with a measured formation enthalpy attached."""
         from pymatgen.core import Composition
@@ -642,6 +650,7 @@ def cases(tmp):
         (mv.neb.percolation, one_metal, ("Cu",), {}),
 
         (mv.disorder.sro, one_metal, (), {}),
+        (mv.gen.alloy_pairs, arsenides, (), {"returns": "new"}),
         (mv.exp.formation_hull, measured_alloy, ("dHf_lab",),
          {"unit": "kJ/mol"}),
 

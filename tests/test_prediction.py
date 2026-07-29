@@ -623,3 +623,109 @@ class TestPredictHosts:
         mv.pp.describe(hosted)
         mv.pp.qc(hosted)
         assert "is_valid" in hosted.obs
+
+
+def _has_alloys_addon() -> bool:
+    try:
+        import pymatgen.analysis.alloys.core  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+@pytest.mark.skipif(not _has_alloys_addon(),
+                    reason="pymatgen-analysis-alloys is an optional extra")
+class TestAlloyPairs:
+    """Checked against the III-V semiconductors, where the answers are known.
+
+    AlAs and GaAs are the canonical lattice-matched pair — 0.14% apart, which
+    is why AlGaAs heterostructures grow defect-free and ended up in every laser
+    diode. InAs is 7% away from both, which is why InGaAs is grown strained and
+    on purpose. Silicon shares a lattice type with all three and alloys with
+    none of them, which is the case that separates a real criterion from a
+    geometric one.
+    """
+
+    A = {"GaAs": 5.653, "AlAs": 5.661, "InAs": 6.058}
+
+    @staticmethod
+    def _zincblende(a, cation, anion):
+        from pymatgen.core import Lattice, Structure
+        return Structure.from_spacegroup(
+            "F-43m", Lattice.cubic(a), [cation, anion],
+            [[0, 0, 0], [0.25, 0.25, 0.25]])
+
+    @pytest.fixture
+    def semiconductors(self):
+        from pymatgen.core import Lattice, Structure
+        cells = [self._zincblende(self.A["GaAs"], "Ga", "As"),
+                 self._zincblende(self.A["AlAs"], "Al", "As"),
+                 self._zincblende(self.A["InAs"], "In", "As"),
+                 Structure.from_spacegroup("Fd-3m", Lattice.cubic(5.431),
+                                           ["Si"], [[0, 0, 0]])]
+        md = mv.data.from_structures(cells)
+        md.obs["name"] = ["GaAs", "AlAs", "InAs", "Si"]
+        return md
+
+    @staticmethod
+    def _row(pairs, formula):
+        frame = pairs.obs[pairs.obs["pair_formula"] == formula]
+        assert len(frame) == 1, f"{formula} not found in {list(pairs.obs['pair_formula'])}"
+        return frame.iloc[0]
+
+    def test_only_the_three_arsenides_pair_up(self, semiconductors):
+        pairs = mv.gen.alloy_pairs(semiconductors)
+        assert pairs.n_obs == 3
+        assert "Si" not in " ".join(pairs.obs["chemsys"])
+
+    def test_silicon_is_refused_with_a_reason(self, semiconductors):
+        pairs = mv.gen.alloy_pairs(semiconductors)
+        refused = " ".join(pairs.uns["alloy_pairs"]["refused"])
+        assert refused.count("Si") == 3
+        assert "InvalidAlloy" in refused
+
+    def test_the_matched_pair_is_matched(self, semiconductors):
+        """0.14%, computed from the lattice constants rather than pasted."""
+        pairs = mv.gen.alloy_pairs(semiconductors)
+        expected = (abs(self.A["AlAs"] - self.A["GaAs"])
+                    / ((self.A["AlAs"] + self.A["GaAs"]) / 2))
+        assert float(self._row(pairs, "AlAs_GaAs")["lattice_mismatch"]) == \
+            pytest.approx(expected, rel=1e-3)
+        assert expected == pytest.approx(0.0014, abs=1e-4)
+
+    def test_the_mismatched_pair_is_mismatched(self, semiconductors):
+        pairs = mv.gen.alloy_pairs(semiconductors)
+        assert float(self._row(pairs, "GaAs_InAs")["lattice_mismatch"]) == \
+            pytest.approx(0.069, abs=0.005)
+
+    def test_it_says_which_sublattice_the_disorder_is_on(self, semiconductors):
+        """The cations swap and the arsenic stays — which is what decides what
+        an SQS would have to enumerate."""
+        pairs = mv.gen.alloy_pairs(semiconductors)
+        row = self._row(pairs, "AlAs_GaAs")
+        assert set(row["substituting"].split("-")) == {"Al", "Ga"}
+        assert row["observer"] == "As"
+
+    def test_a_mismatch_ceiling_filters(self, semiconductors):
+        """And filters on epitaxy, not on whether the alloy exists — InGaAs is
+        a real material that this deliberately excludes."""
+        pairs = mv.gen.alloy_pairs(semiconductors, max_mismatch=0.01)
+        assert list(pairs.obs["pair_formula"]) == ["AlAs_GaAs"]
+        assert any("mismatch" in r
+                   for r in pairs.uns["alloy_pairs"]["refused"])
+
+    def test_pairs_point_back_at_their_rows(self, semiconductors):
+        pairs = mv.gen.alloy_pairs(semiconductors)
+        names = set(map(str, semiconductors.obs_names))
+        assert set(pairs.obs["parent_a"]) <= names
+        assert set(pairs.obs["parent_b"]) <= names
+
+    def test_a_dataset_that_alloys_with_nothing_says_so(self):
+        from pymatgen.core import Lattice, Structure
+        md = mv.data.from_structures([
+            Structure.from_spacegroup("Fd-3m", Lattice.cubic(5.431), ["Si"],
+                                      [[0, 0, 0]]),
+            Structure(Lattice.cubic(3.61), ["Cu"] * 4,
+                      [[0, 0, 0], [0, .5, .5], [.5, 0, .5], [.5, .5, 0]])])
+        with pytest.raises(ValueError, match="forms an alloy system"):
+            mv.gen.alloy_pairs(md)

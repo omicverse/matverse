@@ -245,6 +245,66 @@ entropy term belongs in.
 ```"""),
 
     ("markdown", """\
+## What can this be alloyed with?
+
+Before enumerating an ordered approximant there is a prior question: which of
+your materials can be alloyed with which at all? Two materials form a
+pseudobinary system when one species swaps for another on the same structure and
+the rest of the lattice stays put.
+
+`mv.gen.alloy_pairs` enumerates them. The III–V semiconductors are the case
+where every answer is known in advance:"""),
+
+    ("code", """\
+from pymatgen.core import Lattice, Structure
+
+def zincblende(a, cation, anion="As"):
+    return Structure.from_spacegroup(
+        "F-43m", Lattice.cubic(a), [cation, anion],
+        [[0, 0, 0], [0.25, 0.25, 0.25]])
+
+iii_v = mv.data.from_structures([
+    zincblende(5.653, "Ga"), zincblende(5.661, "Al"),
+    zincblende(6.058, "In"),
+    Structure.from_spacegroup("Fd-3m", Lattice.cubic(5.431), ["Si"],
+                              [[0, 0, 0]])])
+iii_v.obs["name"] = ["GaAs", "AlAs", "InAs", "Si"]
+
+pairs = mv.gen.alloy_pairs(iii_v)
+pairs.obs[["name", "pair_formula", "substituting", "observer",
+           "lattice_mismatch"]].round(4)"""),
+
+    ("markdown", """\
+Three pairs out of four materials, and the missing one is the point. **Silicon
+is refused against all three arsenides**, even though it shares their lattice
+type and sits between them in size:"""),
+
+    ("code", """\
+pairs.uns["alloy_pairs"]["refused"]"""),
+
+    ("markdown", """\
+"Not commensurate" — there is no species you can swap to get from Si to GaAs
+while leaving a sublattice in place. That is a chemical criterion, not a
+geometric one, and it is the reason to ask this question with a function rather
+than by comparing lattice constants.
+
+The mismatches are the textbook ones. **AlAs–GaAs at 0.14%** is the canonical
+lattice-matched pair, which is why AlGaAs heterostructures grow essentially
+defect-free and ended up inside every laser diode and every high-electron-
+mobility transistor. **GaAs–InAs at 7%** is the canonical mismatched one.
+
+```{warning}
+Do not read `lattice_mismatch` as a miscibility criterion. InGaAs is a real
+material with real devices built on it — the 7% is why it is grown strained and
+thin, deliberately. Filter on this column when you care about epitaxy, not when
+you care about whether the alloy exists.
+```
+
+`substituting` and `observer` say which sublattice the disorder lives on: the
+cations swap, the arsenic stays. That is exactly what the SQS below has to
+enumerate over, and it is worth knowing before you start."""),
+
+    ("markdown", """\
 ## Did the disorder work?
 
 Everything above produces a cell that is *supposed* to stand for a solid
