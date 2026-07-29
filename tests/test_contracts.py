@@ -273,26 +273,39 @@ class TestContracts:
         assert kinds["produces"][1] >= 30
         assert kinds["requires"][1] >= 10
 
+    def test_the_coverage_check_knows_what_this_file_probes(self, probe_report):
+        """The registry-wide coverage check in test_contract_coverage.py takes
+        this file's list on trust. If the two drift, a function drops out of
+        both and its claims go back to being asserted — which is the state the
+        coverage check exists to prevent."""
+        from _contract_cases import NAMES_PROBED_IN_TEST_CONTRACTS
+
+        here = {r.function for r in probe_report.results}
+        assert here == set(NAMES_PROBED_IN_TEST_CONTRACTS), (
+            "update NAMES_PROBED_IN_TEST_CONTRACTS in tests/_contract_cases.py"
+            f"\n  only here:  {sorted(here - set(NAMES_PROBED_IN_TEST_CONTRACTS))}"
+            f"\n  only there: {sorted(set(NAMES_PROBED_IN_TEST_CONTRACTS) - here)}")
+
 
 class TestPrerequisites:
     def test_hull_really_needs_energies(self, make_md):
         result = probe_prerequisite(
             mv.thermo.hull, make_md, mv.calc.energy,
-            name="mv.thermo.hull", level="emt",
+            entry_name="mv.thermo.hull", level="emt",
             upstream_kwargs={"level": "emt"})
         assert result.verified, result.detail
 
     def test_neighbors_really_needs_pca(self, make_md):
         result = probe_prerequisite(
             mv.tl.neighbors, make_md, mv.tl.pca,
-            name="mv.tl.neighbors", n_neighbors=3,
+            entry_name="mv.tl.neighbors", n_neighbors=3,
             upstream_kwargs={"n_comps": 2})
         assert result.verified, result.detail
 
     def test_similarity_really_needs_a_feature_block(self, make_md):
         result = probe_prerequisite(
             mv.feat.similarity, make_md, mv.feat.element_stats,
-            name="mv.feat.similarity")
+            entry_name="mv.feat.similarity")
         assert result.verified, result.detail
 
     def test_cluster_has_no_unconditional_prerequisite(self, make_md):
@@ -317,7 +330,7 @@ class TestPrerequisites:
 
         result = probe_prerequisite(
             mv.tl.cluster, with_pca, mv.tl.neighbors,
-            name="mv.tl.cluster", method="kmeans", n_clusters=2,
+            entry_name="mv.tl.cluster", method="kmeans", n_clusters=2,
             upstream_kwargs={"n_neighbors": 3})
         assert not result.verified
         assert "succeeded without it" in result.detail

@@ -17,3 +17,7 @@ matverse_guide/docs/api/reference/
 
 # Build artefacts
 *.egg-info/
+
+# Slurm job output from mv.utils.submit
+mvsubmit-*.out
+slurm-*.out

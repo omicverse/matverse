@@ -29,7 +29,6 @@ _OPS = {"lt": np.less, "le": np.less_equal, "gt": np.greater,
     description="Deposit a boolean pass/fail column from threshold criteria "
                 "written as column__op=value, together with the criteria "
                 "themselves and how many candidates passed.",
-    requires={"obs": ["{column}"]},
     produces={"obs": ["{name}"], "uns": ["screens"]},
     examples=["mv.screen.filter(md, e_above_hull_emt__lt=0.05)",
               "mv.screen.filter(md, e_above_hull_emt__lt=0.05, n_elements__le=3, "
@@ -37,7 +36,15 @@ _OPS = {"lt": np.less, "le": np.less_equal, "gt": np.greater,
     related=["mv.screen.rank", "mv.screen.pareto", "mv.pp.filter_materials"],
     notes="Deposits rather than subsets, so the criteria and the rejected "
           "candidates both survive in the object. Subset afterwards with "
-          "md[md.obs[name]] when you want the shorter list.",
+          "md[md.obs[name]] when you want the shorter list.\n\n"
+          "Claims no requires, and this is the one place in matverse where the "
+          "contract genuinely does not bind. The columns this call consumes are "
+          "named by the *keys* of **criteria, each of which is a column and an "
+          "operator joined by __ — there is no parameter holding a column name "
+          "for a slot template to interpolate. The claim it used to make, "
+          "obs['{column}'], was unresolvable rather than merely wrong. An API "
+          "whose consumed state is encoded in keyword names puts that state "
+          "beyond what a slot template can say.",
 )
 def filter(md: AnnData, name: str = "passes", **criteria) -> None:
     """Deposit a boolean mask from ``column__op=value`` criteria.

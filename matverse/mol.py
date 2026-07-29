@@ -182,7 +182,7 @@ def _can_be_polar(symbol: str) -> bool:
     description="The covalent bond graph of every molecule, as a sparse "
                 "adjacency matrix on the sites axis.",
     requires={"structures": ["{source}"]},
-    produces={"obsp": ["bonds", "bond_distances"]},
+    produces={"sites.obsp": ["bonds", "bond_distances"]},
     prerequisites=["mv.multi.sites"],
     examples=["mv.mol.bonds(md, sites)",
               "mv.mol.bonds(md, sites, strategy='openbabel')"],

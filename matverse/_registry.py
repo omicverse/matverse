@@ -27,6 +27,20 @@ resolved key is true only for the one call that produced it, and the pattern is
 the part worth teaching. ``matverse._probe`` resolves templates against a call's
 bound arguments before checking them, so the two agree by construction.
 
+Which object a slot lands on
+----------------------------
+On a library where every operation takes one object, a container name is
+unambiguous. matverse has operations that take two — a material axis and a
+sites, bands or interface axis — and some of them deposit on the second one. A
+container may therefore be qualified with the parameter that receives it::
+
+    produces={"sites.obs": ["coordination_number"]}
+
+This is the one place the omicverse contract vocabulary did not transfer as
+written, and it is a gap rather than a disagreement: the slots are the same, the
+claim just had no way to say *whose* ``obs``. Unqualified still means the first
+parameter, so the single-object case is unchanged.
+
 This module is vendored on purpose: matverse depends on anndata, mudata, numpy,
 pandas, pymatgen and ase, and on nothing else in its core path.
 """
@@ -56,6 +70,23 @@ _TEMPLATE = re.compile(r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}")
 def slot_template_fields(slot: str) -> List[str]:
     """Parameter names a slot template interpolates, e.g. ``['level']``."""
     return _TEMPLATE.findall(slot)
+
+
+def split_container(key: str) -> tuple[Optional[str], str]:
+    """``'sites.obs'`` -> ``('sites', 'obs')``; ``'obs'`` -> ``(None, 'obs')``.
+
+    A contract container may name the object it lands on. Unqualified means the
+    call's first parameter, which is the common case — one object in, deposits
+    on it. An operation that takes a second object and writes there says so::
+
+        mv.env.coordination(md, sites)   produces={"sites.obs": [...]}
+
+    Without the qualifier a claim is ambiguous exactly where it matters most:
+    ``mv.mag.ground_state`` writes five columns to ``md.obs`` and a sixth to
+    ``orderings_.obs``, and an unqualified ``obs`` says they arrive together.
+    """
+    param, sep, container = key.rpartition(".")
+    return (param if sep else None), container
 
 
 def resolve_slot(slot: str, bound: Dict[str, Any]) -> str:
@@ -108,23 +139,33 @@ class FunctionRegistry:
         if not description.strip():
             raise ValueError("registration requires a description")
 
+        full_name = f"{func.__module__}.{func.__qualname__}"
+        short_name = func.__name__
+        try:
+            signature = str(inspect.signature(func))
+            parameters = list(inspect.signature(func).parameters)
+        except (TypeError, ValueError):
+            signature, parameters = "(...)", []
+
         for kind, mapping in (("requires", requires), ("produces", produces)):
             if mapping is None:
                 continue
             if not isinstance(mapping, dict):
                 raise TypeError(f"{kind} must be a dict of container -> [slot, ...]")
-            bad = set(mapping) - CONTRACT_KEYS
-            if bad:
-                raise ValueError(
-                    f"{kind} names unknown container(s) {sorted(bad)}; "
-                    f"allowed: {sorted(CONTRACT_KEYS)}")
-
-        full_name = f"{func.__module__}.{func.__qualname__}"
-        short_name = func.__name__
-        try:
-            signature = str(inspect.signature(func))
-        except (TypeError, ValueError):
-            signature = "(...)"
+            for key in mapping:
+                param, container = split_container(key)
+                if container not in CONTRACT_KEYS:
+                    raise ValueError(
+                        f"{full_name}: {kind} names unknown container "
+                        f"{container!r}; allowed: {sorted(CONTRACT_KEYS)}")
+                # A qualifier that is not a parameter cannot be resolved to an
+                # object, so the claim could never be probed. Refuse it here
+                # rather than let it become a claim nothing can check.
+                if param is not None and parameters and param not in parameters:
+                    raise ValueError(
+                        f"{full_name}: {kind} qualifies {container!r} with "
+                        f"{param!r}, which is not a parameter of "
+                        f"{short_name}{signature}")
 
         public_name = _public_name(func)
 
@@ -331,6 +372,12 @@ def register_function(*, aliases: List[str], category: str, description: str,
             examples=["mv.thermo.hull(md, level='emt')"],
         )
 
+    A container may be qualified with the parameter naming the object it lands
+    on — ``{"sites.obs": [...]}`` — for the operations that take a second axis
+    and deposit there. Unqualified means the first parameter. The qualifier is
+    checked against the signature at import, since one that names no parameter
+    resolves to no object and could never be probed.
+
     Every claim made here is checked by execution in ``matverse._probe``; claims
     that fail their probe are deleted rather than repaired by hand.
     """
@@ -361,13 +408,15 @@ def _public_name(func: Callable) -> str:
 
 
 def _render_slot(container: str, slot: str) -> str:
+    param, container = split_container(container)
+    prefix = f"{param}." if param else ""
     if container == "structures":
-        return f"obsm['structures'][{slot!r}]"
+        return f"{prefix}obsm['structures'][{slot!r}]"
     if container in ("levels", "features"):
-        return f"uns['{container}'][{slot!r}]"
+        return f"{prefix}uns['{container}'][{slot!r}]"
     if container == "X":
-        return "X"
-    return f"{container}[{slot!r}]"
+        return f"{prefix}X"
+    return f"{prefix}{container}[{slot!r}]"
 
 
 def _slot_matches(template: str, concrete: str) -> bool:

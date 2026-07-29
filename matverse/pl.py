@@ -731,7 +731,7 @@ def embedding(md: AnnData, color: str | None = None, use_rep: str = "X_pca",
     description="Overlay grid-shaped curves — diffraction patterns, densities "
                 "of states — for selected materials, optionally comparing a "
                 "computed level against a measured one.",
-    requires={"obsm": ["{quantity}_{level}"], "uns": ["grids"]},
+    requires={"obsm": ["{quantity}_{levels}"], "uns": ["grids"]},
     prerequisites=["mv.prop.xrd"],
     examples=["mv.pl.spectra(md, 'xrd', rows=[0, 1, 2])",
               "mv.pl.spectra(md, 'xrd', rows=[0], levels=['calc', "

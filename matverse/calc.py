@@ -170,9 +170,13 @@ def available(check_imports: bool = True) -> dict:
     category="calc",
     description="Report which levels used in this object carry a licence that "
                 "forbids commercial use.",
-    requires={"levels": ["{level}"]},
     examples=["mv.calc.check_licenses(md)"],
     related=["mv.calc.energy", "mv.calc.available"],
+    notes="Claims no requires. It used to claim levels['{level}'], which is "
+          "unbindable — there is no `level` parameter to interpolate — and "
+          "false besides: on an object with no levels recorded it returns an "
+          "empty list rather than failing, which is the right behaviour for a "
+          "check.",
 )
 def check_licenses(md: AnnData) -> list[str]:
     """Levels in this object whose licence forbids commercial use."""
@@ -303,7 +307,9 @@ def relax(md: AnnData, level: str = "emt", source: str = "input",
                 "deposit it onto the sites axis, where per-atom results are a "
                 "matrix rather than ragged records.",
     requires={"structures": ["{source}"]},
-    produces={"levels": ["{level}"]},
+    produces={"levels": ["{level}"],
+              "sites.obsm": ["forces_{level}"],
+              "sites.obs": ["force_magnitude_{level}"]},
     prerequisites=["mv.multi.sites"],
     dispatch="level= selects the calculator, as for mv.calc.energy",
     examples=["sites = mv.multi.sites(md); mv.calc.forces(md, sites, "
@@ -311,10 +317,10 @@ def relax(md: AnnData, level: str = "emt", source: str = "input",
     related=["mv.multi.sites", "mv.multi.aggregate", "mv.calc.relax"],
     notes="Takes both objects because forces need the structures, which live on "
           "the material axis, and produce one row per atom, which lives on the "
-          "sites axis. Writes sites.obsm['forces_{level}'] and "
-          "sites.obs['force_magnitude_{level}'] — slots on the object passed "
-          "as `sites`, which the contract fields cannot name because they "
-          "describe one object only.",
+          "sites axis. The produces slots say `sites.` for exactly that reason: "
+          "the level is recorded on the material object, the forces on the "
+          "sites object, and a claim that did not distinguish them would be "
+          "pointing an agent at the wrong one.",
 )
 def forces(md: AnnData, sites: AnnData, level: str = "emt",
            source: str = "input", **params) -> None:
@@ -367,7 +373,7 @@ def forces(md: AnnData, sites: AnnData, level: str = "emt",
     description="Combine several levels into a consensus level, recording the "
                 "mean energy and the spread across the committee as an "
                 "uncertainty for active learning.",
-    requires={"obs": ["energy_per_atom_{level}"]},
+    requires={"obs": ["energy_per_atom_{levels}"]},
     produces={"obs": ["energy_per_atom_{key}", "energy_per_atom_{key}_std"],
               "levels": ["{key}"]},
     prerequisites=["mv.calc.energy"],

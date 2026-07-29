@@ -242,11 +242,12 @@ def _total_magmom(structure) -> float:
     description="Pick the lowest-energy ordering for each material, copy its "
                 "energy back onto the parent, and record how far apart the "
                 "orderings were.",
-    requires={"obs": ["energy_per_atom_{level}", "parent", "ordering"]},
-    produces={"obs": ["magnetic_ordering_{level}",
-                      "magnetic_spread_{level}",
-                      "energy_per_atom_{level}", "total_magmom_{level}",
-                      "is_ground_state_{level}"]},
+    requires={"orderings_.obs": ["energy_per_atom_{level}", "parent",
+                                 "ordering"]},
+    produces={"md.obs": ["magnetic_ordering_{level}",
+                         "magnetic_spread_{level}",
+                         "energy_per_atom_{level}", "total_magmom_{level}"],
+              "orderings_.obs": ["is_ground_state_{level}"]},
     prerequisites=["mv.mag.orderings", "mv.calc.relax"],
     examples=["mv.mag.ground_state(orderings, md, level='emt')"],
     related=["mv.mag.orderings", "mv.thermo.hull"],

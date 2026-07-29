@@ -141,8 +141,8 @@ def _check_sites(sites_obj: AnnData) -> None:
     description="Summarise a per-atom column back onto the material axis, "
                 "which is how a per-site result becomes something a screen can "
                 "filter on.",
-    requires={"obs": ["{column}"]},
-    produces={"obs": ["{key_added}"]},
+    requires={"sites_obj.obs": ["{column}"]},
+    produces={"md.obs": ["{key_added}"]},
     prerequisites=["mv.multi.sites"],
     examples=["mv.multi.aggregate(sites, md, 'force_magnitude_emt', how='max')"],
     related=["mv.multi.sites", "mv.screen.filter"],

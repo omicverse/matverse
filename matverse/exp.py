@@ -26,7 +26,6 @@ from ._registry import register_function
     description="Attach a measured curve for every material onto the same grid "
                 "as its computed counterpart, recording the instrument as a "
                 "level of theory.",
-    requires={"uns": ["grids"]},
     produces={"obsm": ["{quantity}_{level}"], "levels": ["{level}"]},
     prerequisites=["mv.prop.xrd"],
     examples=["mv.exp.attach(md, 'xrd', patterns, two_theta, "
@@ -38,7 +37,11 @@ from ._registry import register_function
           "Attach a measurement at its own resolution or better: diffraction "
           "peaks are narrow, and resampling onto a grid coarser than the peak "
           "width discards them permanently. Points outside the measured range "
-          "become NaN rather than zero, and comparisons use the overlap.",
+          "become NaN rather than zero, and comparisons use the overlap.\n\n"
+          "Claims no requires. It used to claim uns['grids'], and probing "
+          "deleted it: when the quantity has no grid yet the measured one "
+          "becomes it, so a measurement can be attached before anything was "
+          "computed.",
 )
 def attach(md: AnnData, quantity: str, values, grid, level: str = "experiment",
            instrument: str | None = None, unit: str = "",

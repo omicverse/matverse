@@ -481,13 +481,16 @@ def presets() -> dict:
     category="dft",
     description="Report how many first-principles runs are finished, missing or "
                 "unconverged, and which rows they belong to.",
-    requires={"obs": ["dft_directory"]},
     prerequisites=["mv.dft.write_inputs"],
     examples=["mv.dft.status(md, 'runs/')"],
     related=["mv.dft.read_outputs", "mv.utils.resume"],
     notes="Worth running before read_outputs on a large campaign: a directory "
           "that never started and one that crashed look identical from the "
-          "object, and the difference decides whether to resubmit.",
+          "object, and the difference decides whether to resubmit.\n\n"
+          "Claims no requires. It used to claim obs['dft_directory'], and "
+          "probing deleted it: status looks under `root` for a directory named "
+          "after each row, so it answers for an object that never ran "
+          "write_inputs — which is the case where the answer matters.",
 )
 def status(md: AnnData, root, filename: str = "vasprun.xml") -> dict:
     """How many runs have produced output, and which rows have not."""

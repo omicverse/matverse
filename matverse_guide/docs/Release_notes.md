@@ -1,5 +1,88 @@
 # Release notes
 
+## v0.1.17
+
+### The contract-verified rate was measuring the test suite
+
+matverse reports a **contract-verified rate** rather than a field-coverage
+score, on the argument that the audit metric in common use credits a registry
+field for being *present* rather than *true*. That argument only holds if the
+probe reaches the whole registry, and it had stopped doing so: the battery grew
+alongside the first six namespaces, the library grew to twenty-nine, and the
+probe list did not follow. **165 of 491 claims were probed — 33.6% — and the
+reported rate was 100%.**
+
+A rate is only as good as its denominator. 100% of a third of the claims is the
+same kind of statement the audit metric was criticised for.
+
+The battery now covers everything: **433 claims verified by execution**, up from
+165. Of the 132 entries that make a claim, 118 are probed and 14 are exempt —
+each named with its reason (needs the network, needs a real VASP or LOBSTER
+output, needs a tool that is not installed). `test_no_claim_goes_unprobed` fails
+if an entry ships a claim that nothing checks, so this cannot silently reopen.
+
+### Eleven claims were false, and the harness was hiding some of them
+
+Probing the other two thirds deleted seven more claims and corrected five. The
+ones worth reading:
+
+`mv.screen.filter requires obs['{column}']` was not wrong so much as
+**unsayable**. Its columns are encoded in the *keys* of `**criteria` —
+`e_above_hull_emt__lt` is a column and an operator joined by `__` — so no
+parameter holds a column name for a slot template to interpolate. This is the
+second boundary this line of work has found, and it is a different one from the
+`pymatgen` case: there the library had no named state to point at, here the
+state is named but the name never becomes an argument.
+
+`mv.utils.resume`, `mv.utils.job_status` and `mv.dft.status` each claimed to
+require the thing they exist to report on. All three answer correctly when it is
+absent — no column means every row is still to do — which is the right behaviour
+and makes the claim false.
+
+Three failures were in the **harness**, not the registry, and the last is the
+one that matters:
+
+- `probe_call(..., name=...)` — the lookup argument shadowed a real parameter of
+  `mv.pp.supercell`, `mv.screen.filter` and others. Passing `name='big'` sent it
+  to the probe, the entry came back empty, and the call was **silently not
+  probed at all**. A harness that reports nothing wrong because it tested
+  nothing is worse than no harness.
+- The entry was looked up by bare function name, so `mv.pl.pareto` resolved to
+  `mv.screen.pareto` and reported a claim the function never made.
+- A `produces` claim on a call that returns a *new* dataset — one row per
+  ordering, per slab, per fragment — was checked against the input object, where
+  it correctly was not present.
+
+### A contract slot can now say which object it lands on
+
+The one place the omicverse contract vocabulary needed extending, and it is a
+gap rather than a disagreement. On a library where every operation takes one
+object, naming a container is enough. matverse has operations that take two:
+
+```python
+produces={"sites.obs": ["coordination_number"]}      # mv.env.coordination
+```
+
+`mv.mag.ground_state` is the case that forces it. It writes four columns onto
+the parent and a fifth back onto the orderings, and an unqualified `obs` said
+all five arrived together. `mv.env.coordination`, `mv.calc.forces` and
+`mv.surf.wulff` had the same problem — and in every one of them **the prose note
+already said which object**, while the machine-readable claim did not.
+`mv.calc.forces` went further and said the fields "cannot name" those slots
+"because they describe one object only", which is exactly the limitation now
+lifted.
+
+A qualifier is checked against the signature at import: one that names no
+parameter resolves to no object and could never be probed, so it is refused
+rather than allowed to become an unverifiable claim.
+
+### A claim can now be undecided rather than failed
+
+`mv.elec.transport` needs BoltzTraP2, which does not build here. Counting its
+three claims as failures would report the environment as a defect in the
+registry, and counting them as passes would be a lie. They are reported
+separately and excluded from the rate's denominator.
+
 ## v0.1.16
 
 ### Molecules were never out of scope

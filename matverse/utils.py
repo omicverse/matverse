@@ -164,12 +164,15 @@ def _internal_unit(column: str) -> str | None:
     description="Report which materials an operation has not filled yet, so a "
                 "screen killed by a walltime limit continues rather than "
                 "restarts.",
-    requires={"obs": ["{column}"]},
     examples=["todo = mv.utils.resume(md, 'energy_mace-mpa')"],
     related=["mv.calc.energy", "mv.utils.checkpoint"],
     notes="Returns a boolean mask rather than mutating anything, because what "
           "to do about a half-finished column is the caller's decision — "
-          "recompute the failures, or skip them and record how many.",
+          "recompute the failures, or skip them and record how many.\n\n"
+          "Claims no requires. It used to claim obs['{column}'], and probing "
+          "deleted it: an absent column means every row is still to do, which "
+          "is the answer a resume should give on the first run rather than an "
+          "error.",
 )
 def resume(md: AnnData, column: str) -> np.ndarray:
     """Which rows still need computing: absent column, or NaN in it."""
@@ -548,7 +551,6 @@ def submit(md: AnnData, script_path, dry_run: bool = False,
     category="utils",
     description="Ask the scheduler what happened to the jobs this object "
                 "submitted.",
-    requires={"uns": ["submissions"]},
     produces={"uns": ["submissions"]},
     prerequisites=["mv.utils.submit"],
     examples=["mv.utils.job_status(md)"],
@@ -556,7 +558,10 @@ def submit(md: AnnData, script_path, dry_run: bool = False,
     notes="Reads ``squeue`` for what is still queued or running and falls back "
           "to ``sacct`` for what has finished, because squeue forgets a job "
           "shortly after it ends — which is the usual reason a hand-rolled "
-          "poll reports a completed job as missing.",
+          "poll reports a completed job as missing.\n\n"
+          "Claims no requires. It used to claim uns['submissions'], and probing "
+          "deleted it: asking about an object that submitted nothing returns a "
+          "count of zero, which is an answer rather than an error.",
 )
 def job_status(md: AnnData) -> dict:
     """Scheduler state for every submitted job. Returns a summary."""
