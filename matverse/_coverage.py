@@ -449,6 +449,34 @@ INTERNAL_MARKERS = (
 #: — but they are not "nobody got to it", and the distinction is the difference
 #: between a backlog and a wish.
 BLOCKED: Dict[str, str] = {
+    "analysis.bond_dissociation":
+        "needs openbabel, and specifically its pybel bindings, which "
+        "pymatgen imports as `from openbabel import openbabel, pybel`. "
+        "openbabel-wheel 3.1.1.23 does now ship a cp312 manylinux wheel - "
+        "the older note here said there was none, which was out of date - "
+        "but installing it is not enough: several format plugins need "
+        "libXrender.so.1, absent on this system, and pybel builds its "
+        "format table by parsing GetSupportedInputFormat() with no "
+        "tolerance for a plugin that failed to load, so it dies on a "
+        "ValueError and takes BabelMolAdaptor with it. Verified: openbabel "
+        "imports, pybel does not.",
+    "analysis.fragmenter":
+        "needs openbabel's pybel bindings - see analysis.bond_dissociation "
+        "for what actually fails and why installing the wheel does not fix "
+        "it",
+    "analysis.functional_groups":
+        "needs openbabel's pybel bindings - see analysis.bond_dissociation. "
+        "FunctionalGroupExtractor itself is pure structure analysis and "
+        "would be the cheapest of the three to wrap if pybel ever imports "
+        "here",
+    "analysis.defects.finder":
+        "DefectSiteFinder needs dscribe, and dscribe needs numba - not "
+        "directly, but through `sparse`, which it imports at module scope. "
+        "Verified rather than assumed: with dscribe 2.1.2 on the path, "
+        "`from dscribe.descriptors import SOAP` raises ModuleNotFoundError: "
+        "No module named 'numba'. The numba version pin is what makes this "
+        "expensive; installing it for one module would move the whole "
+        "environment.",
     "analysis.chemenv.coordination_environments.voronoi":
         "the Voronoi construction ChemEnv runs before it fits a "
         "polyhedron. Confirmed by runtime check to be loaded and executed "
@@ -477,10 +505,6 @@ BLOCKED: Dict[str, str] = {
     "analysis.defects.corrections.kumagai":
         "needs site potentials from a real DFT run",
     "analysis.defects.ccd": "needs DFT potential energy surfaces",
-    "analysis.defects.finder":
-        "DefectSiteFinder needs dscribe, which resolves to numba 0.53 here - a "
-        "2021 release predating both numpy 2 and Python 3.12, so installing it "
-        "would break the environment for one module",
     "analysis.defects.recombination": "needs DFT electron-phonon coupling",
     "analysis.xps": "needs a projected density of states, not a total one",
     "analysis.excitation": "needs a DFT excited-state calculation",
@@ -494,10 +518,6 @@ BLOCKED: Dict[str, str] = {
     "electronic_structure.boltztrap2":
         "BoltzTraP2 links against netCDF and does not build here; "
         "mv.elec.transport already reports the install command",
-    "analysis.bond_dissociation": "needs openbabel, a C++ library rather "
-                                  "than a wheel",
-    "analysis.fragmenter": "needs openbabel",
-    "analysis.functional_groups": "needs openbabel",
     "analysis.quasirrho": "needs molecular vibrational frequencies from a "
                           "quantum-chemistry run",
 }
