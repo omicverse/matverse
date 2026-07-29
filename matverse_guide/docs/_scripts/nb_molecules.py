@@ -321,4 +321,40 @@ or triple bond reads as short by design: C=C at 1.34 Å against a tabulated 1.54
 is a deviation of 0.2. Read `n_unusual_bonds` as "worth looking at" rather than
 "wrong".
 ```"""),
+
+    ("markdown", """\
+## Two questions that both mean "the same molecule"
+
+`mv.mol.match` groups molecules by superposing them — Kabsch for the rotation,
+Hungarian for the atom labels. That answers "is this the same *shape*".
+
+A **conformer** is the case where the two questions come apart. Rotate ethanol's
+hydroxyl hydrogen about the C–O bond: every bond length is preserved and the
+geometry moves."""),
+
+    ("code", """\
+conformer = ethanol.copy()
+conformer.rotate_sites(
+    indices=[8], theta=1.2,
+    axis=np.array(ethanol[2].coords) - np.array(ethanol[1].coords),
+    anchor=ethanol[2].coords)
+
+pair = mv.mol.from_molecules([ethanol, conformer])
+mv.pp.describe(pair)
+
+for how in ("geometry", "topology"):
+    mv.mol.match(pair, method=how)
+    print(how, "->", pair.uns["molecule_match"]["n_unique"], "unique")"""),
+
+    ("markdown", """\
+**Geometry says two molecules. Topology says one.**
+
+Neither is wrong. `method='geometry'` superposes and measures RMSD — this
+conformer sits 0.29 Å away, outside the default tolerance of 0.1.
+`method='topology'` compares the bond graph and ignores shape entirely.
+
+Which you want depends on whether conformers are the thing you are
+deduplicating or the thing you are studying. That is why it is a `dispatch`
+rather than a default: the registry entry names both routes, so an agent
+choosing between them can see that the choice exists."""),
 ]

@@ -79,6 +79,8 @@ WRAPPED: Dict[str, List[str]] = {
     "symmetry.site_symmetries": ["mv.pp.symmetry"],
     "core.molecule_matcher": ["mv.mol.match"],
     "analysis.molecule_matcher": ["mv.mol.match"],
+    "core.molecule_structure_comparator": ["mv.mol.match"],
+    "analysis.molecule_structure_comparator": ["mv.mol.match"],
     "analysis.interfaces.zsl": ["mv.iface.match"],
     "symmetry.kpath": ["mv.elec.kpath"],
     "core.tensors": ["mv.prop.piezoelectric"],
@@ -210,6 +212,8 @@ EQUIVALENT = [
     frozenset({"entries.entry_tools", "analysis.compatibility.entry_tools"}),
     frozenset({"analysis.molecule_matcher", "core.molecule_matcher"}),
     frozenset({"analysis.energy_models", "core.energy_models"}),
+    frozenset({"analysis.molecule_structure_comparator",
+               "core.molecule_structure_comparator"}),
 ]
 
 
@@ -428,7 +432,6 @@ INTERNAL = {
     "analysis.defects.constants",
     "analysis.chemenv.utils.chemenv_config",
     "analysis.chemenv.utils.chemenv_errors",
-    "analysis.molecule_structure_comparator",
     "entries.entry_tools",
     "io.vasp.help",
     "io.common",

@@ -50,6 +50,17 @@ BOND_STRATEGIES = {
 }
 
 
+def _topology_comparator():
+    """pymatgen's bond-graph molecule comparator, wherever it lives."""
+    try:
+        from pymatgen.core.molecule_structure_comparator import (
+            MoleculeStructureComparator)
+    except ImportError:
+        from pymatgen.analysis.molecule_structure_comparator import (
+            MoleculeStructureComparator)
+    return MoleculeStructureComparator()
+
+
 def _order_matcher():
     """pymatgen's Hungarian order matcher, wherever this pymatgen keeps it.
 
@@ -458,6 +469,9 @@ def fragments(md: AnnData, source: str = "input", depth: int = 1,
                 "translation and atom relabelling.",
     requires={"structures": ["{source}"]},
     produces={"obs": ["molecule_group", "is_duplicate", "match_rmsd"]},
+    dispatch="method= chooses what identity means: 'geometry' superposes and "
+             "compares shape, 'topology' compares the bond graph and ignores "
+             "shape entirely",
     examples=["mv.mol.match(md)", "mv.mol.match(md, tolerance=0.2)"],
     related=["mv.pp.dedup", "mv.mol.descriptors"],
     notes="The molecular counterpart of mv.pp.dedup, and it exists for the "
@@ -478,10 +492,23 @@ def fragments(md: AnnData, source: str = "input", depth: int = 1,
           "guessed. It is 0 for the representative itself.\n\n"
           "pymatgen's default MoleculeMatcher needs openbabel, which is a C++ "
           "library rather than a wheel; the ordering matchers used here need "
-          "nothing beyond numpy and scipy.")
-def match(md: AnnData, source: str = "input", tolerance: float = 0.1) -> None:
+          "nothing beyond numpy and scipy.\n\n"
+          "**method='topology' asks a different question.** It compares the "
+          "bond graph and ignores geometry, so a torsional conformer matches: "
+          "rotating ethanol's hydroxyl hydrogen about the C-O bond leaves "
+          "every bond intact and moves the geometry by an RMSD of 0.29, which "
+          "the default route calls a different molecule and this route calls "
+          "the same one. Which you want depends on whether conformers are the "
+          "thing you are deduplicating or the thing you are studying.")
+def match(md: AnnData, source: str = "input", tolerance: float = 0.1,
+          method: str = "geometry") -> None:
     """Group identical molecules. Deposits; returns ``None``."""
-    HungarianOrderMatcher = _order_matcher()
+    if method not in ("geometry", "topology"):
+        raise ValueError(
+            f"unknown method {method!r}; use 'geometry' for a rigid-body "
+            f"superposition or 'topology' for a bond-graph comparison")
+    HungarianOrderMatcher = _order_matcher() if method == "geometry" else None
+    comparator = _topology_comparator() if method == "topology" else None
 
     S, periodic = _molecules(md, source, "mv.mol.match")
 
@@ -499,10 +526,16 @@ def match(md: AnnData, source: str = "input", tolerance: float = 0.1) -> None:
             if len(reference) != len(molecule):
                 continue
             try:
-                # Kabsch superposition with a Hungarian assignment over the
-                # atom labels: invariant to rotation, translation and the
-                # order the atoms happen to be listed in.
-                _, rmsd = HungarianOrderMatcher(reference).fit(molecule)
+                if method == "topology":
+                    # Same bonds, whatever the geometry. A torsional conformer
+                    # matches here and does not match on geometry.
+                    rmsd = 0.0 if comparator.are_equal(reference, molecule) \
+                        else float("inf")
+                else:
+                    # Kabsch superposition with a Hungarian assignment over the
+                    # atom labels: invariant to rotation, translation and the
+                    # order the atoms happen to be listed in.
+                    _, rmsd = HungarianOrderMatcher(reference).fit(molecule)
             except Exception:
                 continue
             if float(rmsd) <= tolerance:
@@ -522,12 +555,15 @@ def match(md: AnnData, source: str = "input", tolerance: float = 0.1) -> None:
         "tolerance": float(tolerance), "source": source,
         "n_unique": int(sum(len(v) for v in representatives.values())),
         "n_duplicates": int(duplicate.sum()),
-        "matcher": "Kabsch superposition with Hungarian atom assignment",
+        "method": str(method),
+        "matcher": ("Kabsch superposition with Hungarian atom assignment"
+                    if method == "geometry"
+                    else "bond-graph comparison, geometry ignored"),
         "note": "two molecules match when the best rigid-body superposition "
                 "over all atom assignments leaves an RMSD within tolerance, "
                 "in angstrom",
     }
-    record(md, "mol.match", source=source, tolerance=tolerance)
+    record(md, "mol.match", source=source, tolerance=tolerance, method=method)
 
 
 __all__ = ["BOND_STRATEGIES", "from_molecules", "point_group", "bonds",

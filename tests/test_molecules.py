@@ -410,3 +410,67 @@ class TestBondLengths:
         mv.pp.describe(md)
         mv.mol.bond_lengths(md)
         assert "n_pairs_without_a_table_entry" in md.uns["bond_lengths"]
+
+
+class TestMatchDispatch:
+    """Two questions that both mean "the same molecule"."""
+
+    @staticmethod
+    def _ethanol():
+        from pymatgen.core import Molecule
+        return Molecule(
+            ["C", "C", "O", "H", "H", "H", "H", "H", "H"],
+            [[-1.2, 0.2, 0], [0.0, -0.6, 0], [1.1, 0.3, 0],
+             [-1.2, 0.9, 0.9], [-1.2, 0.9, -0.9], [-2.1, -0.4, 0],
+             [0.0, -1.2, 0.9], [0.0, -1.2, -0.9], [1.9, -0.2, 0]])
+
+    @classmethod
+    def _conformer(cls):
+        """A real torsion: the hydroxyl hydrogen rotated about the C-O bond.
+        Every bond length is preserved and the geometry moves."""
+        import numpy as np
+        base = cls._ethanol()
+        out = base.copy()
+        out.rotate_sites(indices=[8], theta=1.2,
+                         axis=np.array(base[2].coords) - np.array(base[1].coords),
+                         anchor=base[2].coords)
+        return out
+
+    def test_the_conformer_really_preserves_its_bonds(self):
+        base, conf = self._ethanol(), self._conformer()
+        assert base.get_distance(2, 8) == pytest.approx(conf.get_distance(2, 8))
+
+    def test_geometry_calls_a_conformer_a_different_molecule(self):
+        md = mv.mol.from_molecules([self._ethanol(), self._conformer()])
+        mv.pp.describe(md)
+        mv.mol.match(md, method="geometry")
+        assert md.uns["molecule_match"]["n_unique"] == 2
+
+    def test_topology_calls_it_the_same_one(self):
+        md = mv.mol.from_molecules([self._ethanol(), self._conformer()])
+        mv.pp.describe(md)
+        mv.mol.match(md, method="topology")
+        assert md.uns["molecule_match"]["n_unique"] == 1
+        assert list(md.obs["is_duplicate"]) == [False, True]
+
+    def test_topology_still_separates_different_molecules(self):
+        from pymatgen.core import Molecule
+        water = Molecule(["O", "H", "H"],
+                         [[0, 0, 0], [0.76, 0.59, 0], [-0.76, 0.59, 0]])
+        md = mv.mol.from_molecules([self._ethanol(), water])
+        mv.pp.describe(md)
+        mv.mol.match(md, method="topology")
+        assert md.uns["molecule_match"]["n_unique"] == 2
+
+    def test_the_route_is_recorded(self):
+        md = mv.mol.from_molecules([self._ethanol()])
+        mv.pp.describe(md)
+        mv.mol.match(md, method="topology")
+        assert md.uns["molecule_match"]["method"] == "topology"
+        assert "bond-graph" in md.uns["molecule_match"]["matcher"]
+
+    def test_an_unknown_method_is_refused(self):
+        md = mv.mol.from_molecules([self._ethanol()])
+        mv.pp.describe(md)
+        with pytest.raises(ValueError, match="unknown method"):
+            mv.mol.match(md, method="vibes")

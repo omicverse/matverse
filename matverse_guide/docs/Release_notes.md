@@ -1,5 +1,31 @@
 # Release notes
 
+## v0.1.39
+
+**102 of 136 in-scope pymatgen modules, 75.0%.** 14 open gaps, 20 blocked.
+
+### `mv.mol.match` gains a second question
+
+Grouping molecules by superposition answers "is this the same *shape*". A
+**conformer** is where that comes apart from "is this the same *molecule*".
+
+Rotate ethanol's hydroxyl hydrogen about the C–O bond. Every bond length is
+preserved and the geometry moves by an RMSD of 0.29 Å — outside the default
+tolerance. `method='geometry'` reports two molecules; `method='topology'`
+compares the bond graph, ignores shape, and reports one.
+
+Neither is wrong, and which you want depends on whether conformers are the thing
+you are deduplicating or the thing you are studying. It is a **dispatch** rather
+than a default so the registry entry names both routes and an agent choosing
+between them can see the choice exists — `dispatch` is the least-filled of the
+seven contract slots, and this is what it is for.
+
+Writing the test for it took two attempts. The first "conformer" rotated three
+hydrogens about an arbitrary axis and **broke the C–H bonds**, so the topology
+comparison correctly said "different molecule" and the test asserted the wrong
+thing. A conformer has to preserve every bond, and checking that it does is now
+the first assertion in the class.
+
 ## v0.1.38
 
 **101 of 136 in-scope pymatgen modules, 74.3%.** 15 open gaps, 20 blocked.
