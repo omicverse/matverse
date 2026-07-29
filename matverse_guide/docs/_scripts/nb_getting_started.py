@@ -336,6 +336,49 @@ ax.set_xlabel("volume scale factor $V/V_0$")
 ax.set_ylabel("energy (eV/atom)")
 ax.set_title("energy-volume curves")"""),
 
+    ("markdown", """\
+## Off the zero-kelvin hull
+
+A hull at 0 K is a hull at 0 K. `mv.prop.quasiharmonic` reuses that same
+energy-volume curve to get to finite temperature: the Debye model supplies a
+vibrational free energy at each volume, and the Gibbs free energy is minimised
+over volume at every temperature. The cell expands because the minimum
+moves."""),
+
+    ("code", """\
+mv.prop.quasiharmonic(metals, level="emt", source="relaxed_emt",
+                      t_max=900, poisson=0.34)
+
+metals.obs[["name", "thermal_expansion_qha_emt", "gruneisen_emt",
+            "debye_temperature_qha_emt"]].round(6)"""),
+
+    ("markdown", """\
+| volumetric expansion, /K | matverse | experiment |
+|---|---|---|
+| Cu | 4.5e-5 | 5.0e-5 |
+| Ag | 5.1e-5 | 5.7e-5 |
+| Al | 4.9e-5 | 6.9e-5 |
+
+```{warning}
+That column is **not** what pymatgen's `QuasiharmonicDebyeApprox` reports for
+the optimum volume. Its Gruneisen parameter is right — 1.91 for copper against
+a measured 1.96 — but the volume minimum it finds moves twelve times too
+little, giving 4.3e-6 /K for copper.
+
+`mv.prop.quasiharmonic` computes the expansion from the thermodynamic identity
+instead:
+
+$$\\alpha_V = \\frac{\\gamma\\, C_V}{B\\, V}$$
+
+with the model's own Gruneisen parameter, the bulk modulus fitted from the same
+E(V) points, and the Debye heat capacity. That is the version that agrees with
+experiment.
+
+The disagreement was findable because `B` from `mv.prop.eos` and `gamma` from
+the Debye model sit on one object under names that say what they are — the same
+reason the relaxation bug two sections up was findable.
+```"""),
+
     ("code", """\
 ax = mv.pl.spectra(metals, "phonon_dos", levels=("emt",), rows=[0, 1, 4],
                    offset=0.3)

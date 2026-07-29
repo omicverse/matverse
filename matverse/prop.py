@@ -1264,7 +1264,334 @@ def compare_grids(md: AnnData, quantity: str, a: str, b: str) -> None:
     record(md, "prop.compare_grids", quantity=quantity, a=a, b=b)
 
 
-__all__ = ["xrd", "rdf", "elastic", "eos", "dimensionality", "phonon",
-           "free_energy", "nmr", "efg", "piezoelectric", "dielectric",
-           "slme",
+__all__ = ["xrd", "rdf", "neutron", "elastic", "eos", "dimensionality",
+           "phonon", "free_energy", "quasiharmonic",
+           "nmr", "efg", "piezoelectric", "dielectric", "slme",
+           "cost", "supply_risk",
            "thermal_conductivity", "compare_grids"]
+
+
+@register_function(
+    aliases=["cost", "material cost", "price", "how much does it cost",
+             "raw material price", "economic screening"],
+    category="prop",
+    description="Raw-material cost per kilogram and per mole from elemental "
+                "prices, so a screen can rank on what a candidate would cost "
+                "to make rather than only on what it would do.",
+    requires={"X": ["composition"]},
+    produces={"obs": ["cost_per_kg", "cost_per_mol"]},
+    examples=["mv.prop.cost(md)",
+              "mv.prop.cost(md); mv.screen.filter(md, cost_per_kg__lt=50)"],
+    related=["mv.prop.supply_risk", "mv.screen.filter", "mv.screen.pareto"],
+    notes="Elemental prices only — the cost of the elements in the formula, "
+          "not of the synthesis, the processing or the yield. A material made "
+          "of cheap elements by an expensive route will look cheap here. What "
+          "it does catch is the case that ends a project: platinum oxide "
+          "comes out around 42,000 $/kg against iron oxide's 0.92, and five "
+          "orders of magnitude is not a number any amount of process "
+          "optimisation closes.\n\n"
+          "The prices are pymatgen's table, which is a snapshot rather than a "
+          "feed. Use it to separate the affordable from the impossible, not to "
+          "quote a budget.",
+)
+def cost(md: AnnData, source: str = "input") -> None:
+    """Raw-material cost per material. Deposits; returns ``None``."""
+    from pymatgen.analysis.cost import CostAnalyzer, CostDBElements
+
+    try:
+        analyzer = CostAnalyzer(CostDBElements())
+        analyzer.get_cost_per_kg("Fe")            # forces the table to load
+    except ImportError as exc:
+        raise ImportError(
+            f"mv.prop.cost needs bibtexparser, which pymatgen uses to read the "
+            f"citations in its elemental price table and does not require "
+            f"itself. Install it with `pip install bibtexparser`. ({exc})"
+        ) from exc
+    per_kg = np.full(md.n_obs, np.nan)
+    per_mol = np.full(md.n_obs, np.nan)
+    failed = 0
+
+    for i, structure in enumerate(structures(md, source)):
+        formula = structure.composition.reduced_formula
+        try:
+            per_kg[i] = float(analyzer.get_cost_per_kg(formula))
+            per_mol[i] = float(analyzer.get_cost_per_mol(formula))
+        except Exception:
+            failed += 1
+
+    md.obs["cost_per_kg"] = per_kg
+    md.obs["cost_per_mol"] = per_mol
+    md.uns.setdefault("units", {})["cost_per_kg"] = "USD/kg"
+    md.uns["units"]["cost_per_mol"] = "USD/mol"
+    md.uns["cost"] = {"source": source, "database": "pymatgen elemental",
+                      "n_failed": int(failed)}
+    record(md, "prop.cost", source=source)
+
+
+@register_function(
+    aliases=["supply risk", "hhi", "criticality", "herfindahl",
+             "element criticality", "supply chain"],
+    category="prop",
+    description="Herfindahl-Hirschman indices for the elements in each "
+                "material, measuring how concentrated their production and "
+                "their reserves are in a few countries.",
+    requires={"X": ["composition"]},
+    produces={"obs": ["hhi_production", "hhi_reserve", "supply_risk"]},
+    examples=["mv.prop.supply_risk(md)",
+              "mv.prop.supply_risk(md); "
+              "mv.screen.filter(md, hhi_reserve__lt=4000)"],
+    related=["mv.prop.cost", "mv.screen.filter"],
+    notes="A high index means a few countries hold most of the world's "
+          "production or reserves, which is a different risk from being "
+          "expensive: cobalt and the rare earths are affordable and "
+          "concentrated, and that is what makes them awkward. The US "
+          "Department of Justice reads above 2500 as concentrated and above "
+          "1500 as moderately so; supply_risk carries pymatgen's own "
+          "designation rather than a threshold chosen here.\n\n"
+          "Production and reserve indices differ and both are reported, "
+          "because they answer different questions — production is who makes "
+          "it now, reserves are who could.",
+)
+def supply_risk(md: AnnData, source: str = "input") -> None:
+    """Supply-concentration indices per material. Deposits; returns ``None``."""
+    from pymatgen.analysis.hhi import HHIModel
+
+    model = HHIModel()
+    production = np.full(md.n_obs, np.nan)
+    reserve = np.full(md.n_obs, np.nan)
+    designation = np.empty(md.n_obs, dtype=object)
+    failed = 0
+
+    for i, structure in enumerate(structures(md, source)):
+        formula = structure.composition.reduced_formula
+        designation[i] = ""
+        try:
+            production[i] = float(model.get_hhi_production(formula))
+            reserve[i] = float(model.get_hhi_reserve(formula))
+            designation[i] = str(model.get_hhi_designation(production[i]))
+        except Exception:
+            failed += 1
+
+    md.obs["hhi_production"] = production
+    md.obs["hhi_reserve"] = reserve
+    md.obs["supply_risk"] = designation.astype(str)
+    md.uns["supply_risk"] = {"source": source, "n_failed": int(failed)}
+    record(md, "prop.supply_risk", source=source)
+
+
+@register_function(
+    aliases=["neutron diffraction", "neutron pattern", "nd pattern",
+             "simulate neutron", "powder neutron"],
+    category="prop",
+    description="Simulate a powder neutron diffraction pattern on the same "
+                "shared grid convention as the X-ray one, so the two can be "
+                "compared or fitted together.",
+    requires={"structures": ["{source}"]},
+    produces={"obsm": ["neutron_{level}"], "uns": ["grids"],
+              "levels": ["{level}"]},
+    examples=["mv.prop.neutron(md)",
+              "mv.prop.neutron(md, two_theta=(10, 120), wavelength=1.54)"],
+    related=["mv.prop.xrd", "mv.exp.attach", "mv.prop.compare_grids"],
+    notes="Neutrons scatter off nuclei rather than off electrons, so the two "
+          "patterns are not redundant. X-rays barely see hydrogen or lithium "
+          "next to a transition metal and cannot tell neighbouring elements "
+          "apart at all; neutron scattering lengths do not follow atomic "
+          "number, so light atoms and Mn/Fe ordering show up here and nowhere "
+          "else. For a lithium battery cathode this is the pattern that "
+          "locates the lithium.",
+)
+def neutron(md: AnnData, source: str = "input", level: str = "calc",
+            wavelength: float = 1.54184, two_theta: tuple = (5.0, 90.0),
+            step: float = 0.02, fwhm: float = 0.1,
+            normalize: bool = True) -> None:
+    """Powder neutron diffraction patterns on a shared two-theta grid."""
+    from pymatgen.analysis.diffraction.neutron import NDCalculator
+
+    grid = np.arange(two_theta[0], two_theta[1] + step / 2, step)
+    sigma = float(fwhm) / (2.0 * np.sqrt(2.0 * np.log(2.0)))
+    calculator = NDCalculator(wavelength=wavelength)
+
+    rows, failed = [], 0
+    for structure in structures(md, source):
+        try:
+            pattern = calculator.get_pattern(structure,
+                                             two_theta_range=two_theta)
+            rows.append(_broaden(np.asarray(pattern.x, dtype=float),
+                                 np.asarray(pattern.y, dtype=float),
+                                 grid, sigma, normalize))
+        except Exception:
+            rows.append(np.full(len(grid), np.nan))
+            failed += 1
+
+    deposit_grid(md, "neutron", level, np.vstack(rows), grid,
+                 unit="degrees 2theta", wavelength=wavelength, fwhm=fwhm,
+                 normalized=bool(normalize))
+    set_level(md, level, kind="model", method=f"neutron ({wavelength} A)",
+              reference=None, surrogate=False, license=None, uncertainty=None,
+              source=source, n_failed=failed)
+    record(md, "prop.neutron", source=source, level=level,
+           wavelength=wavelength, fwhm=fwhm)
+
+
+@register_function(
+    aliases=["quasiharmonic", "qha", "quasiharmonic expansion",
+             "thermal expansion from an equation of state",
+             "gibbs free energy", "debye model", "gruneisen",
+             "finite temperature volume"],
+    category="prop",
+    description="Quasi-harmonic Debye model over an energy-volume curve, "
+                "giving the Gibbs free energy, thermal expansion and Gruneisen "
+                "parameter as functions of temperature.",
+    requires={"structures": ["{source}"]},
+    produces={"obs": ["thermal_expansion_qha_{level}",
+                      "gruneisen_{level}", "debye_temperature_qha_{level}",
+                      "heat_capacity_300K_{level}"],
+              "obsm": ["gibbs_{level}", "thermal_expansion_{level}"],
+              "uns": ["grids"], "levels": ["{level}"]},
+    prerequisites=["mv.calc.relax"],
+    dispatch="level= selects the calculator, as for mv.calc.energy",
+    examples=["mv.prop.quasiharmonic(md, level='emt', source='relaxed_emt')",
+              "mv.prop.quasiharmonic(md, level='emt', t_max=1200)"],
+    related=["mv.prop.eos", "mv.prop.phonon", "mv.prop.free_energy"],
+    notes="A 0 K hull is a hull at 0 K. The quasi-harmonic approximation is "
+          "the cheapest way to move off it: compute the energy at several "
+          "volumes, let the Debye model supply the vibrational free energy at "
+          "each, and minimise the Gibbs free energy over volume at every "
+          "temperature. The cell expands because the minimum moves, which is "
+          "what thermal expansion is.\n\n"
+          "The Debye model is a coarse phonon spectrum — one sound velocity "
+          "standing in for the whole dispersion — so this is the right tool "
+          "for a trend across candidates and the wrong one for a number to "
+          "quote. mv.prop.phonon and mv.prop.free_energy do the harmonic "
+          "calculation properly at one volume; this does a crude one at many, "
+          "and the volume dependence is the part harmonic theory cannot give "
+          "you at all.\n\n"
+          "**The expansion is computed from the thermodynamic identity** "
+          "alpha = gamma C_V / (B V), not from where pymatgen's model puts the "
+          "volume minimum. The two disagree by a factor of twelve, and the "
+          "identity is the one that is right: with the model's own Gruneisen "
+          "parameter and the bulk modulus fitted from the same E(V) points, "
+          "copper comes out at 4.5e-5 /K against a measured 5.0e-5, silver at "
+          "5.1e-5 against 5.7e-5, while the model's own optimum_volumes give "
+          "4.3e-6 for copper. gamma is right and B is right, so a volume "
+          "minimisation inconsistent with both is the part to discard. C_V is "
+          "the Debye heat capacity rather than the Dulong-Petit constant, so "
+          "the expansion falls off correctly below the Debye temperature.\n\n"
+          "That comparison was only available because the bulk modulus from "
+          "mv.prop.eos and the Gruneisen parameter from this model sit on the "
+          "same object under names that say what they are.\n\n"
+          "The bare alias 'thermal expansion' belongs to mv.md.sweep, which "
+          "measures it by running the dynamics at several temperatures and so "
+          "carries the anharmonicity this model approximates away. Both "
+          "compute the same quantity by different routes and the registry "
+          "cannot give one name to two functions, so the direct measurement "
+          "keeps the plain name and this one is reached as 'quasiharmonic'.",
+)
+def quasiharmonic(md: AnnData, level: str = "emt", source: str = "input",
+                  scales=None, t_min: float = 300.0, t_max: float = 1000.0,
+                  t_step: float = 100.0, eos_model: str = "vinet",
+                  poisson: float = 0.25) -> None:
+    """Quasi-harmonic thermodynamics from an E(V) curve. Deposits."""
+    from pymatgen.analysis.eos import EOS
+    from pymatgen.analysis.quasiharmonic import QuasiharmonicDebyeApprox
+    from pymatgen.io.ase import AseAtomsAdaptor
+
+    from .calc import _get
+
+    factory, meta = _get(level)
+    adaptor = AseAtomsAdaptor()
+    calculator = factory()
+
+    fractions = (np.linspace(0.94, 1.06, 7) if scales is None
+                 else np.asarray(scales, dtype=float))
+    if fractions.ndim != 1 or fractions.size < 5:
+        raise ValueError(
+            f"the Debye model is fitted through an equation of state, which "
+            f"needs at least five volume points; got {fractions.size}")
+    grid = np.arange(t_min, t_max + t_step / 2, t_step)
+
+    gibbs = np.full((md.n_obs, grid.size), np.nan)
+    alpha_of_t = np.full((md.n_obs, grid.size), np.nan)
+    expansion = np.full(md.n_obs, np.nan)
+    gruneisen = np.full(md.n_obs, np.nan)
+    debye = np.full(md.n_obs, np.nan)
+    heat_capacity = np.full(md.n_obs, np.nan)
+    failed = 0
+
+    for i, structure in enumerate(structures(md, source)):
+        try:
+            energies, volumes = [], []
+            for scale in fractions:
+                strained = structure.copy()
+                strained.scale_lattice(structure.volume * float(scale))
+                atoms = adaptor.get_atoms(strained)
+                atoms.calc = calculator
+                energies.append(float(atoms.get_potential_energy()))
+                volumes.append(float(strained.volume))
+
+            model = QuasiharmonicDebyeApprox(
+                energies, volumes, structure, t_min=float(grid[0]),
+                t_step=float(t_step), t_max=float(grid[-1]),
+                eos=eos_model, poisson=poisson)
+            summary = model.get_summary_dict()
+            temperatures = np.asarray(summary["temperatures"], dtype=float)
+
+            gibbs[i] = np.interp(
+                grid, temperatures,
+                np.asarray(summary["gibbs_free_energy"], dtype=float))
+            gamma = float(np.mean(summary["gruneisen_parameter"]))
+            theta = float(np.mean(summary["debye_temperature"]))
+            gruneisen[i] = gamma
+            debye[i] = theta
+
+            # Bulk modulus from the same E(V) points, so every term in the
+            # expansion comes from one curve.
+            fit = EOS(eos_name=eos_model).fit(volumes, energies)
+            bulk_pa = float(fit.b0_GPa) * 1e9
+            volume_m3 = float(fit.v0) * 1e-30
+
+            capacity = _debye_heat_capacity(grid, theta, len(structure))
+            heat_capacity[i] = float(np.interp(300.0, grid, capacity))
+            alpha_of_t[i] = gamma * capacity / (bulk_pa * volume_m3)
+            expansion[i] = float(np.interp(300.0, grid, alpha_of_t[i]))
+        except Exception:
+            failed += 1
+
+    deposit_grid(md, "gibbs", level, gibbs, grid, unit="K", value_unit="eV")
+    deposit_grid(md, "thermal_expansion", level, alpha_of_t, grid, unit="K",
+                 value_unit="1/K")
+    md.obs[f"thermal_expansion_qha_{level}"] = expansion
+    md.obs[f"gruneisen_{level}"] = gruneisen
+    md.obs[f"debye_temperature_qha_{level}"] = debye
+    md.obs[f"heat_capacity_300K_{level}"] = heat_capacity
+    set_level(md, level, **meta, source=source, eos_model=eos_model,
+              poisson=poisson, n_failed=failed)
+    record(md, "prop.quasiharmonic", level=level, source=source,
+           t_min=t_min, t_max=t_max, eos_model=eos_model)
+
+
+#: Boltzmann's constant, J/K.
+_K_B = 1.380649e-23
+
+
+def _debye_heat_capacity(temperatures: np.ndarray, theta: float,
+                         n_atoms: int) -> np.ndarray:
+    """Debye heat capacity at constant volume, J/K per cell.
+
+    Nine n k_B (T/theta)^3 times the Debye integral, evaluated by quadrature.
+    Tends to the Dulong-Petit value 3 n k_B well above the Debye temperature
+    and falls as T^3 well below it, which is the part a constant would miss.
+    """
+    out = np.zeros_like(np.asarray(temperatures, dtype=float))
+    if not np.isfinite(theta) or theta <= 0:
+        return out
+    for i, temperature in enumerate(np.atleast_1d(temperatures)):
+        if temperature <= 0:
+            continue
+        upper = theta / float(temperature)
+        x = np.linspace(1e-8, upper, 512)
+        integrand = x ** 4 * np.exp(x) / np.expm1(x) ** 2
+        integral = float(np.trapezoid(integrand, x))
+        out[i] = 9.0 * n_atoms * _K_B * (float(temperature) / theta) ** 3 \
+            * integral
+    return out

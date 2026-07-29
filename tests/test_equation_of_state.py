@@ -165,3 +165,186 @@ class TestTwoRoutesAgree:
                               fitted.obs["bulk_modulus_derivative_emt"]))
         assert by_formula["Al"] < 0.7 * EXPERIMENT["Al"]
         assert derivative["Al"] < 2.5
+
+
+class TestQuasiharmonic:
+    """Thermal expansion, and the identity that had to replace the model.
+
+    pymatgen's QuasiharmonicDebyeApprox reports a Gruneisen parameter that
+    matches experiment and a set of optimum volumes that do not: the volume
+    minimum it finds moves twelve times too little with temperature. The
+    Gruneisen parameter is right and the bulk modulus is right, so the
+    thermodynamic identity built from them is the one to trust.
+    """
+
+    #: Volumetric thermal expansion at 300 K, /K, CRC Handbook. Aluminium is
+    #: listed but checked loosely: EMT gets its Gruneisen parameter wrong by a
+    #: factor of two, and every quantity built from it inherits that.
+    MEASURED_ALPHA = {"Cu": 5.0e-5, "Ag": 5.7e-5}
+    MEASURED_ALPHA_AL = 6.9e-5
+    #: Gruneisen parameters, room temperature.
+    MEASURED_GAMMA = {"Cu": 1.96, "Ag": 2.4}
+
+    @pytest.fixture(scope="module")
+    def qha(self):
+        md = mv.datasets.metals(["Cu", "Ag", "Al"])
+        mv.pp.describe(md)
+        mv.calc.relax(md, level="emt", fmax=0.005)
+        mv.prop.quasiharmonic(md, level="emt", source="relaxed_emt",
+                              t_max=900.0, poisson=0.34)
+        return md
+
+    def test_thermal_expansion_matches_experiment(self, qha):
+        """For the metals EMT reproduces, within 25%."""
+        by_formula = dict(zip(qha.obs["formula"],
+                              qha.obs["thermal_expansion_qha_emt"]))
+        for symbol, measured in self.MEASURED_ALPHA.items():
+            assert by_formula[symbol] == pytest.approx(measured, rel=0.25), (
+                symbol, by_formula[symbol], measured)
+
+    def test_aluminium_is_the_usual_outlier(self, qha):
+        """Held to a factor of two rather than 25%, and deliberately.
+
+        EMT gives aluminium a Gruneisen parameter of 0.83 against a measured
+        2.2, so an expansion built from it cannot be trusted to the precision
+        the noble metals reach — the same aluminium that comes out at half the
+        right bulk modulus and a B0' of 1.95 against 4.4. A tolerance wide
+        enough to pass it everywhere would stop the other metals from
+        testing anything."""
+        by_formula = dict(zip(qha.obs["formula"],
+                              qha.obs["thermal_expansion_qha_emt"]))
+        assert 0.5 * self.MEASURED_ALPHA_AL < by_formula["Al"] < \
+            2.0 * self.MEASURED_ALPHA_AL
+
+    def test_the_gruneisen_parameter_is_right_for_the_noble_metals(self, qha):
+        """It is the term the model gets right, and the reason the identity
+        works at all."""
+        by_formula = dict(zip(qha.obs["formula"], qha.obs["gruneisen_emt"]))
+        for symbol, measured in self.MEASURED_GAMMA.items():
+            assert by_formula[symbol] == pytest.approx(measured, rel=0.2), (
+                symbol, by_formula[symbol], measured)
+
+    def test_expansion_is_not_taken_from_the_models_volume_minimum(self, qha):
+        """Pinned as a finding. The model's own optimum volumes give copper
+        4.3e-6 /K, an order of magnitude below the measured 5.0e-5; anything
+        that size would mean the identity had been abandoned."""
+        by_formula = dict(zip(qha.obs["formula"],
+                              qha.obs["thermal_expansion_qha_emt"]))
+        assert by_formula["Cu"] > 1e-5
+
+    def test_the_heat_capacity_approaches_dulong_petit(self, qha):
+        """Three k_B per atom well above the Debye temperature, and the Debye
+        integral rather than that constant below it."""
+        k_b = 1.380649e-23
+        capacity = qha.obs["heat_capacity_300K_emt"].to_numpy(dtype=float)
+        n_atoms = qha.obs["nsites"].to_numpy(dtype=float)
+        assert (capacity < 3.0 * n_atoms * k_b).all()
+        assert (capacity > 1.5 * n_atoms * k_b).all()
+
+    def test_expansion_is_reported_as_a_curve_too(self, qha):
+        """A single number at 300 K hides that the expansion falls away as the
+        Debye temperature is approached from below."""
+        grid = mv.grid_of(qha, "thermal_expansion")
+        curve = np.asarray(qha.obsm["thermal_expansion_emt"], dtype=float)
+        assert curve.shape == (qha.n_obs, grid.size)
+        assert (np.diff(curve, axis=1) >= -1e-12).all()
+
+    def test_too_few_volumes_is_refused(self):
+        md = mv.datasets.metals(["Cu"])
+        mv.pp.describe(md)
+        with pytest.raises(ValueError, match="at least five"):
+            mv.prop.quasiharmonic(md, level="emt", scales=[0.98, 1.0, 1.02])
+
+
+class TestCostAndSupplyRisk:
+    @pytest.fixture(scope="module")
+    def economics(self):
+        from pymatgen.core import Lattice, Structure
+
+        def cell(symbols):
+            return Structure(Lattice.cubic(5.0), symbols,
+                             [[0, 0, 0], [.5, .5, .5], [.25, .25, .25],
+                              [.5, 0, 0], [0, .5, 0]][:len(symbols)])
+        md = mv.data.from_structures([cell(["Fe", "Fe", "O", "O", "O"]),
+                                      cell(["Pt", "Pt", "O", "O", "O"]),
+                                      cell(["Cu", "Cu"])])
+        mv.pp.describe(md)
+        mv.prop.cost(md)
+        mv.prop.supply_risk(md)
+        return md
+
+    def test_platinum_is_orders_of_magnitude_dearer_than_iron(self, economics):
+        """The case this exists to catch: no process optimisation closes five
+        orders of magnitude."""
+        by_formula = dict(zip(economics.obs["formula"],
+                              economics.obs["cost_per_kg"]))
+        assert by_formula["Pt2O3"] > 1000 * by_formula["Fe2O3"]
+
+    def test_the_units_are_recorded(self, economics):
+        assert economics.uns["units"]["cost_per_kg"] == "USD/kg"
+        assert economics.uns["units"]["cost_per_mol"] == "USD/mol"
+
+    def test_supply_risk_is_a_separate_question_from_price(self, economics):
+        """Concentration and cost are different axes; both are reported."""
+        assert set(economics.obs["supply_risk"]) <= {"low", "medium", "high"}
+        by_formula = dict(zip(economics.obs["formula"],
+                              economics.obs["hhi_reserve"]))
+        assert by_formula["Pt2O3"] > by_formula["Fe2O3"]
+
+    def test_a_screen_can_use_both(self, economics):
+        mv.screen.pareto(economics, {"cost_per_kg": "min",
+                                     "hhi_reserve": "min"}, name="affordable")
+        assert "affordable" in economics.obs
+
+
+class TestNeutronDiffraction:
+    @pytest.fixture(scope="module")
+    def patterns(self):
+        md = mv.datasets.metals(["Cu", "Al"])
+        mv.pp.describe(md)
+        mv.prop.xrd(md, two_theta=(20, 90), step=0.1)
+        mv.prop.neutron(md, two_theta=(20, 90), step=0.1)
+        return md
+
+    def test_both_patterns_land_on_their_own_grids(self, patterns):
+        assert patterns.obsm["xrd_calc"].shape == \
+            patterns.obsm["neutron_calc"].shape
+        assert mv.grid_of(patterns, "neutron") == pytest.approx(
+            mv.grid_of(patterns, "xrd"))
+
+    def test_neutrons_and_x_rays_do_not_agree(self, patterns):
+        """Neutrons scatter off nuclei and X-rays off electrons, so the
+        intensities differ even where the peak positions do not — which is why
+        having both is not redundant."""
+        xrd = np.asarray(patterns.obsm["xrd_calc"], dtype=float)
+        nd = np.asarray(patterns.obsm["neutron_calc"], dtype=float)
+        assert not np.allclose(xrd, nd, atol=1.0)
+
+    def test_the_peaks_sit_at_the_same_angles(self, patterns):
+        """Bragg's law does not care what is scattering, so the allowed
+        reflections are at the same angles in both patterns.
+
+        Which of them is *strongest* is a different question and the answer
+        differs — copper's tallest X-ray line is at 43.4 degrees and its
+        tallest neutron line at 38.5 — because the scattering factors reweight
+        the same reflections. That reweighting is the whole reason to compute
+        both."""
+        grid = mv.grid_of(patterns, "xrd")
+
+        def peak_angles(curve):
+            interior = np.arange(1, curve.size - 1)
+            local = interior[(curve[1:-1] > curve[:-2])
+                             & (curve[1:-1] > curve[2:])
+                             & (curve[1:-1] > 0.05 * curve.max())]
+            return grid[local]
+
+        for row in range(patterns.n_obs):
+            xrd_peaks = peak_angles(
+                np.asarray(patterns.obsm["xrd_calc"][row], dtype=float))
+            nd_peaks = peak_angles(
+                np.asarray(patterns.obsm["neutron_calc"][row], dtype=float))
+            assert len(nd_peaks) and len(xrd_peaks)
+            for angle in nd_peaks:
+                assert np.min(np.abs(xrd_peaks - angle)) < 0.5, (
+                    f"neutron peak at {angle} has no X-ray counterpart in "
+                    f"{xrd_peaks}")

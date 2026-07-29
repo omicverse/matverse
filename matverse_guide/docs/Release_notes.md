@@ -1,5 +1,74 @@
 # Release notes
 
+## v0.1.21
+
+Four more of the gaps the coverage map named. **60 of 162 in-scope pymatgen
+modules, 37.0%**, up from 33.3%.
+
+### `mv.prop.quasiharmonic`, and a number that had to be recomputed
+
+The quasi-harmonic Debye model gets a material off the zero-kelvin hull: compute
+the energy at several volumes, let the Debye model supply a vibrational free
+energy at each, and minimise the Gibbs free energy over volume at every
+temperature.
+
+pymatgen's `QuasiharmonicDebyeApprox` reports a Gruneisen parameter that matches
+experiment — 1.91 for copper against a measured 1.96, 2.17 for silver against
+2.4 — and a set of optimum volumes that do not. Its volume minimum moves
+**twelve times too little**: 4.3e-6 /K for copper against a measured 5.0e-5.
+
+So the expansion is computed from the thermodynamic identity instead:
+
+    alpha_V = gamma C_V / (B V)
+
+with the model's own Gruneisen parameter, the bulk modulus fitted from the same
+E(V) points, and the Debye heat capacity rather than the Dulong-Petit constant.
+That gives 4.5e-5 for copper and 5.1e-5 for silver — within 15% of measurement
+for the metals EMT reproduces.
+
+The discrepancy was findable because the bulk modulus from `mv.prop.eos` and the
+Gruneisen parameter from the Debye model sit on one object under names that say
+what they are. That is the second time on this branch that two quantities which
+had to agree, and did not, located a defect neither number showed alone.
+
+Aluminium is the usual outlier and is pinned as one: EMT gives it a Gruneisen
+parameter of 0.83 against a measured 2.2, so its expansion is held to a factor
+of two rather than to 25%.
+
+### `mv.prop.cost` and `mv.prop.supply_risk`
+
+Two screening axes that need no calculator and end more projects than any energy
+does. Raw-material cost from elemental prices, and the Herfindahl-Hirschman
+indices for how concentrated the world's production and reserves are.
+
+Cost will not tell you what a synthesis route costs — it is elements only. It
+will tell you that platinum oxide is four orders of magnitude dearer than iron
+oxide, and no process optimisation closes that. Supply concentration is a
+**different** risk from price: cobalt and the rare earths are affordable and
+concentrated, which is exactly what makes them awkward.
+
+`mv.prop.cost` needs `bibtexparser`, which pymatgen uses to read the citations
+in its price table and does not require itself; it is declared as the `cost`
+extra and reports the install command rather than a traceback.
+
+### `mv.prop.neutron`
+
+Powder neutron diffraction on the same grid convention as the X-ray pattern.
+Not redundant with it: neutrons scatter off nuclei rather than electrons, so
+scattering lengths do not follow atomic number and light atoms show up here and
+nowhere else. Copper's tallest X-ray line is at 43.4 degrees and its tallest
+neutron line at 38.5 — the same allowed reflections, reweighted. For a lithium
+cathode this is the pattern that locates the lithium.
+
+### The alias collision check fired again
+
+`mv.md.sweep` already claimed "thermal expansion", and it measures the quantity
+directly by running dynamics at several temperatures. Both functions compute the
+same thing by different routes and the registry cannot give one name to two
+functions, so the direct measurement keeps the plain alias and the model is
+reached as "quasiharmonic". Third time this mechanism has caught a name landing
+on the wrong function.
+
 ## v0.1.20
 
 ### "Is pymatgen covered?" now has a number that cannot drift

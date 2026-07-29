@@ -279,6 +279,43 @@ different quantity, so it gets a different name and its own entry in
 mv.level_info(oxides, "pbe-mp2020")"""),
 
     ("markdown", """\
+### What it would cost, and whether you could get it
+
+Two screening axes that need no calculator at all, and that end more projects
+than any energy does."""),
+
+    ("code", """\
+mv.prop.cost(oxides)
+mv.prop.supply_risk(oxides)
+
+oxides.obs[["formula", "cost_per_kg", "hhi_production", "hhi_reserve",
+            "supply_risk"]].round(2)"""),
+
+    ("markdown", """\
+`cost_per_kg` is raw-material cost from elemental prices — not synthesis, not
+yield. It will not tell you what a route costs. It will tell you that platinum
+oxide is four orders of magnitude dearer than iron oxide, and no amount of
+process optimisation closes that.
+
+`hhi_production` and `hhi_reserve` are Herfindahl-Hirschman indices: how
+concentrated the world's production, and the world's reserves, are in a few
+countries. That is a **different** risk from price. Cobalt and the rare earths
+are affordable and concentrated, which is exactly what makes them awkward.
+
+Both are ordinary `obs` columns, so a Pareto front over cost and stability is
+one call:"""),
+
+    ("code", """\
+mv.prop.neutron(oxides, two_theta=(20, 80), step=0.1)
+mv.grid_of(oxides, "neutron").shape, oxides.obsm["neutron_calc"].shape"""),
+
+    ("markdown", """\
+And since the diffraction pattern is on the same grid convention, a neutron
+pattern is one more `obsm` block. Neutrons scatter off nuclei rather than
+electrons, so they see lithium and oxygen that X-rays barely register — for a
+battery cathode, this is the pattern that locates the lithium."""),
+
+    ("markdown", """\
 ### The hull is not the only stability question
 
 A material can sit on the solid-state hull and still dissolve the moment it
