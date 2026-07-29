@@ -1987,3 +1987,99 @@ def capture(md: AnnData, dQ, dE, omega_i, omega_f, coupling,
     }
     record(md, "prop.capture", kind=kind, temperature=float(temperature),
            key_added=name)
+
+
+@register_function(
+    aliases=["polarization", "ferroelectric", "spontaneous polarization",
+             "berry phase", "polarization quantum", "switching",
+             "same branch", "pyroelectric"],
+    category="prop",
+    description="Reconstruct the continuous polarization branch along a "
+                "distortion path and read off the spontaneous polarization.",
+    requires={"structures": ["{source}"]},
+    produces={"obs": ["polarization_a", "polarization_b", "polarization_c"],
+              "uns": ["polarization"]},
+    prerequisites=["mv.dft.read_outputs"],
+    examples=["mv.prop.polarization(md, p_elec, p_ion)",
+              "mv.prop.polarization(md, p_elec, p_ion, key_added='batio3')"],
+    related=["mv.prop.piezoelectric", "mv.prop.dielectric",
+             "mv.dft.read_outputs"],
+    notes="Polarization is only defined modulo a quantum — one lattice vector "
+          "of charge per cell — so a Berry-phase calculation does not return a "
+          "polarization, it returns one representative of an infinite set. "
+          "The numbers along a switching path come back scattered across "
+          "branches, and subtracting the first from the last gives an answer "
+          "that is wrong by an arbitrary multiple of the quantum. That is the "
+          "single most common way a computed ferroelectric polarization is "
+          "reported wrongly.\\n\\n"
+          "This puts every point back on one branch by following the smallest "
+          "step from its predecessor, and the spontaneous polarization is then "
+          "the honest difference between the ends. **The rows are a path, in "
+          "order**, from the centrosymmetric reference to the polar structure "
+          "— this is the one function here that reads the dataset as a "
+          "sequence rather than as a set, so the row order is part of the "
+          "input.\\n\\n"
+          "obs['polarization_a'/'b'/'c'] are the same-branch values in "
+          "uC/cm^2 along each lattice vector, and "
+          "uns['polarization'][...]['spontaneous'] the change from end to "
+          "end. uns also carries the quantum, which is worth reading: if the "
+          "spontaneous polarization is a sizeable fraction of it, the path was "
+          "too coarsely sampled to know which branch is right, and adding "
+          "images is the fix.\\n\\n"
+          "**The Berry-phase terms are arguments**, in e*angstrom per cell, as "
+          "VASP reports them — the electronic term from the dipole moment of "
+          "the wavefunctions and the ionic term from the point charges. "
+          "matverse does not compute them.",
+)
+def polarization(md: AnnData, p_elec, p_ion, source: str = "input",
+                 key_added: str | None = None) -> None:
+    """Same-branch polarization along a path. Deposits; returns ``None``."""
+    from pymatgen.analysis.ferroelectricity.polarization import Polarization
+
+    if md.n_obs < 2:
+        raise ValueError(f"a polarization path needs at least two structures, "
+                         f"got {md.n_obs}; the quantity is a change along a "
+                         f"path, not a property of one cell")
+    electronic = np.atleast_2d(np.asarray(p_elec, dtype=float))
+    ionic = np.atleast_2d(np.asarray(p_ion, dtype=float))
+    for array, label in ((electronic, "p_elec"), (ionic, "p_ion")):
+        if array.shape != (md.n_obs, 3):
+            raise ValueError(f"{label} must be ({md.n_obs}, 3) — one vector "
+                             f"per row — got {array.shape}")
+
+    cells = structures(md, source)
+    engine = Polarization(electronic.tolist(), ionic.tolist(), cells)
+    branch = np.asarray(
+        engine.get_same_branch_polarization_data(convert_to_muC_per_cm2=True),
+        dtype=float)
+    quanta = np.asarray(engine.get_lattice_quanta(), dtype=float)
+    change = np.asarray(engine.get_polarization_change(),
+                        dtype=float).ravel()
+
+    name = key_added or "polarization"
+    suffix = "" if key_added is None else f"_{key_added}"
+    for index, axis in enumerate("abc"):
+        md.obs[f"polarization_{axis}{suffix}"] = branch[:, index]
+
+    magnitude = float(np.linalg.norm(change))
+    # A spontaneous polarization that is a large fraction of the quantum means
+    # consecutive points moved far enough that "nearest branch" is a guess.
+    typical = float(np.median(quanta))
+    md.uns.setdefault("polarization", {})[name] = {
+        "spontaneous": change.tolist(),
+        "spontaneous_norm": magnitude,
+        "unit": "uC/cm^2",
+        "quantum": quanta[0].tolist(),
+        "fraction_of_quantum": magnitude / typical if typical else float("nan"),
+        "n_images": int(md.n_obs),
+        "note": "rows were read as an ordered path from the first to the last",
+    }
+    if typical and magnitude > 0.25 * typical:
+        import warnings as _warnings
+        _warnings.warn(
+            f"the spontaneous polarization is {magnitude:.1f} uC/cm^2 against "
+            f"a quantum of {typical:.1f}, so consecutive images are far apart "
+            f"on the branch and the reconstruction is a guess rather than a "
+            f"reading. Add images along the path.", stacklevel=2)
+    record(md, "prop.polarization", source=source, n_images=int(md.n_obs),
+           key_added=key_added)

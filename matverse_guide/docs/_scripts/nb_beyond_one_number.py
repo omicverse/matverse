@@ -722,6 +722,78 @@ predicting what you have not computed, and choosing what to compute next.
 ```"""),
 
     ("markdown", """\
+## The polarization that is not a number
+
+Polarization is only defined **modulo a quantum** — one lattice vector of charge
+per cell. A Berry-phase calculation does not return the polarization; it returns
+one representative of an infinite set. Along a switching path the values come
+back scattered across branches, and subtracting the first from the last gives an
+answer wrong by an arbitrary multiple of the quantum.
+
+This is the single most common way a computed ferroelectric polarization gets
+reported wrongly, and it is invisible: the number looks perfectly reasonable.
+
+Here is a path whose true polarization rises smoothly from 0 to 30 μC/cm², with
+a random multiple of the quantum added to each point — which is exactly what a
+real calculation hands you:"""),
+
+    ("code", """\
+from pymatgen.core import Lattice, Structure
+
+a, n = 4.0, 7
+path = mv.data.from_structures([
+    Structure(Lattice.cubic(a), ["Ba", "Ti", "O", "O", "O"],
+              [[0, 0, 0], [.5, .5, .5 + x], [.5, .5, 0], [.5, 0, .5],
+               [0, .5, .5]])
+    for x in np.linspace(0.0, 0.04, n)])
+
+true_path = np.linspace(0.0, 30.0, n)
+quantum = 100.136
+scattered = true_path + quantum * np.random.RandomState(0).randint(-2, 3, n)
+
+p_elec = np.zeros((n, 3))
+p_elec[:, 2] = scattered * a ** 3 / 1602.1766208
+
+print("what the calculation returns:", scattered.round(1))"""),
+
+    ("markdown", """\
+Nothing about that sequence looks like a smooth ferroelectric switching path.
+Subtract the ends and you get 130.1 − 200.3 = −70 μC/cm², which is not the
+answer.
+
+`mv.prop.polarization` puts every point back on one branch by following the
+smallest step from its predecessor:"""),
+
+    ("code", """\
+import warnings
+
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore")     # the path is coarse; see the note
+    mv.prop.polarization(path, p_elec, np.zeros((n, 3)))
+
+print("reconstructed:", np.abs(path.obs["polarization_c"].to_numpy()).round(2))
+print("true path    :", true_path.round(2))
+path.uns["polarization"]["polarization"]["spontaneous_norm"]"""),
+
+    ("markdown", """\
+The smooth path, recovered exactly, and a spontaneous polarization of
+30 μC/cm² instead of −70.
+
+```{warning}
+`uns['polarization'][...]['fraction_of_quantum']` is worth reading every time.
+If the spontaneous polarization is a sizeable fraction of the quantum, then
+consecutive images moved far enough that "nearest branch" is a **guess** rather
+than a reading, and matverse warns — as it does above, where 30 against a
+quantum of 100 is 0.3. The fix is more images along the path, not a better
+algorithm.
+
+**The rows are a path, in order**, from the centrosymmetric reference to the
+polar structure. This is the one function here that reads the dataset as a
+sequence rather than as a set, so row order is part of the input. The
+Berry-phase terms themselves are arguments, as VASP reports them.
+```"""),
+
+    ("markdown", """\
 ## A hull the laboratory built
 
 Everything above compares a calculation with a measurement one row at a time.

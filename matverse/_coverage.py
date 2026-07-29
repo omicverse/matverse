@@ -145,6 +145,7 @@ WRAPPED: Dict[str, List[str]] = {
     "analysis.quasirrho": ["mv.mol.quasirrho"],
     "analysis.xps": ["mv.elec.xps"],
     "analysis.defects.recombination": ["mv.prop.capture"],
+    "analysis.ferroelectricity.polarization": ["mv.prop.polarization"],
     "analysis.defects.corrections.freysoldt":
         ["mv.thermo.defect_formation"],
     "analysis.diffusion.aimd.clustering": ["mv.md.sites"],
@@ -463,15 +464,6 @@ BLOCKED: Dict[str, str] = {
         "run. mv.elec.cohp already reads ICOHPLIST from a directory, so the "
         "route in exists; what is missing is a real LOBSTER output "
         "directory to verify against.",
-    "analysis.ferroelectricity.polarization":
-        "matverse reads external first-principles output as a matter of "
-        "course - mv.dft.read_outputs, mv.dft.read_dos, mv.elec.read_bands "
-        "and mv.elec.cohp all take a directory of runs - so this is not "
-        "blocked by what matverse is. It is blocked by verification: "
-        "Polarization.from_outcars_and_structures wants the Berry-phase "
-        "output of a sequence of VASP runs along a distortion path. Reading "
-        "them is mv.dft.read_outputs' job; the missing piece is such a "
-        "sequence to test on.",
     "analysis.piezo_sensitivity":
         "matverse reads external first-principles output as a matter of "
         "course - mv.dft.read_outputs, mv.dft.read_dos, mv.elec.read_bands "
