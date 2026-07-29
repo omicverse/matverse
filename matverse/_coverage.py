@@ -255,6 +255,24 @@ def equivalents(module: str) -> frozenset:
 # ---------------------------------------------------------------- NATIVE
 #: Capability present in matverse, implemented without pymatgen's module.
 NATIVE: Dict[str, str] = {
+    "analysis.compatibility.exp_entries":
+        "mv.exp.formation_hull builds the hull from measured formation "
+        "enthalpies directly. Not a wrapper: ExpEntry hands ThermoData.value "
+        "to PDEntry as an eV energy while every thermochemical table quotes "
+        "kJ/mol, and ThermoData carries no unit to check against, so it is "
+        "wrong by 96.485 and silent about it. It also rejects any phase "
+        "marked gas or liquid, so an oxide hull cannot hold its O2 corner. "
+        "matverse takes the unit as a required argument and adds the "
+        "elemental references itself - on NIST-JANAF Fe-O it puts hematite "
+        "and magnetite on the hull and wustite 0.039 eV/atom above it, "
+        "which is the known metallurgy",
+    "analysis.thermochemistry":
+        "ThermoData is a container for a measured value plus its provenance, "
+        "which on this substrate is a column: mv.exp.measure attaches the "
+        "value and tags it as an experimental level with its instrument, and "
+        "mv.exp.formation_hull consumes it with the unit named. What is not "
+        "covered is reading a thermochemical table off disk, and pymatgen "
+        "ships no table to read",
     "analysis.diffusion.aimd.van_hove":
         "mv.md.van_hove computes both parts from the definition off a "
         "trajectory. Not a wrapper, deliberately: VanHoveAnalysis exposes "
@@ -411,6 +429,12 @@ INTERNAL_MARKERS = (
 #: — but they are not "nobody got to it", and the distinction is the difference
 #: between a backlog and a wish.
 BLOCKED: Dict[str, str] = {
+    "analysis.chemenv.coordination_environments.voronoi":
+        "the Voronoi construction ChemEnv runs before it fits a "
+        "polyhedron. Confirmed by runtime check to be loaded and executed "
+        "during a mv.env.chemenv call, but pymatgen imports it lazily "
+        "inside the finder, so there is no import chain from matverse to "
+        "it and no entry point to wrap - only compute_structure_environments",
     "analysis.diffusion.aimd.pathway":
         "generate_stable_sites raises on a single stable site - the "
         "condensed distance matrix is empty and scipy's linkage refuses it "
@@ -433,17 +457,6 @@ BLOCKED: Dict[str, str] = {
         "structure's magnetic space group from its moments - there is no "
         "MagneticSpaceGroupAnalyzer beside SpacegroupAnalyzer, so there is "
         "no route from a structure to a label.",
-    "analysis.compatibility.exp_entries":
-        "ExpEntry is unit-blind, and silently so. It passes "
-        "ThermoData.value straight to PDEntry as the entry energy; PDEntry "
-        "energies are eV everywhere else in pymatgen, while every "
-        "thermochemical table quotes formation enthalpies in kJ/mol, and "
-        "ThermoData has no unit field to consult. Feeding it NIST-JANAF "
-        "numbers builds a hull wrong by a factor of 96.485 that still "
-        "ranks, still plots and still returns an e_above_hull. It also "
-        "refuses phaseinfo 'gas' or 'liquid', so the O2 reference an oxide "
-        "hull needs cannot be added at all - building Fe-O raises 'List of "
-        "Thermodata does not contain enthalpy values'.",
     "analysis.compatibility.correction_calculator":
         "fits a correction scheme rather than applying one. "
         "compute_corrections needs experimental formation enthalpies paired "
@@ -459,9 +472,6 @@ BLOCKED: Dict[str, str] = {
         "DefectSiteFinder needs dscribe, which resolves to numba 0.53 here - a "
         "2021 release predating both numpy 2 and Python 3.12, so installing it "
         "would break the environment for one module",
-    "analysis.chemenv.coordination_environments.voronoi":
-        "the Voronoi construction ChemEnv uses internally; reached only "
-        "through compute_structure_environments, never as an entry point",
     "analysis.defects.recombination": "needs DFT electron-phonon coupling",
     "analysis.xps": "needs a projected density of states, not a total one",
     "analysis.excitation": "needs a DFT excited-state calculation",
@@ -481,8 +491,6 @@ BLOCKED: Dict[str, str] = {
     "analysis.functional_groups": "needs openbabel",
     "analysis.quasirrho": "needs molecular vibrational frequencies from a "
                           "quantum-chemistry run",
-    "analysis.thermochemistry": "a reader for experimental thermochemical "
-                                "tables matverse does not ship",
     "analysis.alloys.core": "pymatgen-analysis-alloys 0.0.9 has a "
                             "from_structures signature that does not match "
                             "its own documentation",

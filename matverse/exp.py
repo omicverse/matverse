@@ -173,3 +173,139 @@ def measure(md: AnnData, quantity: str, values, level: str = "experiment",
 
 
 __all__ = ["attach", "match_xrd", "measure"]
+
+
+#: kJ/mol -> eV, the conversion ExpEntry does not do.
+_KJ_PER_MOL_TO_EV = 1.0 / 96.48533212331
+
+#: What a formation enthalpy may be quoted in, as a multiplier to eV.
+_ENTHALPY_UNITS = {
+    "kJ/mol": _KJ_PER_MOL_TO_EV,
+    "kcal/mol": 4.184 * _KJ_PER_MOL_TO_EV,
+    "eV": 1.0,
+    "eV/atom": None,          # handled separately: already intensive
+    "meV/atom": None,
+}
+
+
+@register_function(
+    aliases=["experimental hull", "measured stability", "formation enthalpy "
+             "hull", "experimental phase diagram", "exp entries",
+             "is it really stable", "thermochemical hull"],
+    category="exp",
+    description="Build a convex hull out of measured formation enthalpies, so "
+                "stability from experiment sits on the same object, and the "
+                "same axis, as stability from calculation.",
+    requires={"obs": ["{column}"], "structures": ["{source}"]},
+    produces={"obs": ["e_above_hull_{level}", "is_stable_{level}",
+                      "formation_energy_{level}"]},
+    prerequisites=["mv.exp.measure"],
+    examples=["mv.exp.formation_hull(md, 'dHf', unit='kJ/mol')",
+              "mv.exp.formation_hull(md, 'dHf_ev_per_atom', "
+              "unit='eV/atom', level='janaf')"],
+    related=["mv.thermo.hull", "mv.exp.measure", "mv.compare_levels"],
+    notes="**The unit is a required argument and it is not guessed.** A "
+          "formation enthalpy from a thermochemical table is in kJ/mol of "
+          "formula unit; a hull is in eV per atom; the two differ by 96.485 "
+          "and by the number of atoms in the formula. Getting that wrong "
+          "produces a hull that still ranks, still plots and is wrong by two "
+          "orders of magnitude, which is exactly what pymatgen's ExpEntry "
+          "does — it hands ThermoData.value straight to PDEntry as an eV "
+          "energy and ThermoData carries no unit to check against. Hence "
+          "this, rather than a wrapper.\n\n"
+          "Elements are the reference and are pinned to zero formation "
+          "enthalpy whether or not you supply a value for them, which is what "
+          "makes the numbers formation enthalpies in the first place. They do "
+          "not need to be rows: a hull over an oxide needs an O2 reservoir, "
+          "and ExpEntry refuses to hold one because it rejects any phase "
+          "marked gas or liquid.\n\n"
+          "What this is for is the comparison. Run it beside mv.thermo.hull "
+          "at a computed level and mv.compare_levels will put measurement and "
+          "calculation side by side on the same rows — which is the only "
+          "honest way to find out whether a functional is right about "
+          "stability, as opposed to self-consistent.",
+)
+def formation_hull(md: AnnData, column: str, unit: str,
+                   source: str = "input", level: str = "experiment",
+                   key_added: str | None = None) -> None:
+    """A convex hull from measured formation enthalpies. Deposits ``None``."""
+    from pymatgen.analysis.phase_diagram import PDEntry, PhaseDiagram
+    from pymatgen.core import Composition, Element
+
+    from ._core import structures
+
+    if column not in md.obs:
+        raise ValueError(f"obs[{column!r}] absent; attach the measured "
+                         f"enthalpies with mv.exp.measure first")
+    if unit not in _ENTHALPY_UNITS:
+        raise ValueError(f"unit must be one of {sorted(_ENTHALPY_UNITS)}, got "
+                         f"{unit!r}; a formation enthalpy without a unit is "
+                         f"not a number")
+
+    values = md.obs[column].to_numpy(dtype=float)
+    compositions = [s.composition for s in structures(md, source)]
+
+    # Everything becomes eV per atom, which is what a hull is in.
+    per_atom = np.full(md.n_obs, np.nan)
+    for row, composition in enumerate(compositions):
+        value = values[row]
+        if not np.isfinite(value):
+            continue
+        if unit == "eV/atom":
+            per_atom[row] = value
+        elif unit == "meV/atom":
+            per_atom[row] = value / 1000.0
+        else:
+            # Per formula unit, so divide by the atoms in the formula the
+            # enthalpy was quoted for - the reduced formula, not the cell.
+            reduced, factor = composition.get_reduced_composition_and_factor()
+            per_atom[row] = (value * _ENTHALPY_UNITS[unit]
+                             / float(reduced.num_atoms))
+
+    entries, rows = [], []
+    for row, composition in enumerate(compositions):
+        if not np.isfinite(per_atom[row]):
+            continue
+        reduced, _ = composition.get_reduced_composition_and_factor()
+        entries.append(PDEntry(reduced,
+                               per_atom[row] * float(reduced.num_atoms)))
+        rows.append(row)
+
+    if not entries:
+        raise ValueError(f"no finite value in obs[{column!r}]; nothing to "
+                         f"build a hull from")
+
+    # The elemental references. A formation enthalpy is measured against them,
+    # so they are zero by definition and are added whether or not the caller
+    # supplied a row for them - an oxide hull needs its O2 corner and there is
+    # rarely a row for oxygen gas.
+    elements = {element for entry in entries
+                for element in entry.composition.elements}
+    supplied = {next(iter(e.composition.elements)) for e in entries
+                if e.composition.is_element}
+    for element in sorted(elements - supplied, key=str):
+        entries.append(PDEntry(Composition({Element(str(element)): 1}), 0.0))
+
+    diagram = PhaseDiagram(entries)
+
+    name = key_added or level
+    above = np.full(md.n_obs, np.nan)
+    for entry, row in zip(entries, rows):
+        above[row] = float(diagram.get_e_above_hull(entry))
+
+    md.obs[f"formation_energy_{name}"] = per_atom
+    md.obs[f"e_above_hull_{name}"] = above
+    md.obs[f"is_stable_{name}"] = np.where(
+        np.isfinite(above), above <= 1e-9, False)
+    set_level(md, name, kind="experiment",
+              method="measured formation enthalpy",
+              note=f"convex hull built from obs[{column!r}], quoted in "
+                   f"{unit}, converted to eV/atom")
+    md.uns.setdefault("experimental_hull", {})[name] = {
+        "column": column, "unit": unit,
+        "n_entries": len(entries), "n_rows": len(rows),
+        "elements": sorted(str(e) for e in elements),
+        "stable": sorted(e.composition.reduced_formula
+                         for e in diagram.stable_entries),
+    }
+    record(md, "exp.formation_hull", column=column, unit=unit, level=name)

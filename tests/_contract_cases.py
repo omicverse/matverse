@@ -467,6 +467,20 @@ def cases(tmp):
     # so it is what the probe has to use for that claim to be exercised at all.
     from pymatgen.core import Lattice, Structure
     _fcc = [[0, 0, 0], [0, .5, .5], [.5, 0, .5], [.5, .5, 0]]
+    def measured_alloy():
+        """Two compositions with a measured formation enthalpy attached."""
+        from pymatgen.core import Composition
+        cells = []
+        for formula in ("Fe2O3", "Fe"):
+            comp = Composition(formula)
+            syms = [str(e) for e in comp.elements for _ in range(int(comp[e]))]
+            cells.append(Structure(Lattice.cubic(10.0), syms,
+                                   [[i / len(syms), 0, 0]
+                                    for i in range(len(syms))]))
+        out = mv.data.from_structures(cells)
+        out.obs["dHf_lab"] = [-824.2, 0.0]
+        return out
+
     alloy = mv.data.from_structures([Structure.from_spacegroup(
         "Pm-3m", Lattice.cubic(3.75), ["Au", "Cu"],
         [[0, 0, 0], [0.5, 0.5, 0]])])
@@ -628,6 +642,8 @@ def cases(tmp):
         (mv.neb.percolation, one_metal, ("Cu",), {}),
 
         (mv.disorder.sro, one_metal, (), {}),
+        (mv.exp.formation_hull, measured_alloy, ("dHf_lab",),
+         {"unit": "kJ/mol"}),
 
         # mv.surf
         (mv.surf.slabs, one_metal, (), {"max_index": 1, "returns": "new"}),

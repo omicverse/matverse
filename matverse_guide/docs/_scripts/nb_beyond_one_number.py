@@ -720,4 +720,68 @@ considers hosts with 2 distinct species; this library has [4]".
 [Models and campaigns](models_and_campaigns.ipynb) covers the other half:
 predicting what you have not computed, and choosing what to compute next.
 ```"""),
+
+    ("markdown", """\
+## A hull the laboratory built
+
+Everything above compares a calculation with a measurement one row at a time.
+Stability is not a row-at-a-time quantity — it is a property of a whole chemical
+system — so comparing *it* means building the convex hull twice, once from
+computed energies and once from measured formation enthalpies.
+
+`mv.exp.formation_hull` does the second. The unit is a required argument, and
+that is the whole point:"""),
+
+    ("code", """\
+from pymatgen.core import Composition, Lattice, Structure
+
+def cell(formula):
+    comp = Composition(formula)
+    syms = [str(e) for e in comp.elements for _ in range(int(comp[e]))]
+    return Structure(Lattice.cubic(10.0), syms,
+                     [[i / len(syms), 0, 0] for i in range(len(syms))])
+
+# NIST-JANAF standard formation enthalpies at 298 K, in kJ/mol
+janaf = {"Fe2O3": -824.2, "Fe3O4": -1118.4, "FeO": -272.0, "Fe": 0.0}
+
+oxides = mv.data.from_structures([cell(f) for f in janaf])
+oxides.obs_names = list(janaf)
+mv.exp.measure(oxides, "dHf", list(janaf.values()), level="janaf",
+               instrument="NIST-JANAF tables")
+mv.exp.formation_hull(oxides, "dHf_janaf", unit="kJ/mol", level="janaf")
+
+oxides.obs[["dHf_janaf", "formation_energy_janaf", "e_above_hull_janaf",
+            "is_stable_janaf"]].round(4)"""),
+
+    ("markdown", """\
+Hematite and magnetite sit on the hull. **Wüstite sits 0.039 eV/atom above it**
+— and that is not a defect of the method, it is metallurgy: FeO is metastable at
+room temperature and disproportionates into iron and magnetite below about
+570 °C. A hull built from measured enthalpies that put all three phases on it
+would be the suspicious result.
+
+Two things had to go right to get there, and both are places pymatgen's
+`ExpEntry` goes wrong.
+
+The first is **units**. A table quotes kJ per mole of formula unit; a hull is in
+eV per atom. Between them sit a factor of 96.485 and the number of atoms in the
+formula. `ExpEntry` hands the table's number straight to `PDEntry` as though it
+were already eV, and `ThermoData` carries no unit for it to check against — so
+the hull comes out wrong by two orders of magnitude, and still ranks, still
+plots, still returns an `e_above_hull`.
+
+The second is the **oxygen corner**. A formation enthalpy is measured against
+the elements, so an Fe–O hull needs an O₂ reference at zero, and nobody has a
+row for oxygen gas. `mv.exp.formation_hull` adds the elemental references
+itself; `ExpEntry` cannot hold one at all, because it rejects any phase marked
+gas or liquid."""),
+
+    ("code", """\
+oxides.uns["experimental_hull"]["janaf"]["stable"]"""),
+
+    ("markdown", """\
+Now the comparison this was for. Run `mv.thermo.hull` at a computed level on the
+same object and the two `e_above_hull` columns sit side by side on the same
+rows, which is the only honest way to ask whether a functional is *right* about
+stability rather than merely self-consistent."""),
 ]
