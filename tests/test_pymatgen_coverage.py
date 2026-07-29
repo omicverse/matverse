@@ -35,7 +35,7 @@ warnings.filterwarnings("ignore")
 #: Modules covered on this branch. Raise it as batches land; a drop is a
 #: regression. A count rather than a fraction, because the denominator moves
 #: when pymatgen adds modules and a ratchet that slips on rounding is not one.
-COVERED_FLOOR = 76
+COVERED_FLOOR = 84
 
 #: The pymatgen the floor was recorded against. matverse supports two, and they
 #: ship different module trees — 162 modules in scope against 134 — so a count
@@ -107,6 +107,19 @@ class TestTheMapIsHonest:
         for module, reason in _coverage.TRANSITIVE.items():
             assert module in _coverage.WRAPPED, module
             assert reason.strip(), module
+
+    def test_a_blocked_gap_names_what_blocks_it(self, report):
+        """A gap that cannot be closed here is still a gap — BLOCKED entries
+        stay in scope and uncovered. What they add is the distinction between
+        a backlog and a wish."""
+        for module, reason in _coverage.BLOCKED.items():
+            assert reason.strip(), module
+        assert set(report["blocked"]) <= set(_coverage.BLOCKED)
+        assert not (set(report["open"]) & set(_coverage.BLOCKED))
+
+    def test_blocked_and_open_account_for_every_gap(self, report):
+        assert len(report["blocked"]) + len(report["open"]) == \
+            report["buckets"].get("TODO", 0)
 
     def test_every_exemption_carries_a_reason(self):
         for mapping in (_coverage.NATIVE, _coverage.NOT_A_GOAL):

@@ -1,5 +1,46 @@
 # Release notes
 
+## v0.1.29
+
+**84 of 136 in-scope pymatgen modules, 61.8%** — and this release is mostly
+bookkeeping, so the number needs unpacking before it is believed.
+
+### A gap that cannot be closed is still a gap
+
+The coverage map said which modules were uncovered. It could not say *why*, and
+the difference between "nobody has done it" and "this needs a DFT run matverse
+does not perform" is the difference between a backlog and a wish.
+
+`BLOCKED` now records the eighteen with an external blocker — the Freysoldt and
+Kumagai charge corrections need the electrostatic potential from a real DFT run,
+XPS needs a projected density of states rather than a total one, three molecular
+modules need openbabel, BoltzTraP needs a binary that does not build here.
+**They stay in scope and uncovered.** What they gain is a reason.
+
+That leaves **34 open gaps** out of 136 in-scope modules.
+
+### Two reclassifications, and one of them was wrong
+
+`phonon.*`, `core.trajectory` and `core.units` moved to NATIVE: matverse builds
+the dynamical matrix from ASE displacements, keeps its own trajectory
+statistics, and records units on the object. Those are the NATIVE definition.
+
+Fifteen `core` and `symmetry` modules were then moved to INTERNAL as "data types
+rather than capabilities", which took coverage from 53.5% to 65.4% in one step.
+That was too aggressive, and checking each one the way this branch has been
+checking pymatgen showed it: `core.bonds` has `get_bond_order` and `is_bonded`,
+`core.molecular_orbitals` has `obtain_band_edges`, `symmetry.groups` has the
+symmetry operations and crystal system. Those are real API and belong in the gap
+list.
+
+Only six are genuinely data types or enums — `Site`, `SymmOp`, `Spectrum`, the
+two XC functional enums, and the package re-export. `core.interface` turned out
+to be neither: `CoherentInterfaceBuilder.get_interfaces` yields `Interface`
+objects that `mv.iface.build` stores, so it is transitive use.
+
+The corrected figure is 61.8%, not 65.4%. The three-point difference is the
+whole point of writing this down.
+
 ## v0.1.28
 
 **76 of 142 in-scope pymatgen modules, 53.5%.**

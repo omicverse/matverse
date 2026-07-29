@@ -65,6 +65,7 @@ WRAPPED: Dict[str, List[str]] = {
     "analysis.interfaces.zsl": ["mv.iface.match"],
     "symmetry.kpath": ["mv.elec.kpath"],
     "core.tensors": ["mv.prop.piezoelectric"],
+    "core.interface": ["mv.iface.build"],
     "analysis.chemenv.connectivity.connectivity_finder":
         ["mv.env.connectivity"],
     "analysis.chemenv.connectivity.structure_connectivity":
@@ -139,6 +140,10 @@ TRANSITIVE: Dict[str, str] = {
     "core.tensors":
         "PiezoTensor subclasses Tensor, so mv.prop.piezoelectric's symmetry "
         "check and IEEE conversion are this module's code",
+    "core.interface":
+        "CoherentInterfaceBuilder.get_interfaces yields Interface objects, "
+        "which mv.iface.build stores - the numpy site properties they carry "
+        "are what broke structure serialisation in v0.1.15",
     "analysis.chemenv.connectivity.structure_connectivity":
         "ConnectivityFinder.get_structure_connectivity returns a "
         "StructureConnectivity, and mv.env.connectivity calls "
@@ -219,6 +224,22 @@ NATIVE: Dict[str, str] = {
         "not wrapped: fitting exchange couplings needs spin-polarised "
         "energies, and no calculator matverse ships is spin-polarised, so "
         "nothing here can verify the result",
+    "phonon.bandstructure":
+        "mv.prop.phonon builds the dynamical matrix from ASE displacements and "
+        "deposits frequencies on the grid convention, so pymatgen's phonon "
+        "containers are never constructed",
+    "phonon.dos": "see phonon.bandstructure",
+    "phonon.gruneisen":
+        "mv.prop.quasiharmonic computes the Gruneisen parameter from an "
+        "equation of state instead",
+    "phonon.ir_spectra": "see phonon.bandstructure",
+    "phonon.thermal_displacements": "see phonon.bandstructure",
+    "core.trajectory":
+        "mv.md.run keeps its own trajectory statistics rather than "
+        "materialising a Trajectory object",
+    "core.units":
+        "mv.utils.set_units and mv.utils.convert record units on the object, "
+        "which is where a screen needs them",
     "analysis.xas.spectrum":
         "an XAS spectrum is a curve on an energy grid, which uns['grids'] and "
         "an obsm block already are: mv.exp.attach stores one and "
@@ -279,8 +300,53 @@ INTERNAL_MARKERS = (
     ".core.core", "._",
 )
 
+#: Real gaps that cannot be closed here, and what blocks each. These stay
+#: **in scope and uncovered** — they are things matverse should do and does not
+#: — but they are not "nobody got to it", and the distinction is the difference
+#: between a backlog and a wish.
+BLOCKED: Dict[str, str] = {
+    "analysis.defects.corrections.freysoldt":
+        "needs the electrostatic potential from a real DFT run",
+    "analysis.defects.corrections.kumagai":
+        "needs site potentials from a real DFT run",
+    "analysis.defects.ccd": "needs DFT potential energy surfaces",
+    "analysis.defects.recombination": "needs DFT electron-phonon coupling",
+    "analysis.xps": "needs a projected density of states, not a total one",
+    "analysis.excitation": "needs a DFT excited-state calculation",
+    "analysis.piezo_sensitivity": "needs Born charges and force constants",
+    "analysis.ferroelectricity.polarization":
+        "needs Berry-phase polarisation from a DFT run",
+    "analysis.topological.spillage": "needs two DFT runs, with and without "
+                                     "spin-orbit coupling",
+    "analysis.lobster_env": "needs LOBSTER output",
+    "electronic_structure.boltztrap": "needs the BoltzTraP binary",
+    "electronic_structure.boltztrap2":
+        "BoltzTraP2 links against netCDF and does not build here; "
+        "mv.elec.transport already reports the install command",
+    "analysis.bond_dissociation": "needs openbabel, a C++ library rather "
+                                  "than a wheel",
+    "analysis.fragmenter": "needs openbabel",
+    "analysis.functional_groups": "needs openbabel",
+    "analysis.quasirrho": "needs molecular vibrational frequencies from a "
+                          "quantum-chemistry run",
+    "analysis.thermochemistry": "a reader for experimental thermochemical "
+                                "tables matverse does not ship",
+    "analysis.alloys.core": "pymatgen-analysis-alloys 0.0.9 has a "
+                            "from_structures signature that does not match "
+                            "its own documentation",
+}
+
+
 #: Individual modules that are plumbing despite not matching a marker.
 INTERNAL = {
+    # pymatgen's data types and enums rather than capabilities. matverse uses
+    # Sites and SymmOps constantly - every Structure is made of them - but
+    # there is nothing here to wrap, in the same way transformation_abc has
+    # nothing. Kept deliberately short: core.bonds, core.molecular_orbitals,
+    # symmetry.groups and symmetry.maggroups all have real API behind them and
+    # belong in the gap list, not here.
+    "core.sites", "core.operations", "core.spectrum",
+    "core.libxcfunc", "core.xcfunc", "core",
     "analysis.compatibility.compatibility",
     "analysis.diffraction.core",
     "analysis.alloys.rgb",
@@ -487,9 +553,12 @@ def report(root: str | None = None) -> dict:
                  + len(buckets.get("NATIVE", []))
                  + len(buckets.get("TODO", [])))
     covered = len(buckets.get("WRAPPED", [])) + len(buckets.get("NATIVE", []))
+    todo = buckets.get("TODO", [])
     return {
         "total": total,
         "buckets": {k: len(v) for k, v in sorted(buckets.items())},
+        "blocked": sorted(m for m in todo if m in BLOCKED),
+        "open": sorted(m for m in todo if m not in BLOCKED),
         "in_scope": reachable,
         "covered": covered,
         "fraction": covered / reachable if reachable else 0.0,
@@ -512,7 +581,8 @@ def summary(root: str | None = None) -> str:
     return "\n".join(lines)
 
 
-__all__ = ["WRAPPED", "NATIVE", "NOT_A_GOAL", "INTERNAL", "EQUIVALENT",
+__all__ = ["WRAPPED", "NATIVE", "NOT_A_GOAL", "INTERNAL", "BLOCKED",
+           "EQUIVALENT",
            "TRANSITIVE",
            "equivalents", "public_modules",
            "aliases", "canonical", "classify", "report", "summary"]
