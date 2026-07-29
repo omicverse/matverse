@@ -1,5 +1,34 @@
 # Release notes
 
+## v0.1.38
+
+**101 of 136 in-scope pymatgen modules, 74.3%.** 15 open gaps, 20 blocked.
+
+### `mv.thermo.chempot_diagram` — stable, and stable *when*
+
+`mv.thermo.hull` says whether a phase is stable. This says under what
+conditions, which is the question that decides whether it can be synthesised: a
+phase stable only in a sliver of chemical potential space needs the growth
+atmosphere controlled to match, and one with a wide domain forms over a range of
+conditions.
+
+The domains are exactly consistent with the energies they came from, which is
+what makes them checkable. On an Al–Ni system where Al₃Ni forms at −1.8 eV, its
+domain reaches μ(Ni) = −1.8 at μ(Al) = 0; AlNi forms at −1.4, so their shared
+boundary sits where μ(Al) + μ(Ni) = −1.4. The extents follow: 0.8 for Al₃Ni,
+2.4 for AlNi.
+
+**Two different zeros, and the object tells them apart.** An elemental reference
+gets a window of zero because its domain is *open* — it runs to the artificial
+floor along the other axis, so a width there would be a plotting choice. A phase
+that is never stable also gets zero, but has no domain at all.
+`uns['chempot_diagram']` records which is which.
+
+The alias collision check fired for the sixth time, twice in one function:
+`mv.thermo.chempot_limits` already owned both "stability window" and "growth
+conditions", and it computes exactly those for a single target phase. This one
+does every phase at once and is reached as "chemical potential diagram".
+
 ## v0.1.37
 
 **100 of 136 in-scope pymatgen modules, 73.5%.** 16 open gaps, 20 blocked.

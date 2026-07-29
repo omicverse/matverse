@@ -131,6 +131,7 @@ WRAPPED: Dict[str, List[str]] = {
     "electronic_structure.core": ["mv.elec.bands"],
     "core.entries": ["mv.thermo.hull", "mv.thermo.reaction"],
     "analysis.compatibility": ["mv.thermo.corrections"],
+    "analysis.chempot_diagram": ["mv.thermo.chempot_diagram"],
     # pymatgen moved these into analysis/ and core/ in 2026.5; the older
     # layout matverse also supports still has them here. Both names are
     # listed so the map holds on either, and only the one that exists in

@@ -505,3 +505,66 @@ class TestElectrostatic:
         total = ionic.obs["electrostatic_energy"].iloc[0]
         per_unit = ionic.obs["electrostatic_per_formula_unit"].iloc[0]
         assert total == pytest.approx(4 * per_unit, rel=1e-6)
+
+
+class TestChempotDiagram:
+    """Under what conditions each phase is stable, not merely whether it is."""
+
+    @staticmethod
+    def _alni():
+        from pymatgen.core import Lattice, Structure
+
+        def fcc(symbol, a):
+            return Structure(Lattice.cubic(a), [symbol] * 4,
+                             [[0, 0, 0], [0, .5, .5], [.5, 0, .5], [.5, .5, 0]])
+
+        def l12(host, guest, a):
+            return Structure(Lattice.cubic(a), [guest, host, host, host],
+                             [[0, 0, 0], [0, .5, .5], [.5, 0, .5], [.5, .5, 0]])
+
+        def b2(a1, a2, a):
+            return Structure(Lattice.cubic(a), [a1, a2],
+                             [[0, 0, 0], [.5, .5, .5]])
+        return [fcc("Al", 4.05), fcc("Ni", 3.52),
+                l12("Al", "Ni", 3.78), b2("Al", "Ni", 2.89)]
+
+    @pytest.fixture(scope="class")
+    def diagram(self):
+        md = mv.data.from_structures(self._alni())
+        mv.pp.describe(md)
+        md.obs["energy_test"] = [0.0, 0.0, -1.8, -1.4]
+        mv.thermo.chempot_diagram(md, level="test")
+        return md
+
+    def test_the_domains_match_the_formation_energies(self, diagram):
+        """Al3Ni forms at -1.8, so its domain reaches mu_Ni = -1.8 where
+        mu_Al = 0; its extent is 0.2 along Al plus 0.6 along Ni."""
+        domains = diagram.uns["chempot_diagram"]["domains"]
+        assert domains["Al3Ni"]["extent"] == pytest.approx(0.8, abs=1e-6)
+
+    def test_the_boundary_between_two_phases_is_where_it_should_be(self,
+                                                                   diagram):
+        """AlNi forms at -1.4, so mu_Al + mu_Ni = -1.4 on its boundary: its
+        extent is 1.2 along each axis."""
+        domains = diagram.uns["chempot_diagram"]["domains"]
+        assert domains["AlNi"]["extent"] == pytest.approx(2.4, abs=1e-6)
+
+    def test_the_elemental_references_are_open(self, diagram):
+        """Their domains run to the artificial floor along the other axis, so
+        a width there would be a plotting choice rather than a physical one."""
+        domains = diagram.uns["chempot_diagram"]["domains"]
+        assert domains["Al"]["open"] and domains["Ni"]["open"]
+        assert not domains["AlNi"]["open"]
+
+    def test_a_wider_window_means_easier_to_make(self, diagram):
+        """The screening claim: AlNi is stable over more of the space than
+        Al3Ni, so it forms over a wider range of conditions."""
+        by_formula = dict(zip(diagram.obs["formula"],
+                              diagram.obs["chempot_window_test"]))
+        assert by_formula["AlNi"] > by_formula["Al3Ni"] > 0
+
+    def test_it_refuses_without_energies(self):
+        md = mv.data.from_structures(self._alni())
+        mv.pp.describe(md)
+        with pytest.raises(ValueError, match="built from energies"):
+            mv.thermo.chempot_diagram(md, level="nothing")

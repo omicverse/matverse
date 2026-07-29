@@ -316,6 +316,45 @@ electrons, so they see lithium and oxygen that X-rays barely register — for a
 battery cathode, this is the pattern that locates the lithium."""),
 
     ("markdown", """\
+### Stable, and stable *when*
+
+`mv.thermo.hull` says whether a phase is stable. `mv.thermo.chempot_diagram`
+says under what conditions — which is the question that decides whether it can
+be synthesised at all."""),
+
+    ("code", """\
+alni = mv.data.from_structures([
+    l12("Al", "Ni", 3.78),          # Al3Ni
+    b2("Al", "Ni", 2.89),           # AlNi
+    mv.structures(elemental)[0],    # Al
+    mv.structures(elemental)[2],    # Ni
+])
+mv.pp.describe(alni)
+alni.obs["energy_demo"] = [-1.8, -1.4, 0.0, 0.0]   # formation energies
+
+mv.thermo.chempot_diagram(alni, level="demo")
+alni.obs[["formula", "energy_demo", "chempot_stable_demo",
+          "chempot_window_demo"]].round(3)"""),
+
+    ("markdown", """\
+`chempot_window` is the extent of the region in chemical potential space where
+each phase wins. **AlNi has three times the window of Al₃Ni**, and that is the
+screening claim: a phase stable only in a sliver needs the growth atmosphere
+controlled to match, and one with a wide domain forms over a range of
+conditions.
+
+The numbers are checkable against the energies they came from. Al₃Ni forms at
+−1.8 eV, so its domain reaches μ(Ni) = −1.8 where μ(Al) = 0; AlNi forms at −1.4,
+so their shared boundary sits where μ(Al) + μ(Ni) = −1.4.
+
+```{note}
+The elemental references come back with a window of **zero and `open = True`**.
+Their domains run to the artificial floor along the other axis, so a width there
+would be a plotting choice rather than a physical one. A phase that is never
+stable also gets zero — but with `open = False`, and it has no domain at all.
+Two different zeros, and `uns['chempot_diagram']` tells them apart.
+```
+
 ### The hull is not the only stability question
 
 A material can sit on the solid-state hull and still dissolve the moment it

@@ -565,7 +565,7 @@ def references_from_mp(elements, api_key: str | None = None):
 __all__ = ["hull", "reaction", "chempot_limits", "pourbaix",
            "defect_formation",
            "references_from_mp",
-           "corrections", "CORRECTION_SCHEMES",
+           "corrections", "CORRECTION_SCHEMES", "chempot_diagram",
            "LevelMismatch"]
 
 
@@ -741,3 +741,116 @@ def _default_hubbards(structure) -> dict:
 
 def _infer_run_type(structure) -> str:
     return "GGA+U" if _default_hubbards(structure) else "GGA"
+
+
+@register_function(
+    aliases=["chemical potential diagram", "chempot diagram",
+             "chemical potential domains", "phase stability region",
+             "where is each phase stable", "synthesis window per phase"],
+    category="thermo",
+    description="The region of chemical potential space in which each phase is "
+                "stable, and how wide that region is — which is how hard the "
+                "phase is to make.",
+    requires={"obs": ["energy_{level}"], "structures": ["{source}"]},
+    produces={"obs": ["chempot_stable_{level}", "chempot_window_{level}"],
+              "uns": ["chempot_diagram"]},
+    prerequisites=["mv.calc.energy"],
+    examples=["mv.thermo.chempot_diagram(md, level='emt')",
+              "mv.thermo.chempot_diagram(md, level='pbe-mp2020')"],
+    related=["mv.thermo.chempot_limits", "mv.thermo.hull",
+             "mv.thermo.defect_formation"],
+    notes="mv.thermo.hull says whether a phase is stable. This says **under "
+          "what conditions**, which is the question that decides whether it "
+          "can be synthesised: a phase stable only in a sliver of chemical "
+          "potential space needs the growth atmosphere controlled to match, "
+          "and one with a wide domain will form over a range of "
+          "conditions.\\n\\n"
+          "obs['chempot_window'] is the extent of that domain, summed over the "
+          "elements. It is a comparative number rather than an absolute one — "
+          "use it to rank candidates in one chemical system, not across "
+          "systems, because the axes are different chemical potentials.\\n\\n"
+          "The domains are exactly consistent with the formation energies they "
+          "came from, which is what makes them checkable: on an Al-Ni system "
+          "where Al3Ni forms at -1.8 eV, its domain reaches mu_Ni = -1.8 at "
+          "mu_Al = 0, and its boundary with AlNi sits where "
+          "mu_Al + mu_Ni = -1.4.\\n\\n"
+          "A phase that is not on the hull has no domain at all and gets a "
+          "window of zero rather than NaN, because 'never stable' is an "
+          "answer. An elemental reference gets zero for the opposite reason: "
+          "its domain is **open**, running to the artificial floor along the "
+          "other axes, so a width there would be a plotting choice rather than "
+          "a physical one. uns records which domains are open.\n\n"
+          "The bare alias 'stability window' belongs to "
+          "mv.thermo.chempot_limits, which computes exactly that for one "
+          "target phase. This computes every phase's region at once, so it is "
+          "reached as 'chemical potential diagram'.",
+)
+def chempot_diagram(md: AnnData, level: str = "emt", source: str = "input",
+                    default_min_limit: float = -50.0) -> None:
+    """Chemical potential domains per phase. Deposits; returns ``None``."""
+    from pymatgen.analysis.chempot_diagram import ChemicalPotentialDiagram
+    from pymatgen.entries.computed_entries import ComputedEntry
+
+    energy_key = f"energy_{level}"
+    if energy_key not in md.obs:
+        raise ValueError(
+            f"obs[{energy_key!r}] absent; a chemical potential diagram is built "
+            f"from energies. Run mv.calc.energy(md, level={level!r}) first.")
+
+    energies = md.obs[energy_key].to_numpy(dtype=float)
+    S = structures(md, source)
+    entries, rows = [], []
+    for i, (structure, energy) in enumerate(zip(S, energies)):
+        if not np.isfinite(energy):
+            continue
+        entries.append(ComputedEntry(structure.composition, float(energy)))
+        rows.append(i)
+    if len(entries) < 2:
+        raise ValueError(
+            f"need at least two finite energies to build a diagram; got "
+            f"{len(entries)}")
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        diagram = ChemicalPotentialDiagram(
+            entries, default_min_limit=default_min_limit)
+
+    stable = np.zeros(md.n_obs, dtype=bool)
+    window = np.zeros(md.n_obs, dtype=float)
+    domains = {}
+    for formula, vertices in diagram.domains.items():
+        array = np.asarray(vertices, dtype=float)
+        # Ignore the artificial floor: a domain that runs to the default limit
+        # is open, and its extent along that axis is a plotting choice.
+        touches_floor = bool(array.size
+                             and np.any(array <= default_min_limit + 1e-9))
+        finite = array[np.all(array > default_min_limit + 1e-9, axis=1)] \
+            if array.size else array
+        extent = float(np.sum(finite.max(axis=0) - finite.min(axis=0))) \
+            if finite.size else 0.0
+        domains[str(formula)] = {
+            "vertices": array.tolist(),
+            # Open along at least one axis: the domain runs to the artificial
+            # floor, so its extent there is a plotting choice rather than a
+            # physical width. The elemental references are always open.
+            "extent": extent,
+            "open": touches_floor,
+        }
+
+    for i, structure in enumerate(S):
+        name = structure.composition.reduced_formula
+        if name in domains:
+            stable[i] = True
+            window[i] = domains[name]["extent"]
+
+    md.obs[f"chempot_stable_{level}"] = stable
+    md.obs[f"chempot_window_{level}"] = window
+    md.uns["chempot_diagram"] = {
+        "level": level, "source": source,
+        "elements": [str(e) for e in diagram.elements],
+        "domains": domains,
+        "n_entries": len(entries),
+        "note": "a phase absent from the diagram is never stable and gets a "
+                "window of zero, which is an answer rather than a gap",
+    }
+    record(md, "thermo.chempot_diagram", level=level, source=source)

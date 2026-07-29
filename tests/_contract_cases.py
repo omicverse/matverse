@@ -598,6 +598,7 @@ def cases(tmp):
         # mv.thermo
         (mv.thermo.reaction, with_alni, (["Al", "Ni"], ["AlNi"]),
          {"level": "emt"}),
+        (mv.thermo.chempot_diagram, with_alni, (), {"level": "emt"}),
         (mv.thermo.defect_formation, defective, (),
          {"host": one_metal(), "level": "emt", "chempot": {"Cu": -3.7},
           "band_gap": 1.2}),
