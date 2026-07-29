@@ -87,13 +87,31 @@ def standardize(md: AnnData, source: str = "input", symprec: float = 0.01) -> No
 )
 def describe(md: AnnData, source: str = "input") -> None:
     """The columns every materials table has, computed once and named once."""
+    import numpy as _np
+
     S = structures(md, source)
     md.obs["formula"] = [s.composition.reduced_formula for s in S]
     md.obs["nsites"] = [len(s) for s in S]
-    md.obs["volume"] = [float(s.volume) for s in S]
-    md.obs["density"] = [float(s.density) for s in S]
     md.obs["n_elements"] = [len(s.composition.elements) for s in S]
-    md.obs["volume_per_atom"] = [float(s.volume) / len(s) for s in S]
+    md.obs["molecular_weight"] = [float(s.composition.weight) for s in S]
+
+    # Volume and density are properties of a cell, and a Molecule has no cell.
+    # They become NaN rather than absent, so a dataset mixing crystals with
+    # molecules stays one table and a periodic-only dataset is unchanged.
+    def _volume(s):
+        try:
+            return float(s.volume)
+        except (AttributeError, TypeError):
+            return _np.nan
+
+    volumes = _np.array([_volume(s) for s in S], dtype=float)
+    md.obs["volume"] = volumes
+    md.obs["density"] = [
+        float(s.density) if _np.isfinite(v) else _np.nan
+        for s, v in zip(S, volumes)]
+    md.obs["volume_per_atom"] = volumes / _np.array(
+        [max(len(s), 1) for s in S], dtype=float)
+    md.obs["is_periodic"] = _np.isfinite(volumes)
     record(md, "pp.describe", source=source)
 
 
@@ -456,6 +474,7 @@ def dedup(md: AnnData, source: str = "input", symprec: float = 0.1,
         blocks.setdefault(_fingerprint(s, symprec), []).append(i)
 
     representative = list(range(len(S)))
+    comparison_failures = 0
     for members in blocks.values():
         reps: list[int] = []
         for i in members:
@@ -463,6 +482,10 @@ def dedup(md: AnnData, source: str = "input", symprec: float = 0.1,
                 try:
                     same = matcher.fit(S[i], S[r])
                 except Exception:
+                    # Counted, because a matcher that fails on every pair
+                    # reports "no duplicates" — which is what it reports when
+                    # there really are none.
+                    comparison_failures += 1
                     same = False
                 if same:
                     representative[i] = r
@@ -478,6 +501,7 @@ def dedup(md: AnnData, source: str = "input", symprec: float = 0.1,
         "n_duplicates": int(sum(r != i for i, r in enumerate(representative))),
         "n_unique": len(set(representative)),
         "matcher": {"ltol": ltol, "stol": stol, "angle_tol": angle_tol},
+        "n_comparison_failures": int(comparison_failures),
     }
     record(md, "pp.dedup", source=source, symprec=symprec)
 
@@ -553,35 +577,54 @@ def rattle(md: AnnData, stdev: float = 0.03, source: str = "input",
 
 @register_function(
     aliases=["defects", "vacancies", "substitutions", "point defects",
-             "enumerate defects", "doping", "make defects"],
+             "enumerate defects", "doping", "make defects", "interstitials",
+             "antisites", "self interstitial"],
     category="pp",
-    description="Enumerate point defects — vacancies and substitutions — in a "
-                "supercell of every structure, returning them as a new dataset "
-                "with the parent and defect type recorded.",
+    description="Enumerate point defects — vacancies, substitutions, "
+                "interstitials and antisites — in a supercell of every "
+                "structure, returning them as a new dataset with the parent "
+                "and defect type recorded.",
     requires={"structures": ["{source}"]},
     examples=["defective = mv.pp.defects(md, kinds=('vacancy',))",
-              "defective = mv.pp.defects(md, substitutions={'Al': ['Mg']})"],
-    related=["mv.calc.relax", "mv.pp.supercell"],
+              "defective = mv.pp.defects(md, substitutions={'Al': ['Mg']})",
+              "defective = mv.pp.defects(md, kinds=('interstitial',), "
+              "interstitial_species=['Li'])",
+              "defective = mv.pp.defects(md, kinds=('antisite',))"],
+    related=["mv.calc.relax", "mv.pp.supercell", "mv.thermo.defect_formation"],
     notes="Returns a new dataset rather than depositing, because there are more "
           "defects than parents. Symmetry-inequivalent sites are enumerated "
           "once each; without that a 32-atom supercell yields 32 identical "
           "vacancies and wastes a calculator on 31 of them.\n\n"
+          "**Vacancies and substitutions** are built here: remove or replace "
+          "one site of each inequivalent kind in a supercell you specify.\n\n"
+          "**Interstitials and antisites** go through "
+          "pymatgen-analysis-defects, because neither is a site you already "
+          "have. An interstitial has to be *found* — the Voronoi construction "
+          "locates the holes — and an antisite is the cross product of the "
+          "species already present, which for a quaternary is more "
+          "combinations than anyone enumerates by hand. That package also "
+          "picks the supercell itself, targeting a minimum image distance "
+          "rather than a fixed multiple, so the supercell= argument does not "
+          "apply to those two kinds and the cell you get back may differ in "
+          "size between them.\n\n"
           "Defect *formation energies* need charge states, a chemical "
-          "potential and a finite-size correction, which is what doped and "
-          "pydefect exist for. This builds the structures.",
+          "potential and a finite-size correction. mv.thermo.defect_formation "
+          "does the first two and records that it does not do the third.",
 )
 def defects(md: AnnData, source: str = "input", supercell=(2, 2, 2),
             kinds=("vacancy",), substitutions: dict | None = None,
-            symprec: float = 0.1) -> AnnData:
+            interstitial_species=None, symprec: float = 0.1,
+            min_atoms: int = 60, max_atoms: int = 240) -> AnnData:
     """Enumerate point defects. Returns a new dataset of defective cells."""
     from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
 
     from .data import from_structures  # noqa: F401  (imported for clarity)
 
-    unknown = set(kinds) - {"vacancy", "substitution"}
+    known = {"vacancy", "substitution", "interstitial", "antisite"}
+    unknown = set(kinds) - known
     if unknown:
         raise ValueError(f"unknown defect kind(s) {sorted(unknown)}; use "
-                         f"'vacancy' and 'substitution'")
+                         f"{sorted(known)}")
     if "substitution" in kinds and not substitutions:
         raise ValueError("kinds includes 'substitution' but no substitutions "
                          "were given, e.g. substitutions={'Al': ['Mg']}")
@@ -606,6 +649,16 @@ def defects(md: AnnData, source: str = "input", supercell=(2, 2, 2),
                 rows.append({"parent": str(name), "defect": "substitution",
                              "site": int(site_index), "removed": symbol,
                              "added": str(replacement)})
+
+        for kind in ("interstitial", "antisite"):
+            if kind not in kinds:
+                continue
+            for built, removed, added in _generated_defects(
+                    structure, kind, interstitial_species, min_atoms,
+                    max_atoms):
+                out.append(built)
+                rows.append({"parent": str(name), "defect": kind,
+                             "site": -1, "removed": removed, "added": added})
 
     if not out:
         raise ValueError("no defect was generated; check kinds= and "
@@ -675,4 +728,276 @@ def strain(md: AnnData, amount, source: str = "input",
 __all__ = ["standardize", "describe", "qc", "filter_materials", "harmonize",
            "defects",
            "filter_elements", "normalize_composition", "dedup", "supercell",
-           "rattle", "strain"]
+           "rattle", "strain", "predict_volume", "prototype",
+           "symmetry"]
+
+
+@register_function(
+    aliases=["predict volume", "guess volume", "estimate volume",
+             "scale lattice", "volume predictor", "starting volume"],
+    category="pp",
+    description="Predict the equilibrium volume of every structure from bond "
+                "lengths alone and deposit a rescaled variant, so a guessed "
+                "cell starts a relaxation near its minimum rather than far "
+                "from it.",
+    requires={"structures": ["{source}"]},
+    produces={"obs": ["predicted_volume", "volume_scale"],
+              "structures": ["{key_added}"]},
+    examples=["mv.pp.predict_volume(md)",
+              "mv.pp.predict_volume(md, key_added='guessed')"],
+    related=["mv.calc.relax", "mv.gen.substitute", "mv.pp.describe"],
+    notes="A structure built by substituting one element for another keeps the "
+          "cell of whatever it was built from, which can be several percent "
+          "away from where the new composition wants to sit. Starting a "
+          "relaxation there costs steps and can end in a different local "
+          "minimum. Predicting the volume first is cheap and needs no "
+          "calculator: it comes from tabulated bond lengths.\n\n"
+          "On LiFePO4 the prediction lands within 3% of the measured cell. "
+          "That is close enough to start a relaxation and nowhere near close "
+          "enough to report — the predicted volume is a starting point, and "
+          "obs['volume_scale'] records how far it moved so a suspicious "
+          "rescaling is visible.",
+)
+def predict_volume(md: AnnData, source: str = "input",
+                   key_added: str = "rescaled") -> None:
+    """Predicted equilibrium volume and a rescaled variant. Deposits."""
+    from pymatgen.analysis.structure_prediction.volume_predictor import (
+        DLSVolumePredictor)
+
+    from ._core import deposit_structures
+
+    predictor = DLSVolumePredictor()
+    predicted = np.full(md.n_obs, np.nan)
+    scale = np.full(md.n_obs, np.nan)
+    rescaled = []
+    failed = 0
+
+    for i, structure in enumerate(structures(md, source)):
+        try:
+            volume = float(predictor.predict(structure))
+            predicted[i] = volume
+            scale[i] = volume / structure.volume
+            candidate = structure.copy()
+            candidate.scale_lattice(volume)
+            rescaled.append(candidate)
+        except Exception:
+            rescaled.append(structure)
+            failed += 1
+
+    deposit_structures(md, key_added, rescaled)
+    md.obs["predicted_volume"] = predicted
+    md.obs["volume_scale"] = scale
+    md.uns["predict_volume"] = {"source": source, "key_added": key_added,
+                                "n_failed": int(failed)}
+    record(md, "pp.predict_volume", source=source, key_added=key_added)
+
+
+def _generated_defects(structure, kind: str, interstitial_species,
+                       min_atoms: int, max_atoms: int):
+    """Interstitials or antisites, via pymatgen-analysis-defects.
+
+    Yields ``(supercell, removed, added)``. Neither kind is a site the input
+    already has: an interstitial has to be located, and an antisite is a cross
+    product over the species present.
+    """
+    try:
+        from pymatgen.analysis.defects.generators import (
+            AntiSiteGenerator, VoronoiInterstitialGenerator)
+    except ImportError as exc:
+        raise ImportError(
+            f"kinds includes {kind!r}, which needs pymatgen-analysis-defects. "
+            f"Install it with `pip install pymatgen-analysis-defects`. "
+            f"Vacancies and substitutions need no extra package. ({exc})"
+        ) from exc
+
+    if kind == "antisite":
+        generated = AntiSiteGenerator().generate(structure)
+    else:
+        species = (list(interstitial_species) if interstitial_species
+                   else sorted({site.specie.symbol for site in structure}))
+        generated = VoronoiInterstitialGenerator().generate(structure, species)
+
+    reasons: list[str] = []
+    produced = 0
+    for defect in generated:
+        try:
+            cell = defect.get_supercell_structure(min_atoms=min_atoms,
+                                                  max_atoms=max_atoms)
+        except Exception as exc:
+            reasons.append(f"{getattr(defect, 'name', kind)}: "
+                           f"{type(exc).__name__}: {exc}")
+            continue
+        produced += 1
+        changes = getattr(defect, "element_changes", {}) or {}
+        removed = ", ".join(str(k) for k, v in changes.items() if v < 0)
+        added = ", ".join(str(k) for k, v in changes.items() if v > 0)
+        yield cell, removed, added
+
+    if not produced and reasons:
+        # Every candidate failed for the same reason nearly always: no
+        # supercell satisfies both the atom-count window and the minimum image
+        # distance. Saying "no defect was generated" would blame the chemistry.
+        raise ValueError(
+            f"{len(reasons)} {kind} candidate(s) were enumerated and none "
+            f"produced a supercell with min_atoms={min_atoms}, "
+            f"max_atoms={max_atoms}. Widen that window — the generator also "
+            f"targets a minimum image distance, so a small max_atoms can "
+            f"leave nothing legal. First failure: {reasons[0]}")
+
+
+@register_function(
+    aliases=["prototype", "structure type", "what structure is this",
+             "aflow prototype", "strukturbericht", "structure prototype",
+             "which prototype"],
+    category="pp",
+    description="Name the structure prototype of every material — rocksalt, "
+                "perovskite, spinel — by matching it against the AFLOW "
+                "prototype library.",
+    requires={"structures": ["{source}"]},
+    produces={"obs": ["prototype", "prototype_mineral",
+                      "strukturbericht"]},
+    examples=["mv.pp.prototype(md)",
+              "mv.pp.prototype(md, source='primitive')"],
+    related=["mv.pp.standardize", "mv.pp.describe", "mv.tl.novelty"],
+    notes="A space group says which symmetries a structure has; a prototype "
+          "says which structure it *is*. Fm-3m covers rocksalt, fcc and "
+          "half-Heusler alike, and a screen that groups by space group puts "
+          "them in one bin.\n\n"
+          "This is also what makes a generative model's output legible. "
+          "'Novel composition in a known prototype' and 'novel prototype' are "
+          "different claims, and the second is rare — the 2026 stress tests "
+          "that found generative models recombining within known structural "
+          "families were measuring exactly this.\n\n"
+          "An unmatched structure gets an empty string rather than a guess. "
+          "The library is large but finite, and 'not in AFLOW' is a fact "
+          "worth keeping distinct from 'not matched because the tolerance was "
+          "too tight'. Run mv.pp.standardize first if the cell came from a "
+          "file with an unusual setting.",
+)
+def prototype(md: AnnData, source: str = "input") -> None:
+    """Structure prototype per material. Deposits; returns ``None``."""
+    from pymatgen.analysis.prototypes import AflowPrototypeMatcher
+
+    matcher = AflowPrototypeMatcher()
+    names = np.empty(md.n_obs, dtype=object)
+    minerals = np.empty(md.n_obs, dtype=object)
+    symbols = np.empty(md.n_obs, dtype=object)
+    matched = 0
+
+    for i, structure in enumerate(structures(md, source)):
+        names[i] = ""
+        minerals[i] = ""
+        symbols[i] = ""
+        try:
+            found = matcher.get_prototypes(structure)
+        except Exception:
+            continue
+        if not found:
+            continue
+        tags = found[0].get("tags", {}) or {}
+        names[i] = str(tags.get("aflow", ""))
+        minerals[i] = str(tags.get("mineral", ""))
+        symbols[i] = str(tags.get("strukturbericht", ""))
+        matched += 1
+
+    md.obs["prototype"] = names.astype(str)
+    md.obs["prototype_mineral"] = minerals.astype(str)
+    md.obs["strukturbericht"] = symbols.astype(str)
+    md.uns["prototype"] = {"source": source, "n_matched": int(matched),
+                           "n_unmatched": int(md.n_obs - matched),
+                           "library": "AFLOW prototype encyclopedia"}
+    record(md, "pp.prototype", source=source)
+
+
+@register_function(
+    aliases=["symmetry", "crystal system", "crystallographic point group",
+             "wyckoff", "wyckoff positions", "site symmetry", "how symmetric",
+             "symmetry operations"],
+    category="pp",
+    description="The symmetry a structure actually has: crystal system, point "
+                "group, how many operations the space group contains, and "
+                "which Wyckoff positions the atoms occupy.",
+    requires={"structures": ["{source}"]},
+    produces={"obs": ["crystal_system", "point_group",
+                      "n_symmetry_operations", "n_wyckoff", "wyckoff",
+                      "min_site_symmetry", "max_site_symmetry"]},
+    examples=["mv.pp.symmetry(md)",
+              "mv.pp.symmetry(md, symprec=0.001)"],
+    related=["mv.pp.describe", "mv.pp.standardize", "mv.pp.prototype"],
+    notes="mv.pp.describe already reports the space group symbol. This is what "
+          "the symbol implies and what a screen can filter on: Pm-3m is cubic "
+          "with point group m-3m and 48 operations, and its atoms sit at 1a, "
+          "1b and 3c — which is the standard perovskite assignment, arrived at "
+          "from the coordinates rather than from the label.\\n\\n"
+          "**Wyckoff positions are the useful part.** They say how many "
+          "*distinct* sites a structure has, which is what decides how many "
+          "defects to enumerate, how many NMR environments to expect and how "
+          "many independent parameters a refinement has. Two structures in the "
+          "same space group with different Wyckoff sets are different "
+          "structures.\\n\\n"
+          "min_site_symmetry and max_site_symmetry are the order of the site "
+          "symmetry group at the least and most symmetric site. A site with "
+          "order 1 is general position; a high order means the atom sits on "
+          "the special positions that constrain where it can relax to.\\n\\n"
+          "Everything here depends on symprec, and it is a real choice rather "
+          "than a detail: a structure relaxed to 1e-3 angstrom is not exactly "
+          "symmetric, and too tight a tolerance reports P1 for a crystal that "
+          "is obviously cubic.\n\n"
+          "The bare alias 'point group' belongs to mv.mol.point_group, where it "
+          "is the whole symmetry answer for a molecule. For a crystal it is one "
+          "fact among several, so this one is reached as 'crystallographic "
+          "point group'.",
+)
+def symmetry(md: AnnData, source: str = "input", symprec: float = 0.01) -> None:
+    """Crystal system, point group and Wyckoff positions. Deposits."""
+    from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
+    from pymatgen.symmetry.groups import SpaceGroup
+    from pymatgen.symmetry.site_symmetries import get_site_symmetries
+
+    systems = np.empty(md.n_obs, dtype=object)
+    points = np.empty(md.n_obs, dtype=object)
+    orders = np.full(md.n_obs, np.nan)
+    wyckoff_count = np.full(md.n_obs, np.nan)
+    wyckoff = np.empty(md.n_obs, dtype=object)
+    lowest = np.full(md.n_obs, np.nan)
+    highest = np.full(md.n_obs, np.nan)
+    failures = []
+
+    for i, (row, structure) in enumerate(
+            zip(md.obs_names, structures(md, source))):
+        systems[i] = ""
+        points[i] = ""
+        wyckoff[i] = ""
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                analyzer = SpacegroupAnalyzer(structure, symprec=symprec)
+                systems[i] = str(analyzer.get_crystal_system())
+                points[i] = str(analyzer.get_point_group_symbol())
+                symbols = list(
+                    analyzer.get_symmetrized_structure().wyckoff_symbols)
+                wyckoff[i] = ", ".join(str(w) for w in symbols)
+                wyckoff_count[i] = len(symbols)
+                try:
+                    orders[i] = float(
+                        SpaceGroup(analyzer.get_space_group_symbol()).order)
+                except Exception:
+                    orders[i] = float(len(analyzer.get_symmetry_operations()))
+                per_site = get_site_symmetries(structure)
+                sizes = [len(ops) for ops in per_site]
+                if sizes:
+                    lowest[i] = float(min(sizes))
+                    highest[i] = float(max(sizes))
+        except Exception as exc:
+            failures.append(f"{row}: {type(exc).__name__}: {exc}".split("\n")[0])
+
+    md.obs["crystal_system"] = systems.astype(str)
+    md.obs["point_group"] = points.astype(str)
+    md.obs["n_symmetry_operations"] = orders
+    md.obs["n_wyckoff"] = wyckoff_count
+    md.obs["wyckoff"] = wyckoff.astype(str)
+    md.obs["min_site_symmetry"] = lowest
+    md.obs["max_site_symmetry"] = highest
+    md.uns["symmetry"] = {"source": source, "symprec": float(symprec),
+                          "n_failed": len(failures), "failures": failures[:10]}
+    record(md, "pp.symmetry", source=source, symprec=symprec)

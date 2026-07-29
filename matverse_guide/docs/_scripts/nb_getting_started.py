@@ -87,6 +87,19 @@ ax = mv.pl.periodic_table(md, color="n_materials", label="materials containing")
 ax.set_title("the chemistry of this library")"""),
 
     ("markdown", """\
+And you can just look at one, which catches the mistakes a number will not
+show you — a slab built upside down, a cell that came out of a parser inside
+out."""),
+
+    ("code", """\
+ax = mv.pl.structure(md, "LiFePO4", backend="matplotlib")
+ax.set_title("LiFePO$_4$, projected along its thinnest axis")"""),
+
+    ("markdown", """\
+With `py3Dmol` installed the default backend is an interactive viewer instead.
+Neither replaces VESTA for real inspection — this is the quick look you take
+twenty times a day.
+
 Counts come from the **reduced** formula, so a supercell and its primitive cell
 occupy the same point in chemical space. Cell size lives in `obs['nsites']`.
 
@@ -101,6 +114,69 @@ mv.pp.describe(md)
 mv.pp.qc(md)
 
 md.obs[["name", "spacegroup", "formula", "nsites", "density", "is_valid"]]"""),
+
+    ("code", """\
+mv.pp.prototype(md)
+md.obs[["name", "spacegroup", "prototype_mineral", "strukturbericht"]]"""),
+
+    ("code", """\
+mv.pp.symmetry(md)
+md.obs[["name", "crystal_system", "point_group", "n_wyckoff", "wyckoff"]]"""),
+
+    ("code", """\
+mv.prop.frontier_orbitals(md)
+md.obs[["name", "homo_element", "homo_orbital", "lumo_element",
+        "lumo_orbital", "likely_metal"]]"""),
+
+    ("markdown", """\
+The cheapest possible statement about electronic structure: line up the atomic
+orbital energies of the elements present, and see which sits highest occupied
+and which lowest unoccupied. No calculator, no structure — only the composition.
+
+What it tells you is **which element controls each band edge**, and that is a
+real design handle. On SrTiO₃ it says O 2p and Ti 3d, the textbook perovskite
+answer, and it says exactly the same for BaTiO₃ — which is why substituting on
+the A site of a perovskite barely moves the gap and substituting on the B site
+moves it a lot.
+
+```{warning}
+`orbital_gap_estimate` is a **difference of atomic orbital energies**, not a
+band gap. No hybridisation, no crystal field, no Madelung potential, no
+structure — two polymorphs get the same answer, and NaCl comes out near 6 eV
+against a measured 8.5. Use it to sort a list before computing, never as a
+number.
+
+`likely_metal` is the more trustworthy column: "the frontier orbitals overlap"
+survives a lot of approximation.
+```"""),
+
+    ("markdown", """\
+`spacegroup` gives the symbol. This gives what the symbol *implies* — and
+`wyckoff` is the part worth reading.
+
+Wyckoff positions say how many **distinct** sites a structure has, and that
+number decides how much work everything downstream is: how many vacancies
+`mv.pp.defects` will enumerate, how many NMR environments to expect, how many
+independent parameters a refinement has. LiFePO₄ has eight, which is why the
+defect tutorial gets six inequivalent vacancies out of a 28-atom cell rather
+than twenty-eight.
+
+Two structures in the same space group with different Wyckoff sets are
+different structures."""),
+
+    ("markdown", """\
+A space group says which symmetries a structure has. A **prototype** says which
+structure it *is* — and the two are not the same question: Fm-3m covers
+rocksalt, face-centred cubic and half-Heusler alike, so a screen that groups by
+space group puts them in one bin.
+
+This is also what makes a generative model's output legible. "Novel composition
+in a known prototype" and "novel prototype" are different claims, and the second
+is rare.
+
+An unmatched structure gets an empty string rather than a guess — the AFLOW
+library is large but finite, and "not in it" is worth keeping distinct from a
+wrong label."""),
 
     ("markdown", """\
 `spacegroup` is determined from the deposited coordinates, not copied from a
@@ -219,17 +295,28 @@ Worth comparing against measured values rather than accepting:
 
 | | EMT | experiment |
 |---|---|---|
-| bulk modulus, Cu | 123 | 140 GPa |
-| bulk modulus, Ni | 157 | 180 GPa |
-| bulk modulus, Al | 35 | 76 GPa |
-| Debye temperature, Au | 162 | 165 K |
-| Debye temperature, Ag | 242 | 225 K |
-| Debye temperature, Al | 392 | 428 K |
+| bulk modulus, Cu | 135 | 140 GPa |
+| bulk modulus, Ni | 176 | 180 GPa |
+| bulk modulus, Ag | 100 | 101 GPa |
+| bulk modulus, Al | 40 | 76 GPa |
+| Debye temperature, Au | 176 | 165 K |
+| Debye temperature, Ag | 254 | 225 K |
+| Debye temperature, Al | 420 | 428 K |
 
 Good for the transition metals EMT was fitted to, and a factor of two out on
 aluminium's bulk modulus. That is the shape of the error a cheap potential
 makes, and the reason a screen ranked on it is a shortlist rather than an
 answer.
+
+```{note}
+Before v0.1.17 the copper entry read 123 GPa and the nickel entry 157. The
+difference is not a better potential: `mv.calc.relax` moved only the atomic
+positions, and the forces on an fcc metal vanish by symmetry, so nothing moved
+at all and every one of these properties was computed at the published
+room-temperature lattice parameter rather than at EMT's own minimum. Relaxing
+the cell moved five of the seven metals closer to experiment. Aluminium did not
+move much, because EMT's aluminium is wrong for a different reason.
+```
 
 The conductivities look far too small next to the 400 W/m/K a copper wire is
 sold on — but `mv.prop.thermal_conductivity` returns the **lattice**
@@ -259,9 +346,101 @@ ax.set_title("where the potential holds, and where it does not")
 ax.legend()"""),
 
     ("markdown", """\
-Aluminium is the outlier and the rest track. A plot makes that visible in a way
-the table above does not — EMT is not uniformly wrong, it is wrong about one
-element, which is a different thing to know."""),
+Aluminium is the outlier, platinum is high, and the middle five track closely.
+A plot makes that visible in a way the table does not — EMT is not uniformly
+wrong, it is wrong about particular elements, which is a different thing to
+know.
+
+## Two routes to the same number
+
+A bulk modulus is a curvature. `mv.prop.elastic` takes it in strain, from the
+stiffness tensor; `mv.prop.eos` takes it in volume, by compressing the cell and
+fitting an equation of state. They are the same quantity, so they have to
+agree — and because both live on the same object, checking is a subtraction."""),
+
+    ("code", """\
+mv.prop.eos(metals, level="emt", source="relaxed_emt")
+
+comparison = metals.obs[["name", "bulk_modulus_emt", "bulk_modulus_eos_emt",
+                         "bulk_modulus_derivative_emt",
+                         "equilibrium_volume_emt"]].round(2)
+comparison["disagreement_%"] = (
+    100 * (comparison["bulk_modulus_eos_emt"] - comparison["bulk_modulus_emt"])
+    / comparison["bulk_modulus_emt"]).round(2)
+comparison"""),
+
+    ("markdown", """\
+Within 1.1% across seven metals and two independent implementations, and under
+0.4% for six of them.
+
+That agreement is worth more as a diagnostic than as a reassurance. While
+`mv.calc.relax` was leaving the cell alone, these two columns differed by 9–12%
+and always in the same direction — the stiffness was being measured about a
+geometry under residual tensile stress, which softens it. Neither number looked
+wrong on its own. **The disagreement was the only visible symptom**, and it was
+visible only because both quantities sit on one object under names that say what
+they are.
+
+`mv.prop.eos` also returns what the elastic route cannot: the pressure
+derivative `B0'`, near 4 for most solids, and the equilibrium volume read off
+the fitted curve rather than off the optimiser.
+
+Aluminium's `B0'` comes out at 1.95 against a measured 4.4. Taken with a bulk
+modulus half the experimental value, that says EMT has the wrong *shape* for
+aluminium's energy–volume curve rather than merely the wrong curvature at one
+point — which is more than the bulk modulus alone could tell you.
+
+The curves themselves are an `obsm` block on a shared scale-factor grid, so
+they plot like any other curve."""),
+
+    ("code", """\
+ax = mv.pl.spectra(metals, "eos", levels=("emt",), rows=[0, 1, 4])
+ax.set_xlabel("volume scale factor $V/V_0$")
+ax.set_ylabel("energy (eV/atom)")
+ax.set_title("energy-volume curves")"""),
+
+    ("markdown", """\
+## Off the zero-kelvin hull
+
+A hull at 0 K is a hull at 0 K. `mv.prop.quasiharmonic` reuses that same
+energy-volume curve to get to finite temperature: the Debye model supplies a
+vibrational free energy at each volume, and the Gibbs free energy is minimised
+over volume at every temperature. The cell expands because the minimum
+moves."""),
+
+    ("code", """\
+mv.prop.quasiharmonic(metals, level="emt", source="relaxed_emt",
+                      t_max=900, poisson=0.34)
+
+metals.obs[["name", "thermal_expansion_qha_emt", "gruneisen_emt",
+            "debye_temperature_qha_emt"]].round(6)"""),
+
+    ("markdown", """\
+| volumetric expansion, /K | matverse | experiment |
+|---|---|---|
+| Cu | 4.5e-5 | 5.0e-5 |
+| Ag | 5.1e-5 | 5.7e-5 |
+| Al | 4.9e-5 | 6.9e-5 |
+
+```{warning}
+That column is **not** what pymatgen's `QuasiharmonicDebyeApprox` reports for
+the optimum volume. Its Gruneisen parameter is right — 1.91 for copper against
+a measured 1.96 — but the volume minimum it finds moves twelve times too
+little, giving 4.3e-6 /K for copper.
+
+`mv.prop.quasiharmonic` computes the expansion from the thermodynamic identity
+instead:
+
+$$\\alpha_V = \\frac{\\gamma\\, C_V}{B\\, V}$$
+
+with the model's own Gruneisen parameter, the bulk modulus fitted from the same
+E(V) points, and the Debye heat capacity. That is the version that agrees with
+experiment.
+
+The disagreement was findable because `B` from `mv.prop.eos` and `gamma` from
+the Debye model sit on one object under names that say what they are — the same
+reason the relaxation bug two sections up was findable.
+```"""),
 
     ("code", """\
 ax = mv.pl.spectra(metals, "phonon_dos", levels=("emt",), rows=[0, 1, 4],

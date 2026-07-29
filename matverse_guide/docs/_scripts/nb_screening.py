@@ -223,6 +223,138 @@ Note the level changed. Materials Project entries are PBE+U with fitted
 corrections; putting them on a hull with EMT energies is not a hull of anything,
 and `mv.thermo.hull` raises `LevelMismatch` rather than letting you.
 
+### The corrections, when the energies are your own
+
+"With fitted corrections" is doing a lot of work in that sentence. An energy
+that came back from your own VASP run has **not** been corrected, and putting it
+on a hull beside Materials Project entries that have been is the same class of
+error as mixing EMT with PBE — except that nothing about the column names says
+so.
+
+`mv.thermo.corrections` applies the published scheme and deposits the result as
+its own level, so the two can never be the same column."""),
+
+    ("code", """\
+from pymatgen.core import Lattice, Structure
+
+def cell(symbols):
+    return Structure(Lattice.cubic(5.0), symbols,
+                     [[0, 0, 0], [.5, .5, .5], [.25, .25, .25],
+                      [.5, 0, 0], [0, .5, 0]][:len(symbols)])
+
+oxides = mv.data.from_structures([cell(["Fe", "Fe", "O", "O", "O"]),
+                                  cell(["Al", "Al", "O", "O", "O"]),
+                                  cell(["Cu", "Cu"])])
+mv.pp.describe(oxides)
+oxides.obs["energy_pbe"] = [-50.0, -60.0, -10.0]      # as if read from VASP
+
+mv.thermo.corrections(oxides, level="pbe")
+oxides.obs[["formula", "energy_pbe", "energy_pbe-mp2020",
+            "correction_pbe-mp2020", "run_type_pbe-mp2020"]].round(3)"""),
+
+    ("markdown", """\
+Three rows, three different answers, none of them small.
+
+**Al₂O₃** gets −2.06 eV, which is exactly 3 × −0.687 — the oxide anion
+correction, once per oxygen. It fixes the known overbinding of the O₂ molecule
+that a formation energy is referenced against.
+
+**Fe₂O₃** gets −6.57 eV. The extra 4.5 eV is the +U correction on two irons, and
+it applies because MP would have run this calculation as GGA+U. `run_type` is
+inferred by MP's own rule — a transition metal from its table together with
+oxygen or fluorine — and recorded, rather than assumed.
+
+**Cu** gets nothing. An elemental metal has no anion to correct and no U.
+
+For scale: 6.6 eV per formula unit against the ~0.05 eV/atom threshold a screen
+calls "close to the hull". A hull built on the uncorrected column would not be
+slightly wrong.
+
+The corrected energy is `energy_pbe-mp2020`, not `energy_pbe`. That is the
+level-of-theory rule applied one step further along: a corrected energy is a
+different quantity, so it gets a different name and its own entry in
+`uns['levels']` recording what was done to it."""),
+
+    ("code", """\
+mv.level_info(oxides, "pbe-mp2020")"""),
+
+    ("markdown", """\
+### What it would cost, and whether you could get it
+
+Two screening axes that need no calculator at all, and that end more projects
+than any energy does."""),
+
+    ("code", """\
+mv.prop.cost(oxides)
+mv.prop.supply_risk(oxides)
+
+oxides.obs[["formula", "cost_per_kg", "hhi_production", "hhi_reserve",
+            "supply_risk"]].round(2)"""),
+
+    ("markdown", """\
+`cost_per_kg` is raw-material cost from elemental prices — not synthesis, not
+yield. It will not tell you what a route costs. It will tell you that platinum
+oxide is four orders of magnitude dearer than iron oxide, and no amount of
+process optimisation closes that.
+
+`hhi_production` and `hhi_reserve` are Herfindahl-Hirschman indices: how
+concentrated the world's production, and the world's reserves, are in a few
+countries. That is a **different** risk from price. Cobalt and the rare earths
+are affordable and concentrated, which is exactly what makes them awkward.
+
+Both are ordinary `obs` columns, so a Pareto front over cost and stability is
+one call:"""),
+
+    ("code", """\
+mv.prop.neutron(oxides, two_theta=(20, 80), step=0.1)
+mv.grid_of(oxides, "neutron").shape, oxides.obsm["neutron_calc"].shape"""),
+
+    ("markdown", """\
+And since the diffraction pattern is on the same grid convention, a neutron
+pattern is one more `obsm` block. Neutrons scatter off nuclei rather than
+electrons, so they see lithium and oxygen that X-rays barely register — for a
+battery cathode, this is the pattern that locates the lithium."""),
+
+    ("markdown", """\
+### Stable, and stable *when*
+
+`mv.thermo.hull` says whether a phase is stable. `mv.thermo.chempot_diagram`
+says under what conditions — which is the question that decides whether it can
+be synthesised at all."""),
+
+    ("code", """\
+alni = mv.data.from_structures([
+    l12("Al", "Ni", 3.78),          # Al3Ni
+    b2("Al", "Ni", 2.89),           # AlNi
+    mv.structures(elemental)[0],    # Al
+    mv.structures(elemental)[2],    # Ni
+])
+mv.pp.describe(alni)
+alni.obs["energy_demo"] = [-1.8, -1.4, 0.0, 0.0]   # formation energies
+
+mv.thermo.chempot_diagram(alni, level="demo")
+alni.obs[["formula", "energy_demo", "chempot_stable_demo",
+          "chempot_window_demo"]].round(3)"""),
+
+    ("markdown", """\
+`chempot_window` is the extent of the region in chemical potential space where
+each phase wins. **AlNi has three times the window of Al₃Ni**, and that is the
+screening claim: a phase stable only in a sliver needs the growth atmosphere
+controlled to match, and one with a wide domain forms over a range of
+conditions.
+
+The numbers are checkable against the energies they came from. Al₃Ni forms at
+−1.8 eV, so its domain reaches μ(Ni) = −1.8 where μ(Al) = 0; AlNi forms at −1.4,
+so their shared boundary sits where μ(Al) + μ(Ni) = −1.4.
+
+```{note}
+The elemental references come back with a window of **zero and `open = True`**.
+Their domains run to the artificial floor along the other axis, so a width there
+would be a plotting choice rather than a physical one. A phase that is never
+stable also gets zero — but with `open = False`, and it has no domain at all.
+Two different zeros, and `uns['chempot_diagram']` tells them apart.
+```
+
 ### The hull is not the only stability question
 
 A material can sit on the solid-state hull and still dissolve the moment it

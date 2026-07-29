@@ -137,11 +137,20 @@ def _area(slab) -> float:
     description="Compute the surface energy of every slab against the bulk "
                 "energy per atom of the material it was cut from.",
     requires={"obs": ["energy_{level}", "parent", "slab_area"]},
-    produces={"obs": ["surface_energy_{level}"]},
+    produces={"obs": ["surface_energy_{level}",
+                      "surface_energy_{level}_off_stoichiometry"]},
     prerequisites=["mv.calc.relax", "mv.surf.slabs"],
     examples=["mv.surf.surface_energy(facets, bulk=md, level='emt')"],
-    related=["mv.surf.slabs", "mv.surf.wulff"],
-    notes="Takes the bulk dataset as an argument rather than guessing. The "
+    related=["mv.surf.slabs", "mv.surf.wulff",
+             "mv.surf.surface_energy_chempot"],
+    notes="Only defined for a slab whose composition is the bulk formula times "
+          "an integer. A slab that is off-stoichiometry has leftover atoms "
+          "whose energy depends on the reservoir they came from, so this "
+          "function marks those NaN rather than returning a number that looks "
+          "like a surface energy and is not one — "
+          "mv.surf.surface_energy_chempot handles them. mv.surf.slabs keeps "
+          "stoichiometry by default; symmetrize=True is what breaks it.\n\n"
+          "Takes the bulk dataset as an argument rather than guessing. The "
           "reference must be the same material at the same level of theory, and "
           "getting it wrong shifts every surface energy by a constant — "
           "invisible in a ranking, fatal in a Wulff construction, which is why "
@@ -168,21 +177,200 @@ def surface_energy(facets: AnnData, bulk: AnnData, level: str = "emt",
     slab_energy = facets.obs[slab_key].to_numpy(dtype=float)
     area = facets.obs["slab_area"].to_numpy(dtype=float)
     parents = facets.obs["parent"].astype(str).to_numpy()
-    counts = np.array([len(s) for s in structures(facets, "input")],
-                      dtype=float)
+    slabs_ = list(structures(facets, "input"))
+    counts = np.array([len(s) for s in slabs_], dtype=float)
+
+    # E_slab - N * e_bulk only removes the bulk cost if the slab is the bulk
+    # formula times an integer. A slab that is off-stoichiometry has left atoms
+    # over, and their energy has no business being called a surface energy - it
+    # depends on where those atoms came from, which is a chemical potential.
+    # SlabGenerator keeps stoichiometry by default, but symmetrize=True deletes
+    # sites to make the two faces equivalent and routinely breaks it: on rutile
+    # (100) it returns Ti3O8 and Ti4O6 beside the stoichiometric Ti4O8.
+    bulk_formula = {str(name_): st.composition.reduced_composition
+                    for name_, st in zip(map(str, bulk.obs_names),
+                                         structures(bulk, "input"))}
+    off = np.zeros(facets.n_obs, dtype=bool)
+    for i, slab in enumerate(slabs_):
+        formula = bulk_formula.get(parents[i])
+        if formula is None:
+            continue
+        composition = slab.composition
+        ratios = [composition[el] / formula[el] for el in formula]
+        off[i] = (max(ratios) - min(ratios)) > 1e-6
 
     per_atom = np.array([reference.get(p, np.nan) for p in parents])
     with np.errstate(invalid="ignore", divide="ignore"):
         gamma = ((slab_energy - counts * per_atom) / (2.0 * area)
                  * _EV_PER_A2_TO_J_PER_M2)
+    gamma[off] = np.nan
 
     name = key_added or f"surface_energy_{level}"
     facets.obs[name] = gamma
+    facets.obs[f"{name}_off_stoichiometry"] = off
     facets.uns.setdefault("surface_energy", {})[level] = {
         "unit": "J/m^2", "reference": bulk_key,
         "n_unmatched": int(np.isnan(per_atom).sum()),
+        "n_off_stoichiometry": int(off.sum()),
     }
+    if off.any():
+        import warnings as _warnings
+        _warnings.warn(
+            f"{int(off.sum())} of {facets.n_obs} slabs are not the bulk "
+            f"formula times an integer, so a surface energy against the bulk "
+            f"energy per atom is not defined for them; "
+            f"obs[{name!r}] is NaN there. Use "
+            f"mv.surf.surface_energy_chempot, which references the leftover "
+            f"atoms to an elemental reservoir.",
+            stacklevel=2)
     record(facets, "surf.surface_energy", level=level, key_added=name)
+
+
+@register_function(
+    aliases=["surface energy chempot", "non-stoichiometric surface energy",
+             "off-stoichiometry surface energy", "surface excess",
+             "surface phase diagram", "gamma vs chemical potential"],
+    category="surf",
+    description="Compute the surface energy of slabs that are off the bulk "
+                "stoichiometry, referencing the leftover atoms to elemental "
+                "reservoirs at a chosen chemical potential.",
+    requires={"facets.obs": ["energy_{level}", "parent", "slab_area"],
+              "bulk.obs": ["energy_{level}"],
+              "refs.obs": ["energy_{level}"]},
+    produces={"facets.obs": ["surface_energy_{level}"]},
+    prerequisites=["mv.surf.slabs", "mv.calc.energy"],
+    examples=["mv.surf.surface_energy_chempot(facets, bulk=md, refs=elemental,"
+              " level='emt')",
+              "mv.surf.surface_energy_chempot(facets, bulk=md, refs=elemental,"
+              " chempot={'Au': -0.3})"],
+    related=["mv.surf.surface_energy", "mv.surf.slabs", "mv.surf.wulff"],
+    notes="A slab off the bulk stoichiometry has no single surface energy. It "
+          "has a line: gamma(dmu) = gamma_0 - Gamma * dmu, where Gamma is the "
+          "surface excess of the element in surplus and dmu is how far that "
+          "element's reservoir sits below its elemental reference. This "
+          "deposits gamma at the chemical potential you name (zero, meaning "
+          "the element-rich limit, if you name none) and the excess Gamma "
+          "beside it, so the line can be redrawn anywhere without recomputing "
+          "an energy.\n\n"
+          "The excess lands in obs['surface_excess_<element>_<level>'], one "
+          "column per element that any slab is in surplus or deficit of, in "
+          "J/m^2 per eV. It is not in `produces` because it is not always "
+          "produced: which elements appear is a property of the slabs handed "
+          "in, and a fully stoichiometric set makes none of these columns at "
+          "all. A claim that holds only sometimes is worse than no claim.\n\n"
+          "Which facet wins is a function of dmu, not a fact about the "
+          "material: the ordering of two terminations can invert between the "
+          "metal-rich and the oxygen-rich end of the same phase diagram. A "
+          "Wulff shape built from one column is a shape at one chemical "
+          "potential.\n\n"
+          "Stoichiometric slabs are handled too and agree with "
+          "mv.surf.surface_energy, so a mixed set can go through this in one "
+          "call.",
+)
+def surface_energy_chempot(facets: AnnData, bulk: AnnData, refs: AnnData,
+                           level: str = "emt", chempot: dict | None = None,
+                           key_added: str | None = None) -> None:
+    """Surface energy of off-stoichiometric slabs, at a chemical potential."""
+    from pymatgen.analysis.surface_analysis import SlabEntry
+    from pymatgen.entries.computed_entries import ComputedStructureEntry
+
+    energy_key = f"energy_{level}"
+    for obj, label in ((facets, "slabs"), (bulk, "bulk"), (refs, "refs")):
+        if energy_key not in obj.obs:
+            raise ValueError(f"obs[{energy_key!r}] absent on the {label} "
+                             f"object; run mv.calc.energy({label}, "
+                             f"level={level!r}) first")
+    for column in ("parent", "slab_area"):
+        if column not in facets.obs:
+            raise ValueError(f"obs[{column!r}] absent; these slabs did not "
+                             f"come from mv.surf.slabs")
+
+    # One elemental reservoir per element, cheapest per atom if several are
+    # given: a reservoir is the phase the atoms would leave to, and that is the
+    # stable elemental form, not whichever polymorph happened to be listed
+    # first.
+    reservoir: dict[str, ComputedStructureEntry] = {}
+    for name, structure, energy in zip(map(str, refs.obs_names),
+                                       structures(refs, "input"),
+                                       refs.obs[energy_key].to_numpy(float)):
+        composition = structure.composition
+        if not composition.is_element:
+            raise ValueError(f"refs row {name!r} is {composition.reduced_formula}, "
+                             f"not an element; the reservoirs must be "
+                             f"elemental structures")
+        element = str(next(iter(composition.elements)))
+        entry = ComputedStructureEntry(structure, float(energy))
+        current = reservoir.get(element)
+        if current is None or (float(energy) / len(structure)
+                               < current.energy / len(current.structure)):
+            reservoir[element] = entry
+
+    bulk_entry = {
+        str(name): ComputedStructureEntry(structure, float(energy))
+        for name, structure, energy in zip(map(str, bulk.obs_names),
+                                           structures(bulk, "input"),
+                                           bulk.obs[energy_key].to_numpy(float))
+    }
+
+    shifts = {str(k): float(v) for k, v in (chempot or {}).items()}
+    parents = facets.obs["parent"].astype(str).to_numpy()
+    energies = facets.obs[energy_key].to_numpy(dtype=float)
+    gamma = np.full(facets.n_obs, np.nan)
+    excess: dict[str, np.ndarray] = {}
+    unresolved: list[str] = []
+
+    for i, slab in enumerate(structures(facets, "input")):
+        ucell = bulk_entry.get(parents[i])
+        if ucell is None:
+            unresolved.append(f"{parents[i]}: no bulk row")
+            continue
+        needed = {str(el) for el in slab.composition.elements}
+        missing = sorted(needed - set(reservoir))
+        if missing:
+            unresolved.append(f"{parents[i]}: no reservoir for "
+                              f"{', '.join(missing)}")
+            continue
+        miller = tuple(int(v) for v in str(facets.obs["miller"].iloc[i]).split("_"))
+        entry = SlabEntry(slab, float(energies[i]), miller)
+        try:
+            value = entry.surface_energy(
+                ucell, ref_entries=[reservoir[el] for el in sorted(needed)])
+        except Exception as exc:
+            unresolved.append(f"{parents[i]} {miller}: "
+                              f"{type(exc).__name__}: {exc}")
+            continue
+
+        # Stoichiometric slabs come back as a plain float; off-stoichiometric
+        # ones as gamma_0 + coefficient * delu_<element>, one symbol per
+        # element in surplus or deficit.
+        symbols = getattr(value, "free_symbols", set())
+        if symbols:
+            substitution = {}
+            for symbol in symbols:
+                element = str(symbol).replace("delu_", "")
+                substitution[symbol] = shifts.get(element, 0.0)
+                column = excess.setdefault(
+                    element, np.full(facets.n_obs, np.nan))
+                column[i] = -float(value.coeff(symbol)) * _EV_PER_A2_TO_J_PER_M2
+            value = value.subs(substitution)
+        gamma[i] = float(value) * _EV_PER_A2_TO_J_PER_M2
+
+    name = key_added or f"surface_energy_{level}"
+    facets.obs[name] = gamma
+    for element, column in excess.items():
+        facets.obs[f"surface_excess_{element}_{level}"] = column
+    facets.uns.setdefault("surface_energy_chempot", {})[level] = {
+        "unit": "J/m^2", "excess_unit": "J/m^2 per eV",
+        "chempot": shifts,
+        "reservoirs": {el: e.composition.reduced_formula
+                       for el, e in reservoir.items()},
+        "n_off_stoichiometry": int(
+            np.any([~np.isnan(c) for c in excess.values()], axis=0).sum()
+            if excess else 0),
+        "errors": unresolved,
+    }
+    record(facets, "surf.surface_energy_chempot", level=level,
+           chempot=shifts, key_added=name)
 
 
 @register_function(
@@ -193,10 +381,9 @@ def surface_energy(facets: AnnData, bulk: AnnData, level: str = "emt",
                 "of a material's facets, and record which facets survive on it "
                 "and in what proportion.",
     requires={"obs": ["surface_energy_{level}", "parent", "miller"]},
-    produces={"obs": ["wulff_area_fraction_{level}",
-                      "wulff_effective_radius_{level}",
-                      "wulff_shape_factor_{level}"],
-              "uns": ["wulff"]},
+    produces={"facets.obs": ["wulff_area_fraction_{level}"],
+              "bulk.obs": ["wulff_effective_radius_{level}",
+                           "wulff_shape_factor_{level}"]},
     prerequisites=["mv.surf.surface_energy"],
     examples=["mv.surf.wulff(facets, bulk=md, level='emt')"],
     related=["mv.surf.surface_energy", "mv.surf.slabs"],

@@ -263,4 +263,262 @@ trajectory you cannot defend.
 [Defects and diffusion](defects_and_diffusion.ipynb) reaches diffusion by the
 static route, and explains why the two are complementary rather than redundant.
 ```"""),
+
+    ("markdown", """\
+## Where the atoms spend their time
+
+`mv.prop.rdf` takes one static structure and reports where the atoms *are*.
+`mv.md.rdf` takes a trajectory and reports where they **spend their time**. For
+a crystal near 0 K the two converge; for a liquid, a superionic conductor, or
+anything above half its melting point they do not — and that difference is the
+thermal broadening that makes a measured diffraction pattern wider than a
+simulated one.
+
+The trajectory is an argument, because `mv.md.run` deliberately does not keep
+one: a screening library that materialised every frame would spend its memory on
+positions nobody reads."""),
+
+    ("code", """\
+from pymatgen.core import Lattice, Structure
+
+cell = Structure(Lattice.cubic(4.2), ["Li", "Cl", "Cl", "Cl"],
+                 [[0, 0, 0], [.5, .5, 0], [.5, 0, .5], [0, .5, .5]])
+one = mv.data.from_structures([cell])
+mv.pp.describe(one)
+
+# Stand-in for a real trajectory: the same cell, jittered over 40 frames.
+frames = np.tile(np.array(cell.frac_coords), (40, 1, 1))
+frames = frames + np.random.default_rng(0).normal(0, 0.01, frames.shape)
+
+try:
+    mv.md.rdf(one, frames, species="Li", r_max=8.0)
+    result = one.obs[["formula", "first_shell_md",
+                      "first_shell_coordination_md"]].round(3)
+except ImportError as exc:
+    result = str(exc)          # pymatgen-analysis-diffusion is an extra
+result"""),
+
+    ("markdown", """\
+The first peak lands at 2.96 Å against a nearest-neighbour distance of 2.97, and
+the coordination number comes out at **11.7 against a true 12** — the shortfall
+being the Gaussian smearing spilling past the cutoff.
+
+```{note}
+That integral is computed here from its definition,
+$n(r) = \\int 4\\pi r^2 \\rho\\, g(r)\\, dr$, rather than taken from pymatgen's
+`coordination_number`, which reports the count **per reference index**. On this
+cell — twelve neighbours spread over three reference sites — pymatgen returns
+4.0. Four is not a coordination number for that cell, and a column called
+`first_shell_coordination` had better be one.
+```"""),
+
+    ("markdown", """\
+## How much of the cell do they visit?
+
+Before either of the next two questions there is a blunter one: how much of the
+box do the mobile ions actually go into? Histogram their positions over the run
+and the answer is a probability density — tight blobs at the lattice sites for a
+normal solid, smeared out along the channels for a superionic conductor.
+
+`mv.md.occupancy` reports it as three scalars. The one to read is
+`occupied_fraction`: the fraction of the cell holding 90% of the probability."""),
+
+    ("code", """\
+occ = mv.data.from_structures([Structure(
+    Lattice.cubic(5.0), ["Li"] * 4,
+    [[0, 0, 0], [0, .5, .5], [.5, 0, .5], [.5, .5, 0]])])
+sites_base = np.array(mv.structures(occ, "input")[0].frac_coords)
+gen = np.random.default_rng(0)
+
+runs = {
+    "frozen": sites_base[None].repeat(400, axis=0),
+    "tight": (sites_base[None] + gen.normal(0, 0.01, (400, 4, 3))) % 1.0,
+    "floppy": (sites_base[None] + gen.normal(0, 0.05, (400, 4, 3))) % 1.0,
+    "liquid": gen.random((4000, 4, 3)),
+}
+for label, traj in runs.items():
+    mv.md.occupancy(occ, traj, species="Li", bins=8, key_added=label)
+
+occ.obs[[f"occupied_fraction_{k}" for k in runs]
+        + [f"occupancy_entropy_{k}" for k in runs]].round(4).T"""),
+
+    ("markdown", """\
+Monotonic, from four ions pinned in four voxels to a liquid that has forgotten
+where the sites were. The liquid stops at **0.87 rather than 1.0**, which is not
+an error: covering 90% of a uniform probability still leaves out the tail of
+voxels that happened to be visited least.
+
+Now the part worth being careful about, because it is the way this number lies.
+
+It is a histogram, so it says something about the material only when there are
+enough samples to fill the grid. Ask for a finer grid than the run can populate
+and a liquid will report as beautifully localised — not because the ions stayed
+put but because most voxels were never visited at all:"""),
+
+    ("code", """\
+import warnings
+
+with warnings.catch_warnings(record=True) as caught:
+    warnings.simplefilter("always")
+    mv.md.occupancy(occ, gen.random((100, 4, 3)), species="Li", bins=24,
+                    key_added="undersampled")
+
+print(f"same uniform distribution, finer grid: "
+      f"{float(occ.obs['occupied_fraction_undersampled'].iloc[0]):.3f}")
+print(f"samples per voxel: "
+      f"{occ.uns['occupancy']['undersampled']['samples_per_voxel'][0]:.2f}")
+print(str(caught[-1].message)[:160] if caught else "no warning")"""),
+
+    ("markdown", """\
+0.87 became 0.03 with no change to the physics. That is why the function warns
+below about five samples per voxel and records the sampling density in `uns`
+rather than handing back the number quietly.
+
+The practical consequence: **compare these values between runs of the same
+length on the same grid.** Across different ones they are not comparable, and no
+normalisation makes them so."""),
+
+    ("markdown", """\
+## The shape of the motion
+
+A diffusivity is one number and it averages over everything. The van Hove
+correlation function keeps the shape.
+
+Its **self** part is the distribution of how far one atom moved in a time `dt`.
+Its **distinct** part is where the *other* atoms were relative to it — and at
+`dt = 0` that is exactly the radial distribution function, which is the identity
+worth checking rather than trusting."""),
+
+    ("code", """\
+from pymatgen.core import Lattice, Structure
+
+salt = Structure(Lattice.cubic(4.2), ["Li", "Cl", "Cl", "Cl"],
+                 [[0, 0, 0], [.5, .5, 0], [.5, 0, .5], [0, .5, .5]])
+salt.make_supercell([3, 3, 3])
+vh = mv.data.from_structures([salt])
+coords = np.array(salt.frac_coords)
+
+mv.md.van_hove(vh, coords[None].repeat(3, axis=0), dt=0, r_max=8.0,
+               n_grid=401, sigma=0.05, level="static")
+
+r = mv.grid_of(vh, "van_hove_distinct")
+g_d = vh.obsm["van_hove_distinct_static"][0]
+rho = len(salt) / salt.lattice.volume
+
+# int 4 pi r^2 rho G_d dr out to R is the number of neighbours within R
+for radius in (3.5, 5.0, 6.5):
+    inside = r <= radius
+    counted = np.trapezoid(4 * np.pi * r[inside] ** 2 * rho * g_d[inside],
+                           r[inside])
+    actual = np.mean([len(salt.get_neighbors(s, radius)) for s in salt])
+    print(f"R = {radius} A   integral {counted:6.2f}   actual {actual:6.2f}")"""),
+
+    ("markdown", """\
+Twelve, eighteen, fifty-four — the neighbour counts of a rocksalt lattice,
+recovered from the correlation function by integration. The small excess is the
+Gaussian smearing spilling past each cutoff, the same effect that puts
+`first_shell_coordination` at 11.7 rather than 12 above.
+
+That is what fixes the normalisation. It is easy to write a van Hove function
+whose *shape* is right and whose scale is off by a power of r or a factor of N,
+and nothing about the plot would tell you.
+
+Now the self part, which is where the interesting shape lives:"""),
+
+    ("code", """\
+rng = np.random.default_rng(0)
+wobble = (coords[None] + rng.normal(0, 0.01, (20, len(salt), 3))) % 1.0
+
+# and the same thing with six ions displaced by one nearest-neighbour vector
+jumped = wobble.copy()
+jumped[10:, :6, :] = (wobble[10:, :6, :] + np.array([.5, .5, 0]) / 3) % 1.0
+
+mv.md.van_hove(vh, wobble, dt=15, r_max=8.0, n_grid=401, sigma=0.1,
+               level="rattling")
+mv.md.van_hove(vh, jumped, dt=15, r_max=8.0, n_grid=401, sigma=0.1,
+               level="hopping")
+
+vh.obs[["van_hove_rms_rattling", "van_hove_peak_rattling",
+        "van_hove_jump_rattling", "van_hove_rms_hopping",
+        "van_hove_peak_hopping", "van_hove_jump_hopping"]].round(3)"""),
+
+    ("markdown", """\
+Two things to read.
+
+`van_hove_peak` is the **most probable** displacement, and it is not zero even
+for a solid that only vibrates. A shell at radius $r$ has area $4\pi r^2$, so
+the shell volume beats the falling Gaussian and the mode sits near $\sqrt{2}$
+times the one-dimensional amplitude. A van Hove function peaking at zero would
+mean the $r^2$ weighting had been dropped somewhere.
+
+`van_hove_jump` is the outermost local maximum, and it is **NaN for the
+rattling run and 3.0 Å for the hopping one** — the nearest-neighbour distance
+of this lattice is $a/\\sqrt{2} = 2.97$ Å, and the reported value sits one grid
+point away because the curve was smeared with $\\sigma = 0.1$ Å. Six ions in a hundred and eight moved; they contribute a few
+percent of the weight and never come close to outranking the vibrational peak,
+which is why this is found by position rather than by height.
+
+That is the distinction a diffusivity cannot draw. Both runs have a raised
+mean-squared displacement. Only one of them is transport."""),
+
+    ("markdown", """\
+## Rattling or hopping?
+
+Both raise the mean-squared displacement, and only one of them is diffusion. An
+MSD cannot separate an ion vibrating harder in the same well from an ion moving
+between wells — it reports the same larger number either way.
+
+`mv.md.sites` clusters the sampled positions instead, so the two come apart.
+`md_site_spread` is the RMS distance from a position to the centre of its own
+site, in ångströms, which is a thermal vibration amplitude.
+`md_site_visits` is the mean number of distinct sites one atom was found at:
+**1.0 means nothing hopped.**"""),
+
+    ("code", """\
+from pymatgen.core import Lattice, Structure
+
+# Four lithium on an fcc lattice, so there are four sites to be found and
+# four ions to find them. The LiCl cell above has a single Li, which cannot
+# show the difference between one ion hopping and none.
+sites_cell = Structure(Lattice.cubic(5.0), ["Li"] * 4,
+                       [[0, 0, 0], [0, .5, .5], [.5, 0, .5], [.5, .5, 0]])
+four = mv.data.from_structures([sites_cell])
+
+base = np.array(sites_cell.frac_coords)
+rng = np.random.default_rng(0)
+still = (base[None] + rng.normal(0, 0.01, (40, 4, 3))) % 1.0
+
+# Move one ion to a neighbouring site half way through the run, and change
+# nothing else — same cell, same vibration amplitude, one hop.
+hopped = still.copy()
+hopped[20:, 0, :] = base[1] + rng.normal(0, 0.01, (20, 3))
+
+try:
+    mv.md.sites(four, still, species="Li", key_added="still")
+    mv.md.sites(four, hopped % 1.0, species="Li", key_added="hopped")
+    result = four.obs[["md_sites_still", "md_site_spread_still",
+                       "md_site_visits_still", "md_sites_hopped",
+                       "md_site_spread_hopped",
+                       "md_site_visits_hopped"]].round(3)
+except ImportError as exc:
+    result = str(exc)          # pymatgen-analysis-diffusion is an extra
+result"""),
+
+    ("markdown", """\
+The vibration amplitude is unchanged between the two runs, because it *is*
+unchanged — the same noise was added to both. What moved is the visit count, and
+it moved by exactly the amount it should: one ion of four found two sites
+instead of one, so the mean over four ions is (2+1+1+1)/4 = **1.25**.
+
+That is the number an MSD cannot give you. Read the two together: a large spread
+with visits near 1.0 is a hot, soft, non-conducting solid, and a small spread
+with visits above 1.0 is a well-ordered ionic conductor doing its job.
+
+```{note}
+`n_sites` defaults to the number of atoms of that species in the cell, which is
+right when each ion has its own site and wrong for an interstitial mechanism
+where there are more wells than ions. k-means needs the count in advance and
+cannot discover it, so it is a parameter rather than a result — if you expect
+interstitials, say how many.
+```"""),
 ]

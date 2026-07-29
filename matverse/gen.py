@@ -333,4 +333,402 @@ def _plausible(structure) -> bool:
         return True
 
 
-__all__ = ["validate", "substitute", "DEFAULTS"]
+__all__ = ["validate", "substitute", "alloy_pairs", "predict_substitutions",
+           "predict_dopants", "predict_hosts", "DEFAULTS"]
+
+
+@register_function(
+    aliases=["predict substitutions", "substitution probability",
+             "likely substitutions", "data mined substitution",
+             "probabilistic substitution", "suggest substitutions"],
+    category="gen",
+    description="Propose element substitutions ranked by how often they occur "
+                "in known compounds, and return the candidates as a new "
+                "dataset with the probability attached.",
+    requires={"structures": ["{source}"]},
+    produces={"obs": ["parent", "substitution", "substitution_probability"],
+              "structures": ["input"]},
+    prerequisites=["mv.transform.oxidation_states"],
+    examples=["cand = mv.gen.predict_substitutions(md, source='oxidized')",
+              "cand = mv.gen.predict_substitutions(md, source='oxidized', "
+              "n=20, threshold=1e-3)"],
+    related=["mv.gen.substitute", "mv.transform.oxidation_states",
+             "mv.gen.validate"],
+    notes="mv.gen.substitute enumerates the swaps you name; this ranks the "
+          "swaps you did not think of. The probabilities come from the "
+          "data-mined ionic substitution model of Hautier et al., which asks "
+          "how often two species replace one another across the ICSD rather "
+          "than whether their radii match.\n\n"
+          "It needs **oxidation states**, because the model is defined over "
+          "ionic species rather than elements — Fe2+ and Fe3+ substitute "
+          "differently and the whole point is the distinction. Run "
+          "mv.transform.oxidation_states first and pass its variant as source; "
+          "a structure without them raises rather than guessing neutral.\n\n"
+          "A probability here is a prior from what has been made before. It "
+          "says nothing about whether a particular substitution is stable in "
+          "this structure, which is what the hull is for — the intended use is "
+          "to generate candidates worth relaxing, not to rank them.",
+)
+def predict_substitutions(md: AnnData, source: str = "input", n: int = 10,
+                          threshold: float = 1e-3) -> AnnData:
+    """Ranked substitution candidates as a new dataset."""
+    from pymatgen.analysis.structure_prediction.substitution_probability import (
+        SubstitutionPredictor)
+    from pymatgen.core import Species
+
+    from .data import from_structures
+
+    predictor = SubstitutionPredictor(threshold=threshold)
+    built, parents, swaps, probabilities = [], [], [], []
+    unoxidised = []
+
+    for row, structure in zip(md.obs_names, structures(md, source)):
+        species = sorted({str(site.specie) for site in structure})
+        if not all(getattr(site.specie, "oxi_state", None) is not None
+                   for site in structure):
+            unoxidised.append(str(row))
+            continue
+        try:
+            predictions = predictor.list_prediction(species,
+                                                    to_this_composition=False)
+        except Exception:
+            continue
+        predictions.sort(key=lambda p: -p["probability"])
+        for prediction in predictions[:n]:
+            mapping = {str(k): v for k, v in prediction["substitutions"].items()}
+            if all(str(k) == str(v) for k, v in mapping.items()):
+                continue                       # the identity is not a candidate
+            candidate = structure.copy()
+            try:
+                candidate.replace_species(
+                    {Species.from_str(k): v for k, v in mapping.items()})
+            except Exception:
+                continue
+            built.append(candidate)
+            parents.append(str(row))
+            swaps.append(", ".join(f"{k}->{v}" for k, v in mapping.items()
+                                   if str(k) != str(v)))
+            probabilities.append(float(prediction["probability"]))
+
+    if unoxidised:
+        raise ValueError(
+            f"{len(unoxidised)} structure(s) carry no oxidation states, and "
+            f"the substitution model is defined over ionic species rather "
+            f"than elements. Run mv.transform.oxidation_states(md) and pass "
+            f"source='oxidized'. Offending rows: {unoxidised[:5]}")
+    if not built:
+        raise ValueError(
+            f"no substitution cleared threshold={threshold}; lower it, or "
+            f"check that the species in this structure appear in the "
+            f"data-mined table at all")
+
+    out = from_structures(built, obs=pd.DataFrame({
+        "parent": parents,
+        "substitution": swaps,
+        "substitution_probability": probabilities,
+    }))
+    out.uns["predict_substitutions"] = {
+        "source": source, "threshold": float(threshold), "n_per_parent": int(n),
+        "model": "Hautier data-mined ionic substitution",
+    }
+    record(out, "gen.predict_substitutions", source=source, n=n,
+           threshold=threshold)
+    return out
+
+
+@register_function(
+    aliases=["predict dopants", "dopants", "n-type dopant", "p-type dopant",
+             "doping candidates", "which dopant"],
+    category="gen",
+    description="Rank likely n-type and p-type dopants for every material from "
+                "the same data-mined substitution probabilities.",
+    requires={"structures": ["{source}"]},
+    produces={"obs": ["n_type_dopant", "n_type_probability",
+                      "p_type_dopant", "p_type_probability"],
+              "uns": ["dopants"]},
+    prerequisites=["mv.transform.oxidation_states"],
+    examples=["mv.gen.predict_dopants(md, source='oxidized')",
+              "mv.gen.predict_dopants(md, source='oxidized', n=10)"],
+    related=["mv.gen.predict_substitutions", "mv.disorder.dope",
+             "mv.transform.oxidation_states"],
+    notes="n-type means the dopant carries more charge than the site it "
+          "replaces and p-type less, so the classification is arithmetic on "
+          "oxidation states rather than a calculation of where the level "
+          "lands. Whether the dopant is actually shallow, soluble, or "
+          "compensated by a native defect is not decided here — "
+          "mv.thermo.defect_formation is.\n\n"
+          "The top few per material go into obs so a screen can reach them; "
+          "the full ranked list stays in uns['dopants'], because the second "
+          "and third choices are usually the interesting ones.\n\n"
+          "mv.disorder.dope builds the doped supercells once you have chosen. "
+          "This chooses.",
+)
+def predict_dopants(md: AnnData, source: str = "input", n: int = 5,
+                    threshold: float = 1e-3) -> None:
+    """Ranked dopants per material. Deposits; returns ``None``."""
+    from pymatgen.analysis.structure_prediction.dopant_predictor import (
+        get_dopants_from_substitution_probabilities)
+
+    best_n = np.empty(md.n_obs, dtype=object)
+    best_p = np.empty(md.n_obs, dtype=object)
+    prob_n = np.full(md.n_obs, np.nan)
+    prob_p = np.full(md.n_obs, np.nan)
+    detail: dict = {}
+    failed = 0
+
+    for i, (row, structure) in enumerate(
+            zip(md.obs_names, structures(md, source))):
+        best_n[i] = ""
+        best_p[i] = ""
+        if not all(getattr(site.specie, "oxi_state", None) is not None
+                   for site in structure):
+            failed += 1
+            continue
+        try:
+            ranked = get_dopants_from_substitution_probabilities(
+                structure, num_dopants=n, threshold=threshold)
+        except Exception:
+            failed += 1
+            continue
+        entry = {}
+        for kind, target, probability in (("n_type", best_n, prob_n),
+                                          ("p_type", best_p, prob_p)):
+            candidates = ranked.get(kind) or []
+            entry[kind] = [
+                {"dopant": str(c["dopant_species"]),
+                 "replaces": str(c.get("original_species", "")),
+                 "probability": float(c["probability"])}
+                for c in candidates]
+            if candidates:
+                target[i] = str(candidates[0]["dopant_species"])
+                probability[i] = float(candidates[0]["probability"])
+        detail[str(row)] = entry
+
+    md.obs["n_type_dopant"] = best_n.astype(str)
+    md.obs["n_type_probability"] = prob_n
+    md.obs["p_type_dopant"] = best_p.astype(str)
+    md.obs["p_type_probability"] = prob_p
+    md.uns["dopants"] = {"source": source, "n": int(n),
+                         "threshold": float(threshold),
+                         "n_failed": int(failed), "ranked": detail}
+    record(md, "gen.predict_dopants", source=source, n=n, threshold=threshold)
+
+
+@register_function(
+    aliases=["predict hosts", "which structure could host this",
+             "target composition", "structure prediction from a target",
+             "find a host structure", "inverse substitution"],
+    category="gen",
+    description="Given a target set of ionic species, find which known "
+                "structures could host it and build the substituted "
+                "candidates.",
+    requires={"structures": ["{source}"]},
+    produces={"obs": ["parent", "target", "host_probability"],
+              "structures": ["input"]},
+    prerequisites=["mv.transform.oxidation_states"],
+    examples=["cand = mv.gen.predict_hosts(md, ['Na+', 'Mn2+', 'P5+', 'O2-'], "
+              "source='oxidized')"],
+    related=["mv.gen.predict_substitutions", "mv.gen.substitute",
+             "mv.pp.predict_volume"],
+    notes="The inverse of mv.gen.predict_substitutions, and the more useful "
+          "direction when you know what you want. That function starts from a "
+          "structure and asks what could be swapped into it; this starts from "
+          "a **composition** and asks which of the structures you already have "
+          "could host it.\\n\\n"
+          "From LiFePO4 alone, targeting Na+/Mn2+/P5+/O2-, it produces "
+          "NaMnPO4 — a real sodium-ion cathode — because the substitution "
+          "model has seen those species replace one another often enough. The "
+          "library you pass is the whole search space, so a bigger one finds "
+          "more; passing a database export rather than three structures is the "
+          "intended use.\\n\\n"
+          "**The species count must match.** A four-species target only "
+          "considers four-species hosts, because the model substitutes species "
+          "one for one and never changes how many there are. A target that "
+          "returns nothing usually means the library has no host with the "
+          "right number of distinct species, not that the chemistry is "
+          "impossible.\\n\\n"
+          "Needs oxidation states on the library, for the same reason "
+          "mv.gen.predict_substitutions does: the model is defined over ions.",
+)
+def predict_hosts(md: AnnData, target, source: str = "input",
+                  threshold: float = 1e-3,
+                  remove_duplicates: bool = True) -> AnnData:
+    """Candidate structures for a target species set. Returns a new dataset."""
+    try:
+        from pymatgen.core.structure_prediction.substitutor import Substitutor
+    except ImportError:
+        from pymatgen.analysis.structure_prediction.substitutor import (
+            Substitutor)
+    from pymatgen.core import Species
+
+    from .data import from_structures
+
+    try:
+        wanted = [s if isinstance(s, Species) else Species.from_str(str(s))
+                  for s in target]
+    except Exception as exc:
+        raise ValueError(
+            f"target must be ionic species with charges, e.g. "
+            f"['Na+', 'Mn2+', 'P5+', 'O2-']; got {list(target)!r} ({exc})"
+        ) from exc
+
+    library, unoxidised = [], []
+    for name, structure in zip(md.obs_names, structures(md, source)):
+        if not all(getattr(site.specie, "oxi_state", None) is not None
+                   for site in structure):
+            unoxidised.append(str(name))
+            continue
+        library.append({"structure": structure, "id": str(name)})
+    if unoxidised:
+        raise ValueError(
+            f"{len(unoxidised)} structure(s) carry no oxidation states, and "
+            f"the substitution model is defined over ions. Run "
+            f"mv.transform.oxidation_states(md) and pass source='oxidized'. "
+            f"Offending rows: {unoxidised[:5]}")
+
+    sizes = {len({site.specie.symbol for site in entry["structure"]})
+             for entry in library}
+    predicted = Substitutor(threshold=threshold).pred_from_structures(
+        wanted, library, remove_duplicates=remove_duplicates)
+    if not predicted:
+        raise ValueError(
+            f"no host found for {[str(s) for s in wanted]}. The model "
+            f"substitutes species one for one, so it only considers hosts with "
+            f"{len(wanted)} distinct species; this library has "
+            f"{sorted(sizes)}. Widen the library or lower threshold "
+            f"(currently {threshold}).")
+
+    built, rows = [], []
+    label = ", ".join(str(s) for s in wanted)
+    for transformed in predicted:
+        built.append(transformed.final_structure)
+        history = transformed.history or [{}]
+        # The id travels in history[0]['source'], not under 'id' — and the
+        # substitution probability is in other_parameters['proba'].
+        extra = getattr(transformed, "other_parameters", {}) or {}
+        rows.append({
+            "parent": str(history[0].get("source", "")),
+            "target": label,
+            "host_probability": float(extra.get("proba", np.nan)),
+        })
+
+    out = from_structures(built, obs=pd.DataFrame(rows))
+    out.uns["predict_hosts"] = {
+        "source": source, "threshold": float(threshold),
+        "target": [str(s) for s in wanted],
+        "library_size": len(library),
+        "model": "Hautier data-mined ionic substitution",
+    }
+    record(out, "gen.predict_hosts", source=source, threshold=threshold,
+           n_library=len(library))
+    return out
+
+
+@register_function(
+    aliases=["alloy pairs", "alloys", "what can i alloy this with",
+             "pseudobinary", "solid solution partners", "miscible",
+             "substitutable pairs", "vegard"],
+    category="gen",
+    description="Find every pair of materials in a dataset that forms a "
+                "pseudobinary alloy system, and how badly their lattices "
+                "disagree.",
+    requires={"structures": ["{source}"]},
+    examples=["pairs = mv.gen.alloy_pairs(md)",
+              "pairs = mv.gen.alloy_pairs(md, max_mismatch=0.05)"],
+    related=["mv.gen.predict_substitutions", "mv.disorder.sqs",
+             "mv.disorder.sro", "mv.iface.match"],
+    notes="Two materials form an alloy pair when one species can be swapped "
+          "for another on the same structure, leaving the rest of the lattice "
+          "in place — GaAs and AlAs share their arsenic and differ only in the "
+          "cation, so (Ga,Al)As exists across the whole range. Silicon and "
+          "GaAs do not, whatever their lattices look like, and the pairing is "
+          "refused rather than scored badly.\n\n"
+          "Returns rather than deposits, because one dataset of n materials "
+          "gives up to n(n-1)/2 pairs — the same reason mv.iface.match does. "
+          "obs['parent_a'] and obs['parent_b'] point back at the rows.\n\n"
+          "obs['lattice_mismatch'] is the fractional difference in the cube "
+          "root of the cell volume, which is the number that decides whether "
+          "a film will grow strained or relax into misfit dislocations. It is "
+          "not a miscibility criterion: GaAs-AlAs at 0.14% is famously "
+          "lattice-matched and GaAs-InAs at 7% is famously not, and both are "
+          "real alloy systems with real devices built on them. Filter on it "
+          "when you care about epitaxy, not when you care about whether the "
+          "alloy exists.\n\n"
+          "obs['substituting'] names the species being swapped and "
+          "obs['observer'] the ones that stay put, which is what tells you "
+          "which sublattice the disorder lives on — and so what "
+          "mv.disorder.sqs would have to enumerate.",
+)
+def alloy_pairs(md: AnnData, source: str = "input",
+                max_mismatch: float | None = None) -> AnnData:
+    """Pseudobinary alloy systems in a dataset. Returns a pairs object."""
+    try:
+        from pymatgen.analysis.alloys.core import AlloyPair
+    except ImportError as exc:                             # pragma: no cover
+        raise ImportError(
+            f"mv.gen.alloy_pairs needs pymatgen-analysis-alloys, one of "
+            f"pymatgen's own add-on packages. Install it with `pip install "
+            f"pymatgen-analysis-alloys`. ({exc})") from exc
+
+    from .data import from_structures
+
+    names = [str(n) for n in md.obs_names]
+    labels = ([str(v) for v in md.obs["name"]] if "name" in md.obs else names)
+    cells = structures(md, source)
+
+    built, rows, refused = [], [], []
+    for i in range(len(cells)):
+        for j in range(i + 1, len(cells)):
+            try:
+                # from_structures wants the oxidation-decorated structures as a
+                # separate argument and will not derive them; passing the plain
+                # ones is what its own documentation shows.
+                pair = AlloyPair.from_structures(
+                    structures=(cells[i], cells[j]),
+                    structures_with_oxidation_states=(cells[i], cells[j]),
+                    ids=(names[i], names[j]))
+            except Exception as exc:
+                refused.append(f"{labels[i]}/{labels[j]}: {type(exc).__name__}: "
+                               f"{exc}")
+                continue
+
+            a = float(pair.volume_cube_root_a)
+            b = float(pair.volume_cube_root_b)
+            mismatch = abs(a - b) / ((a + b) / 2.0)
+            if max_mismatch is not None and mismatch > max_mismatch:
+                refused.append(f"{labels[i]}/{labels[j]}: lattice mismatch "
+                               f"{mismatch:.3f} over {max_mismatch}")
+                continue
+
+            # AlloyPair sorts its own members, so a and b need not be i and j.
+            first = names.index(pair.id_a) if pair.id_a in names else i
+            second = names.index(pair.id_b) if pair.id_b in names else j
+            built.append(cells[first])
+            rows.append({
+                "parent_a": names[first], "parent_b": names[second],
+                "name": f"{labels[first]}-{labels[second]}",
+                "pair_formula": str(pair.pair_formula),
+                "chemsys": str(pair.chemsys),
+                "substituting": "-".join(sorted(
+                    {str(e) for e in pair.structure_a.composition.elements}
+                    ^ {str(e) for e in pair.structure_b.composition.elements})),
+                "observer": "-".join(str(e) for e in pair.observer_elements),
+                "lattice_mismatch": mismatch,
+                "spacegroup": int(pair.spacegroup_intl_number_a),
+            })
+
+    if not built:
+        raise ValueError(
+            f"no pair of these {md.n_obs} structures forms an alloy system; "
+            f"{len(refused)} were refused, first few: {refused[:3]}")
+
+    pairs = from_structures(built, pd.DataFrame(rows))
+    pairs.uns["alloy_pairs"] = {
+        "source": source, "n_parents": int(md.n_obs),
+        "max_mismatch": max_mismatch,
+        "mismatch_definition": "|a-b| / mean(a,b) on the cube root of the "
+                               "cell volume",
+        "n_refused": len(refused), "refused": refused[:20],
+    }
+    record(pairs, "gen.alloy_pairs", source=source, n_parents=int(md.n_obs))
+    return pairs

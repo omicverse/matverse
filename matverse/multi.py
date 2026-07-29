@@ -72,7 +72,14 @@ def sites(md: AnnData, source: str = "input") -> AnnData:
             material_index.append(i)
             site_index.append(j)
             symbols.append(str(site.specie.symbol))
-            frac.append(np.asarray(site.frac_coords, dtype=float))
+            # A Molecule has no lattice, so its sites have no fractional
+            # coordinates. Cartesian is the one both kinds always have;
+            # fractional becomes NaN rather than absent, so the block stays a
+            # matrix and a periodic dataset is unaffected.
+            frac.append(np.asarray(getattr(site, "frac_coords", None),
+                                   dtype=float)
+                        if hasattr(site, "frac_coords")
+                        else np.full(3, np.nan))
             cart.append(np.asarray(site.coords, dtype=float))
             for key, value in (site.properties or {}).items():
                 properties.setdefault(key, []).append(value)
@@ -134,8 +141,8 @@ def _check_sites(sites_obj: AnnData) -> None:
     description="Summarise a per-atom column back onto the material axis, "
                 "which is how a per-site result becomes something a screen can "
                 "filter on.",
-    requires={"obs": ["{column}"]},
-    produces={"obs": ["{key_added}"]},
+    requires={"sites_obj.obs": ["{column}"]},
+    produces={"md.obs": ["{key_added}"]},
     prerequisites=["mv.multi.sites"],
     examples=["mv.multi.aggregate(sites, md, 'force_magnitude_emt', how='max')"],
     related=["mv.multi.sites", "mv.screen.filter"],

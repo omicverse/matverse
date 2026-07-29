@@ -63,6 +63,30 @@ class TestDftInputs:
         with pytest.raises(ValueError, match="unknown preset"):
             mv.dft.write_inputs(md, tmp_path / "runs", preset="magic")
 
+    def test_the_neb_endpoint_preset_fixes_the_cell_and_drops_symmetry(
+            self, md, tmp_path):
+        """Two endpoints of a hop are only comparable if neither cell moved,
+        and a vacancy hop is only *there* if symmetry is off — VASP with
+        ISYM on will symmetrise the displaced atom back. Both are settings a
+        user gets wrong by hand, which is the reason to have a preset."""
+        pytest.importorskip("pymatgen.analysis.diffusion.neb.io")
+        from pathlib import Path
+        mv.neb.hop_endpoints(md, species="Cu", supercell=(2, 2, 2))
+        written = mv.dft.write_inputs(md, tmp_path / "neb",
+                                      preset="neb-endpoint",
+                                      source="hop_initial")
+        incar = (Path(written[0]) / "INCAR").read_text()
+        settings = dict(
+            line.split("=", 1) for line in incar.splitlines() if "=" in line)
+        settings = {k.strip(): v.strip() for k, v in settings.items()}
+        assert settings["ISIF"] == "2"
+        assert settings["ISYM"] == "0"
+        assert md.uns["dft"]["reference"] == "PBE+U"
+
+    def test_the_neb_preset_is_offered_alongside_the_others(self):
+        assert "neb-endpoint" in mv.dft.presets()
+        assert "diffusion" in mv.dft.presets()["neb-endpoint"]["description"]
+
     def test_an_unknown_code_is_refused(self, md, tmp_path):
         with pytest.raises(ValueError, match="'vasp' or 'espresso'"):
             mv.dft.write_inputs(md, tmp_path / "runs", code="castep")
@@ -180,8 +204,10 @@ class TestDefects:
             mv.pp.defects(md, kinds=("substitution",))
 
     def test_an_unknown_kind_is_named(self, md):
+        """'interstitial' was an unknown kind until v0.1.24 and is now one of
+        four, so the check needs a kind that really does not exist."""
         with pytest.raises(ValueError, match="unknown defect kind"):
-            mv.pp.defects(md, kinds=("interstitial",))
+            mv.pp.defects(md, kinds=("frenkel",))
 
     def test_a_defect_dataset_is_an_ordinary_dataset(self, md):
         defective = mv.pp.defects(md, supercell=(1, 1, 1))
@@ -531,3 +557,191 @@ class TestVibrationalThermodynamics:
     def test_the_temperature_is_recorded(self, vibrating):
         mv.prop.free_energy(vibrating, level="emt", temperature=456.0)
         assert vibrating.uns["thermal"]["emt"]["temperature"] == 456.0
+
+
+def _has_defects_addon() -> bool:
+    try:
+        import pymatgen.analysis.defects.corrections.freysoldt  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+@pytest.mark.skipif(not _has_defects_addon(),
+                    reason="pymatgen-analysis-defects is an optional extra")
+class TestImageChargeCorrection:
+    """The electrostatic half of the Freysoldt correction.
+
+    It needs only the cell, the charge and the dielectric constant — no LOCPOT
+    — so its three scalings are exact and can be asserted rather than eyeballed:
+    q squared, one over epsilon, one over the cell length. The half that does
+    need a LOCPOT is the potential alignment, and it is absent by design.
+    """
+
+    @staticmethod
+    def _system(repeat):
+        from pymatgen.core import Lattice, Structure
+        fcc = Structure(Lattice.cubic(3.61), ["Cu"] * 4,
+                        [[0, 0, 0], [0, .5, .5], [.5, 0, .5], [.5, .5, 0]])
+        fcc.make_supercell(list(repeat))
+        host = mv.data.from_structures([fcc])
+        mv.calc.energy(host, level="emt")
+        defects = mv.pp.defects(host, kinds=("vacancy",))
+        mv.calc.energy(defects, level="emt")
+        return defects, host
+
+    @staticmethod
+    def _curve(defects, host, dielectric, gap=2.0):
+        out = defects.copy()
+        mv.thermo.defect_formation(out, host=host, level="emt",
+                                   chempot={"Cu": -3.5}, band_gap=gap,
+                                   dielectric=dielectric)
+        return out, out.obsm["formation_vs_fermi_emt"][0]
+
+    def test_without_a_dielectric_nothing_changes(self):
+        """The default has to stay exactly what it was, or every existing
+        number silently moves."""
+        defects, host = self._system((2, 2, 2))
+        plain, before = self._curve(defects, host, None)
+        assert plain.uns["defect_thermodynamics"]["image_charge_correction"] \
+            is False
+        assert plain.uns["defect_thermodynamics"]["dielectric"] is None
+        assert np.isfinite(before).all()
+
+    def test_the_correction_halves_when_epsilon_doubles(self):
+        """1/epsilon, asserted at the top of the gap where the most charged
+        state is the stable one and the envelope is that state's line."""
+        defects, host = self._system((2, 2, 2))
+        _, plain = self._curve(defects, host, None)
+        _, ten = self._curve(defects, host, 10.0)
+        _, twenty = self._curve(defects, host, 20.0)
+        # rel=1e-4, not tighter: perform_es_corr converges the Madelung sum
+        # numerically with mad_tol=1e-4, so the scaling is exact in the
+        # algebra and carries about a part in a million in the arithmetic.
+        assert (ten[-1] - plain[-1]) == \
+            pytest.approx(2.0 * (twenty[-1] - plain[-1]), rel=1e-4)
+
+    def test_the_correction_is_positive(self):
+        """It removes a spurious stabilisation, so it can only raise the
+        formation energy."""
+        defects, host = self._system((2, 2, 2))
+        _, plain = self._curve(defects, host, None)
+        _, corrected = self._curve(defects, host, 10.0)
+        assert (corrected >= plain - 1e-9).all()
+        assert corrected[-1] > plain[-1]
+
+    def test_a_bigger_cell_needs_less_correcting(self):
+        """1/L. The image interaction is the reason small supercells lie, and
+        the correction has to shrink as the cell grows or it is not that."""
+        small, host_s = self._system((2, 2, 2))
+        big, host_b = self._system((3, 3, 3))
+        _, s_plain = self._curve(small, host_s, None)
+        _, s_corr = self._curve(small, host_s, 10.0)
+        _, b_plain = self._curve(big, host_b, None)
+        _, b_corr = self._curve(big, host_b, 10.0)
+        shift_small = s_corr[-1] - s_plain[-1]
+        shift_big = b_corr[-1] - b_plain[-1]
+        assert shift_big < shift_small
+        # cells are 2a and 3a, so the ratio of the shifts is 3/2
+        assert shift_small / shift_big == pytest.approx(1.5, rel=0.02)
+
+    def test_the_neutral_state_is_never_corrected(self):
+        """q = 0 has no image charge, so at the valence band maximum — where
+        every charge state costs the same and the neutral one therefore wins —
+        the corrected and uncorrected envelopes must coincide."""
+        defects, host = self._system((2, 2, 2))
+        _, plain = self._curve(defects, host, None)
+        _, corrected = self._curve(defects, host, 10.0)
+        assert corrected[0] == pytest.approx(plain[0], abs=1e-9)
+
+    def test_it_says_which_half_it_did(self):
+        """The potential-alignment term is missing and must be named, not
+        left for the reader to discover."""
+        defects, host = self._system((2, 2, 2))
+        out, _ = self._curve(defects, host, 10.0)
+        record = out.uns["defect_thermodynamics"]
+        assert record["image_charge_correction"] is True
+        assert record["dielectric"] == 10.0
+        assert "LOCPOT" in record["correction_terms"]
+        assert record["correction_error"] is None
+
+
+@pytest.mark.skipif(not _has_defects_addon(),
+                    reason="pymatgen-analysis-defects is an optional extra")
+class TestCaptureCoefficient:
+    """Checked against exact scaling laws rather than a reference number.
+
+    The Shockley-Read-Hall coefficient is quadratic in the electron-phonon
+    matrix element and thermally activated. Both are properties of the
+    expression, not of any particular defect, so they hold whatever the inputs.
+    """
+
+    BASE = dict(dQ=1.0, dE=1.0, omega_i=0.02, omega_f=0.02)
+
+    @staticmethod
+    def _cell(n=1):
+        from pymatgen.core import Lattice, Structure
+        st = Structure(Lattice.cubic(10.0), ["Ga", "N"],
+                       [[0, 0, 0], [.5, .5, .5]])
+        return mv.data.from_structures([st] * n)
+
+    def test_it_is_quadratic_in_the_coupling(self):
+        md = self._cell(2)
+        mv.prop.capture(md, coupling=[1e-3, 2e-3], **self.BASE)
+        c = md.obs["capture_coefficient_srh"].to_numpy()
+        assert c[1] / c[0] == pytest.approx(4.0, rel=1e-6)
+
+    def test_no_coupling_means_no_capture(self):
+        md = self._cell()
+        mv.prop.capture(md, coupling=0.0, **self.BASE)
+        assert float(md.obs["capture_coefficient_srh"].iloc[0]) == \
+            pytest.approx(0.0, abs=1e-30)
+
+    def test_it_is_thermally_activated(self):
+        md = self._cell()
+        mv.prop.capture(md, coupling=1e-3, temperature=300.0, key_added="cold",
+                        **self.BASE)
+        mv.prop.capture(md, coupling=1e-3, temperature=600.0, key_added="hot",
+                        **self.BASE)
+        assert float(md.obs["capture_coefficient_hot"].iloc[0]) > \
+            float(md.obs["capture_coefficient_cold"].iloc[0])
+
+    def test_the_temperature_is_recorded_with_the_number(self):
+        """A capture coefficient without its temperature is not a quantity."""
+        md = self._cell()
+        mv.prop.capture(md, coupling=1e-3, temperature=450.0, **self.BASE)
+        assert md.uns["capture"]["srh"]["temperature"] == 450.0
+        assert md.uns["capture"]["srh"]["unit"] == "cm^3/s"
+
+    def test_one_value_or_one_per_row(self):
+        md = self._cell(3)
+        mv.prop.capture(md, coupling=1e-3, **self.BASE)
+        assert np.isfinite(md.obs["capture_coefficient_srh"]).all()
+        with pytest.raises(ValueError, match="one or one per row"):
+            mv.prop.capture(md, coupling=[1e-3, 2e-3], **self.BASE)
+
+    def test_the_radiative_channel_needs_a_photon_energy(self):
+        md = self._cell()
+        with pytest.raises(ValueError, match="omega_photon"):
+            mv.prop.capture(md, coupling=1e-3, kind="radiative", **self.BASE)
+
+    def test_the_radiative_channel_computes(self):
+        md = self._cell()
+        mv.prop.capture(md, coupling=1e-3, kind="radiative",
+                        omega_photon=0.8, **self.BASE)
+        assert np.isfinite(
+            float(md.obs["capture_coefficient_radiative"].iloc[0]))
+
+    def test_an_impossible_photon_is_refused_not_returned_as_nan(self):
+        """dE is 1.0 eV here, so a 1.5 eV photon carries away more than the
+        transition provides. get_Rad_coef returns NaN for that without
+        complaint, which would arrive as a silently blank column."""
+        md = self._cell()
+        with pytest.raises(ValueError, match="exceeds dE"):
+            mv.prop.capture(md, coupling=1e-3, kind="radiative",
+                            omega_photon=1.5, **self.BASE)
+
+    def test_an_unknown_channel_is_refused(self):
+        md = self._cell()
+        with pytest.raises(ValueError, match="'srh' or 'radiative'"):
+            mv.prop.capture(md, coupling=1e-3, kind="auger", **self.BASE)

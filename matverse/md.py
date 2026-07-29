@@ -36,6 +36,8 @@ quench, and says so in what it records.
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 from anndata import AnnData
 
@@ -663,5 +665,604 @@ def _quench(cell, adaptor, calculator, melt_t, final_t, melt_steps,
     return adaptor.get_structure(atoms)
 
 
-__all__ = ["run", "sweep", "conductivity", "melt_quench", "register_batched",
-           "batched_available"]
+__all__ = ["run", "sweep", "rdf", "sites", "van_hove", "occupancy",
+           "conductivity",
+           "melt_quench",
+           "register_batched", "batched_available"]
+
+
+@register_function(
+    aliases=["trajectory rdf", "dynamic rdf", "time averaged rdf",
+             "pair correlation from md", "liquid structure",
+             "md radial distribution"],
+    category="md",
+    description="Radial distribution function averaged over a trajectory, "
+                "with the running coordination number, on the shared grid "
+                "convention.",
+    requires={"structures": ["{source}"]},
+    produces={"obsm": ["rdf_md_{level}", "coordination_md_{level}"],
+              "uns": ["grids"], "obs": ["first_shell_{level}",
+                                        "first_shell_coordination_{level}"],
+              "levels": ["{level}"]},
+    examples=["mv.md.rdf(md, trajectories, species='Li')",
+              "mv.md.rdf(md, trajectories, species='Li', r_max=8.0)"],
+    related=["mv.prop.rdf", "mv.md.run", "mv.prop.compare_grids"],
+    notes="mv.prop.rdf takes one static structure. This takes a trajectory and "
+          "averages over it, which is a different quantity: the static "
+          "function reports where the atoms are in one snapshot, and this "
+          "reports where they spend their time. For a crystal near 0 K they "
+          "converge; for a liquid, a superionic conductor or anything above "
+          "half its melting point they do not, and the difference is the "
+          "thermal broadening that makes a real diffraction pattern wider "
+          "than a simulated one.\\n\\n"
+          "**The trajectory is an argument**, because mv.md.run deliberately "
+          "does not keep one — a screening library that materialised every "
+          "frame would spend its memory on positions nobody reads. Pass "
+          "fractional coordinates shaped (frames, atoms, 3), from whatever "
+          "produced them.\\n\\n"
+          "obs['first_shell'] is the position of the first peak and "
+          "first_shell_coordination the running coordination number at the "
+          "following minimum, which is the coordination number a "
+          "diffractionist means.\n\n"
+          "That integral is computed here from its definition, "
+          "n(r) = integral of 4 pi r^2 rho g(r), rather than taken from "
+          "pymatgen's coordination_number, which reports the count **per "
+          "reference index**. On a cell where the mobile ion has twelve "
+          "neighbours spread over three reference sites, pymatgen returns 4.0 "
+          "and the definition returns 11.4 — the shortfall from twelve being "
+          "the Gaussian smearing spilling past the cutoff. Four is not a "
+          "coordination number for that cell.",
+)
+def rdf(md: AnnData, trajectories, species: str, source: str = "input",
+        level: str = "md", reference: str | None = None, r_max: float = 10.0,
+        n_grid: int = 101, sigma: float = 0.1) -> None:
+    """Trajectory-averaged RDF on a shared grid. Deposits; returns ``None``."""
+    try:
+        from pymatgen.analysis.diffusion.aimd.rdf import (
+            RadialDistributionFunction)
+    except ImportError as exc:
+        raise ImportError(
+            f"mv.md.rdf needs pymatgen-analysis-diffusion, one of pymatgen's "
+            f"own add-on packages. Install it with `pip install "
+            f"pymatgen-analysis-diffusion`. ({exc})") from exc
+
+    frames = np.asarray(trajectories, dtype=float)
+    if frames.ndim != 3 or frames.shape[2] != 3:
+        raise ValueError(
+            f"trajectories must be (frames, atoms, 3) fractional coordinates; "
+            f"got shape {frames.shape}")
+
+    S = structures(md, source)
+    if md.n_obs != 1:
+        raise ValueError(
+            f"one trajectory belongs to one structure, and this dataset has "
+            f"{md.n_obs} rows. Subset it first — md[[i]].copy() — or call this "
+            f"once per material.")
+    structure = S[0]
+    if frames.shape[1] != len(structure):
+        raise ValueError(
+            f"the trajectory has {frames.shape[1]} atoms and the structure has "
+            f"{len(structure)}; they must be the same cell in the same order")
+
+    mobile = [i for i, site in enumerate(structure)
+              if site.specie.symbol == str(species)]
+    if not mobile:
+        raise ValueError(
+            f"no {species!r} in this structure; it has "
+            f"{sorted({s.specie.symbol for s in structure})}")
+    other = str(reference) if reference else None
+    partners = [i for i, site in enumerate(structure)
+                if (site.specie.symbol == other if other
+                    else i not in mobile)]
+    if not partners:
+        raise ValueError(
+            f"no reference atoms to measure against; reference={reference!r}")
+
+    snapshots = []
+    for frame in frames:
+        snapshot = structure.copy()
+        for index, coords in enumerate(frame):
+            snapshot[index] = snapshot[index].specie, coords
+        snapshots.append(snapshot)
+
+    analysis = RadialDistributionFunction(
+        snapshots, indices=mobile, reference_indices=partners,
+        ngrid=int(n_grid), rmax=float(r_max), sigma=float(sigma))
+    grid = np.asarray(analysis.interval, dtype=float)
+    curve = np.asarray(analysis.rdf, dtype=float)
+    # The running coordination number from its definition rather than from
+    # pymatgen's coordination_number, which reports the count *per reference
+    # index*: on a cell where the mobile ion has twelve neighbours across three
+    # reference sites it returns 4.0, and 4 is not a coordination number.
+    density = len(partners) / float(structure.volume)
+    step = float(grid[1] - grid[0]) if grid.size > 1 else 0.0
+    coordination = np.cumsum(
+        4.0 * np.pi * grid ** 2 * density * curve) * step
+
+    deposit_grid(md, "rdf_md", level, curve[None, :], grid, unit="angstrom",
+                 species=str(species), reference=other or "all others",
+                 n_frames=int(frames.shape[0]))
+    deposit_grid(md, "coordination_md", level, coordination[None, :], grid,
+                 unit="angstrom", species=str(species))
+
+    peak, shell = _first_shell(grid, curve, coordination)
+    md.obs[f"first_shell_{level}"] = [peak]
+    md.obs[f"first_shell_coordination_{level}"] = [shell]
+    set_level(md, level, kind="md", method=f"trajectory RDF ({species})",
+              reference=None, surrogate=False, license=None, uncertainty=None,
+              source=source, n_frames=int(frames.shape[0]))
+    record(md, "md.rdf", species=str(species), level=level,
+           n_frames=int(frames.shape[0]))
+
+
+def _first_shell(grid, curve, coordination):
+    """The first peak, and the coordination number at the minimum after it."""
+    if not np.isfinite(curve).any() or curve.max() <= 0:
+        return float("nan"), float("nan")
+    peak = int(np.argmax(curve))
+    tail = curve[peak:]
+    if tail.size < 3:
+        return float(grid[peak]), float(coordination[peak])
+    # First point after the peak where the curve stops falling.
+    falling = np.diff(tail)
+    turning = np.argmax(falling > 0) if (falling > 0).any() else tail.size - 1
+    minimum = peak + int(turning)
+    return float(grid[peak]), float(coordination[minimum])
+
+
+@register_function(
+    aliases=["md sites", "occupied sites", "cluster trajectory",
+             "where do the ions sit", "site occupation", "hopping sites",
+             "kmeans pbc", "trajectory clustering"],
+    category="md",
+    description="Cluster where one species actually spent its time during a "
+                "run, recovering the sites it occupied and how far it rattled "
+                "about them.",
+    requires={"structures": ["{source}"]},
+    produces={"obs": ["md_sites_{species}_{level}",
+                      "md_site_spread_{species}_{level}",
+                      "md_site_visits_{species}_{level}"]},
+    prerequisites=["mv.md.run"],
+    examples=["mv.md.sites(md, trajectories, species='Li')",
+              "mv.md.sites(md, trajectories, species='Li', n_sites=8)"],
+    related=["mv.md.run", "mv.md.rdf", "mv.neb.percolation",
+             "mv.md.conductivity"],
+    notes="A mean-squared displacement says how far the ions went. It cannot "
+          "say whether they went there by rattling harder in the same well or "
+          "by hopping between wells, and those are different materials. "
+          "Clustering the sampled positions separates them: a vibrating ion "
+          "gives tight clusters and each ion keeps to one of them, while a "
+          "hopping ion visits several.\n\n"
+          "obs['md_site_spread'] is the RMS distance from a position to its "
+          "own site centre, in angstroms — a thermal vibration amplitude, of "
+          "order 0.1 A for a solid well below melting. "
+          "obs['md_site_visits'] is the mean number of distinct sites one "
+          "atom of the species was found at over the run: 1.0 means nothing "
+          "hopped, and anything above it counts hops the MSD alone would have "
+          "reported as a larger number without saying why.\n\n"
+          "**The trajectory is an argument**, on the same reasoning as "
+          "mv.md.rdf: mv.md.run does not keep one. Pass fractional "
+          "coordinates shaped (frames, atoms, 3).\n\n"
+          "n_sites defaults to the number of atoms of that species in the "
+          "cell, which is the right guess when each ion has its own site and "
+          "the wrong one for an interstitial mechanism where there are more "
+          "wells than ions. k-means needs the count in advance and cannot "
+          "discover it, so this is a parameter rather than a result.",
+)
+def sites(md: AnnData, trajectories, species: str, source: str = "input",
+          level: str = "md", n_sites: int | None = None,
+          max_iterations: int = 200, key_added: str | None = None) -> None:
+    """Cluster a trajectory into occupied sites. Deposits; returns ``None``."""
+    try:
+        from pymatgen.analysis.diffusion.aimd.clustering import KmeansPBC
+    except ImportError as exc:                             # pragma: no cover
+        raise ImportError(
+            f"mv.md.sites needs pymatgen-analysis-diffusion, one of "
+            f"pymatgen's own add-on packages. Install it with `pip install "
+            f"pymatgen-analysis-diffusion`. ({exc})") from exc
+
+    frames = np.asarray(trajectories, dtype=float)
+    if frames.ndim != 3 or frames.shape[2] != 3:
+        raise ValueError(f"trajectories must be (frames, atoms, 3) fractional "
+                         f"coordinates, got shape {frames.shape}")
+
+    name = key_added or f"{species}_{level}"
+    counts, spreads, visits = [], [], []
+
+    for index, structure in enumerate(structures(md, source)):
+        mobile = [i for i, site in enumerate(structure)
+                  if site.specie.symbol == species]
+        if not mobile or index >= len(frames) and frames.shape[0] == md.n_obs:
+            counts.append(0)
+            spreads.append(np.nan)
+            visits.append(np.nan)
+            continue
+        if frames.shape[1] != len(structure):
+            raise ValueError(
+                f"row {index}: the trajectory has {frames.shape[1]} atoms and "
+                f"the structure has {len(structure)}; they must be the same "
+                f"cell")
+
+        # (frames, mobile, 3) -> one point per atom per frame, but remember
+        # which atom each point came from: the number of distinct sites *one
+        # atom* visited is the hop count, and pooling the atoms would lose it.
+        points = frames[:, mobile, :] % 1.0
+        flat = points.reshape(-1, 3)
+        k = int(n_sites) if n_sites else len(mobile)
+        k = max(1, min(k, len(flat)))
+
+        # Seed the search at the crystallographic sites of the species, not at
+        # random points. KmeansPBC's default picks k of the input points with
+        # an unseeded random.sample, so the same trajectory gives a different
+        # answer on every call - unacceptable for a number anyone reports.
+        # Starting from the sites is also the right guess: the question is
+        # whether the ions stayed near them.
+        seed = np.asarray([structure[i].frac_coords for i in mobile],
+                          dtype=float) % 1.0
+        if k <= len(seed):
+            start = seed[:k]
+        else:
+            extra = flat[np.linspace(0, len(flat) - 1, k - len(seed),
+                                     dtype=int)]
+            start = np.vstack([seed, extra])
+
+        try:
+            centroids, labels, _ = KmeansPBC(
+                structure.lattice, max_iterations=max_iterations
+            ).cluster(flat, k, initial_centroids=start)
+        except Exception:
+            counts.append(0)
+            spreads.append(np.nan)
+            visits.append(np.nan)
+            continue
+
+        labels = np.asarray(labels).reshape(points.shape[0], len(mobile))
+        centroids = np.asarray(centroids, dtype=float) % 1.0
+
+        # Distance from each sampled position to the centre of its own site,
+        # through the lattice rather than in fractional coordinates, so the
+        # number is an angstrom a person can compare to a thermal amplitude.
+        assigned = centroids[labels.reshape(-1)]
+        deltas = flat - assigned
+        deltas -= np.round(deltas)
+        cartesian = deltas @ np.asarray(structure.lattice.matrix, dtype=float)
+        spreads.append(float(np.sqrt((cartesian ** 2).sum(axis=1).mean())))
+        counts.append(int(len(np.unique(labels))))
+        visits.append(float(np.mean([len(np.unique(labels[:, atom]))
+                                     for atom in range(len(mobile))])))
+
+    md.obs[f"md_sites_{name}"] = np.array(counts, dtype=int)
+    md.obs[f"md_site_spread_{name}"] = np.array(spreads, dtype=float)
+    md.obs[f"md_site_visits_{name}"] = np.array(visits, dtype=float)
+    md.uns.setdefault("md_sites", {})[name] = {
+        "species": species, "n_sites": n_sites, "n_frames": int(frames.shape[0]),
+        "spread_unit": "angstrom",
+        "visits_meaning": "mean distinct sites visited by one atom; 1.0 means "
+                          "no hopping",
+    }
+    record(md, "md.sites", species=species, source=source, level=level,
+           n_sites=n_sites, key_added=name)
+
+
+@register_function(
+    aliases=["van hove", "van hove correlation", "self correlation",
+             "distinct correlation", "displacement distribution",
+             "how far did they move", "Gs", "Gd"],
+    category="md",
+    description="Van Hove correlation function from a trajectory: how the "
+                "distribution of where an atom is, relative to where it or "
+                "its neighbours were, spreads out with time.",
+    requires={"structures": ["{source}"]},
+    produces={"obsm": ["van_hove_self_{level}", "van_hove_distinct_{level}"],
+              "uns": ["grids"],
+              "obs": ["van_hove_rms_{level}", "van_hove_peak_{level}",
+                      "van_hove_jump_{level}"]},
+    prerequisites=["mv.md.run"],
+    examples=["mv.md.van_hove(md, trajectories, species='Li')",
+              "mv.md.van_hove(md, trajectories, species='Li', dt=20)"],
+    related=["mv.md.rdf", "mv.md.sites", "mv.md.run", "mv.prop.rdf"],
+    notes="Two functions, both on the shared r grid. The **self** part is the "
+          "distribution of how far one atom moved in time dt — it starts as a "
+          "spike at r=0 and spreads. The **distinct** part is where the other "
+          "atoms were relative to it, and at dt=0 it is exactly the radial "
+          "distribution function, which is the check worth running: "
+          "obsm['van_hove_distinct'] at dt=0 must reproduce mv.prop.rdf on "
+          "the same cell.\n\n"
+          "What it tells you that a diffusivity cannot: the *shape*. In a "
+          "liquid the self part stays a single spreading Gaussian. In a "
+          "hopping solid it grows a second bump at the jump distance while "
+          "the peak at zero survives, because most ions did not move and the "
+          "few that did moved a lattice spacing. A diffusivity averages those "
+          "two populations into one number that describes neither.\n\n"
+          "Three scalars come off it. obs['van_hove_rms'] is the "
+          "root-mean-square displacement over dt in angstroms. "
+          "obs['van_hove_peak'] is where the self part is largest — the *most "
+          "probable* displacement, which for a vibrating solid sits near "
+          "sqrt(2) times the one-dimensional amplitude rather than at zero, "
+          "because the volume of a shell grows as r^2 and beats the falling "
+          "Gaussian. obs['van_hove_jump'] is the outermost local maximum "
+          "worth more than a hundredth of the largest one, which is the "
+          "jump distance when ions hop and NaN when they only rattle.\n\n"
+          "Computed here from the definition. pymatgen's VanHoveAnalysis "
+          "exposes get_1d_plot and get_3d_plot and no data accessor, so "
+          "wrapping it would mean reading private attributes, and matverse "
+          "deposits data rather than pictures.\n\n"
+          "**Displacements use the minimum image convention**, so a "
+          "displacement longer than half the shortest cell vector folds back "
+          "and is reported short. That is a property of the cell, not of this "
+          "function: run a bigger box or a shorter dt.",
+)
+def van_hove(md: AnnData, trajectories, species: str | None = None,
+             source: str = "input", level: str = "md", dt: int = 1,
+             r_max: float = 10.0, n_grid: int = 101, sigma: float = 0.1
+             ) -> None:
+    """Self and distinct van Hove functions. Deposits; returns ``None``."""
+    frames = np.asarray(trajectories, dtype=float)
+    if frames.ndim != 3 or frames.shape[2] != 3:
+        raise ValueError(f"trajectories must be (frames, atoms, 3) fractional "
+                         f"coordinates, got shape {frames.shape}")
+    if dt < 0 or dt >= frames.shape[0]:
+        raise ValueError(f"dt must be between 0 and {frames.shape[0] - 1} "
+                         f"frames, got {dt}")
+
+    grid = np.linspace(0.0, float(r_max), int(n_grid))
+    self_part = np.zeros((md.n_obs, len(grid)))
+    distinct = np.zeros((md.n_obs, len(grid)))
+    rms = np.full(md.n_obs, np.nan)
+    peak = np.full(md.n_obs, np.nan)
+    jump = np.full(md.n_obs, np.nan)
+
+    for row, structure in enumerate(structures(md, source)):
+        if frames.shape[1] != len(structure):
+            raise ValueError(
+                f"row {row}: the trajectory has {frames.shape[1]} atoms and "
+                f"the structure has {len(structure)}; they must be the same "
+                f"cell")
+        chosen = [i for i, site in enumerate(structure)
+                  if species is None or site.specie.symbol == species]
+        if not chosen:
+            continue
+
+        matrix = np.asarray(structure.lattice.matrix, dtype=float)
+        volume = float(structure.lattice.volume)
+        positions = frames[:, chosen, :]
+        n_pairs_self, n_pairs_distinct = 0, 0
+        self_distances, distinct_distances = [], []
+
+        # Average over every start frame that admits an interval of dt, which
+        # is what makes this a correlation function rather than one snapshot
+        # of one displacement.
+        for start in range(frames.shape[0] - dt):
+            delta = positions[start + dt] - positions[start]
+            delta -= np.round(delta)                     # minimum image
+            self_distances.append(
+                np.linalg.norm(delta @ matrix, axis=1))
+            n_pairs_self += len(chosen)
+
+            cross = positions[start + dt][:, None, :] - positions[start][None]
+            cross -= np.round(cross)
+            lengths = np.linalg.norm(cross @ matrix, axis=2)
+            off = ~np.eye(len(chosen), dtype=bool)
+            distinct_distances.append(lengths[off])
+            n_pairs_distinct += int(off.sum())
+
+        self_distances = np.concatenate(self_distances)
+        distinct_distances = np.concatenate(distinct_distances)
+
+        self_part[row] = _smear(self_distances, grid, sigma) / max(
+            n_pairs_self, 1)
+        # The distinct part is normalised to the ideal-gas count, so that a
+        # structureless system gives 1 and the dt=0 curve is the RDF itself
+        # rather than an unnormalised histogram of pair separations.
+        density = len(chosen) / volume
+        shell = 4.0 * np.pi * np.maximum(grid, 1e-8) ** 2
+        with np.errstate(divide="ignore", invalid="ignore"):
+            distinct[row] = (_smear(distinct_distances, grid, sigma)
+                             / max(n_pairs_distinct, 1)
+                             / (shell * density) * len(chosen))
+
+        rms[row] = float(np.sqrt((self_distances ** 2).mean()))
+        finite = np.isfinite(self_part[row])
+        if finite.any():
+            peak[row] = float(grid[np.argmax(np.where(finite, self_part[row],
+                                                      -np.inf))])
+        jump[row] = _outer_feature(grid, self_part[row])
+
+    deposit_grid(md, "van_hove_self", level, self_part, grid, unit="1/A",
+                 dt=int(dt), species=species, sigma=float(sigma))
+    deposit_grid(md, "van_hove_distinct", level, distinct, grid, unit="",
+                 dt=int(dt), species=species, sigma=float(sigma))
+    md.obs[f"van_hove_rms_{level}"] = rms
+    md.obs[f"van_hove_peak_{level}"] = peak
+    md.obs[f"van_hove_jump_{level}"] = jump
+    record(md, "md.van_hove", species=species, source=source, level=level,
+           dt=int(dt), r_max=float(r_max))
+
+
+def _smear(distances, grid, sigma: float):
+    """Distances onto a grid as normalised Gaussians rather than a histogram.
+
+    A histogram of a few thousand distances is mostly empty bins and its shape
+    depends on where the bin edges fell. Each distance contributes a unit
+    Gaussian instead, so the curve is smooth and integrates to the number of
+    distances however the grid was chosen.
+    """
+    distances = np.asarray(distances, dtype=float)
+    if not len(distances):
+        return np.zeros(len(grid))
+    inside = distances <= grid[-1] + 5.0 * sigma
+    distances = distances[inside]
+    if not len(distances):
+        return np.zeros(len(grid))
+    # Reflected at r = 0. A distance is a magnitude, so a Gaussian placed at
+    # d leaks into r < 0, where nothing can live; the mirror image folds that
+    # weight back. Without it a displacement of zero - every atom, at dt = 0 -
+    # keeps only the half of its Gaussian above the origin and the self part
+    # integrates to 0.5 rather than 1.
+    delta = grid[None, :] - distances[:, None]
+    mirror = grid[None, :] + distances[:, None]
+    weight = (np.exp(-0.5 * (delta / sigma) ** 2)
+              + np.exp(-0.5 * (mirror / sigma) ** 2)) / (sigma * np.sqrt(2 * np.pi))
+    return weight.sum(axis=0)
+
+
+def _outer_feature(grid, curve, threshold: float = 0.01) -> float:
+    """The outermost local maximum of the self part, or NaN if there is none.
+
+    Not the largest one. At any useful dt most atoms have not hopped, and the
+    self part's tallest feature is the vibrational peak near sqrt(2) times the
+    one-dimensional amplitude — the r^2 shell volume puts it there rather than
+    at the origin. A jump shows up as a *further out* bump carrying only the
+    fraction of atoms that moved, so it is found by position, not by height,
+    with a threshold to keep numerical ripple from qualifying.
+    """
+    curve = np.asarray(curve, dtype=float)
+    if len(curve) < 5 or not np.isfinite(curve).any():
+        return float("nan")
+    tallest = float(np.nanmax(curve))
+    if not np.isfinite(tallest) or tallest <= 0:
+        return float("nan")
+    interior = np.arange(1, len(curve) - 1)
+    maxima = interior[(curve[1:-1] > curve[:-2]) & (curve[1:-1] >= curve[2:])
+                      & (curve[1:-1] > threshold * tallest)]
+    if len(maxima) < 2:
+        # One maximum is the vibrational peak itself; there is no jump.
+        return float("nan")
+    return float(grid[maxima[-1]])
+
+
+@register_function(
+    aliases=["occupancy", "probability density", "where the ions go",
+             "ion density", "delocalisation", "explored volume",
+             "superionic", "smeared or localised"],
+    category="md",
+    description="How much of the cell the mobile ions actually explore, from "
+                "the probability density of finding one anywhere in it.",
+    requires={"structures": ["{source}"]},
+    produces={"obs": ["occupied_fraction_{level}", "occupancy_entropy_{level}",
+                      "occupancy_peak_{level}"]},
+    prerequisites=["mv.md.run"],
+    examples=["mv.md.occupancy(md, trajectories, species='Li')",
+              "mv.md.occupancy(md, trajectories, species='Li', bins=32)"],
+    related=["mv.md.sites", "mv.md.van_hove", "mv.neb.percolation",
+             "mv.md.conductivity"],
+    notes="Histogram the mobile ions' fractional positions over the run and "
+          "you have the probability of finding one in each corner of the "
+          "cell. A normal solid puts nearly all of it in small blobs at the "
+          "lattice sites; a superionic conductor smears it along the channels "
+          "between them. That difference is visible in the density long "
+          "before it is significant in a diffusivity, because it does not "
+          "need the ion to complete a journey — only to spend time on the "
+          "way.\n\n"
+          "obs['occupied_fraction'] is the fraction of the cell holding 90% "
+          "of the probability, which is the number to read: near zero for "
+          "ions sitting still, rising as they delocalise, and about 0.87 for "
+          "a well-sampled uniform distribution — not 1.0, because covering "
+          "90% of a uniform probability still leaves out the thin tail of "
+          "voxels that happened to be visited least. "
+          "obs['occupancy_entropy'] is the Shannon entropy of the same "
+          "histogram divided by its maximum, so it runs 0 to 1 on any grid "
+          "and can be compared between cells of different size. "
+          "obs['occupancy_peak'] is the largest single-voxel probability, "
+          "which falls as the density spreads.\n\n"
+          "Computed here from the definition. pymatgen's "
+          "ProbabilityDensityAnalysis sits beside generate_stable_sites, "
+          "which raises on a structure with one stable site — the condensed "
+          "distance matrix is empty and scipy's linkage refuses it — and one "
+          "well-localised site is the commonest case there is.\n\n"
+          "**The grid is the parameter that matters, and it interacts with "
+          "how long you ran.** Too coarse and everything looks delocalised "
+          "because one voxel spans several sites. Too fine and everything "
+          "looks localised for a reason that has nothing to do with the "
+          "material: with fewer samples than voxels, most voxels are empty "
+          "however the ions moved. A uniform distribution reads 0.87 at "
+          "sixteen samples per voxel and 0.05 at a tenth of a sample per "
+          "voxel — same physics, same function, different sampling — so this "
+          "warns below five per voxel rather than returning the number "
+          "quietly. bins is per lattice vector; the voxel edge lengths and "
+          "the sampling density are both recorded in uns.\n\n"
+          "Compare these numbers between runs of the same length on the same "
+          "grid. Across different ones they are not comparable, and no "
+          "normalisation makes them so.",
+)
+def occupancy(md: AnnData, trajectories, species: str | None = None,
+              source: str = "input", level: str = "md", bins: int = 24,
+              coverage: float = 0.9, key_added: str | None = None) -> None:
+    """Probability density of the mobile ions. Deposits; returns ``None``."""
+    frames = np.asarray(trajectories, dtype=float)
+    if frames.ndim != 3 or frames.shape[2] != 3:
+        raise ValueError(f"trajectories must be (frames, atoms, 3) fractional "
+                         f"coordinates, got shape {frames.shape}")
+    if not 0.0 < coverage <= 1.0:
+        raise ValueError(f"coverage is a fraction of the probability and must "
+                         f"be in (0, 1], got {coverage}")
+
+    name = key_added or level
+    fraction = np.full(md.n_obs, np.nan)
+    entropy = np.full(md.n_obs, np.nan)
+    peak = np.full(md.n_obs, np.nan)
+    voxels: list = []
+    sampling: list = []
+
+    for row, structure in enumerate(structures(md, source)):
+        if frames.shape[1] != len(structure):
+            raise ValueError(
+                f"row {row}: the trajectory has {frames.shape[1]} atoms and "
+                f"the structure has {len(structure)}; they must be the same "
+                f"cell")
+        mobile = [i for i, site in enumerate(structure)
+                  if species is None or site.specie.symbol == species]
+        if not mobile:
+            voxels.append(None)
+            sampling.append(float("nan"))
+            continue
+
+        points = (frames[:, mobile, :] % 1.0).reshape(-1, 3)
+        per_voxel = len(points) / float(bins ** 3)
+        if per_voxel < 5.0:
+            warnings.warn(
+                f"row {row}: {len(points)} sampled positions over "
+                f"{bins ** 3} voxels is {per_voxel:.2f} per voxel. Below "
+                f"about five, most voxels are empty because the run was "
+                f"short rather than because the ions were localised, and "
+                f"occupied_fraction is driven by the sampling. Use fewer "
+                f"bins or more frames.", stacklevel=2)
+        counts, _ = np.histogramdd(
+            points, bins=(bins, bins, bins),
+            range=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)))
+        total = counts.sum()
+        if total <= 0:
+            voxels.append(None)
+            sampling.append(float("nan"))
+            continue
+        probability = (counts / total).ravel()
+
+        # The smallest set of voxels that between them hold `coverage` of the
+        # probability, as a fraction of the cell. Taking every visited voxel
+        # instead would count the single frame an ion spent in flight the same
+        # as the thousand it spent at rest.
+        ordered = np.sort(probability)[::-1]
+        needed = int(np.searchsorted(np.cumsum(ordered), coverage) + 1)
+        fraction[row] = needed / probability.size
+
+        positive = probability[probability > 0]
+        entropy[row] = float(-(positive * np.log(positive)).sum()
+                             / np.log(probability.size))
+        peak[row] = float(probability.max())
+        voxels.append([float(length / bins)
+                       for length in structure.lattice.abc])
+        sampling.append(float(per_voxel))
+
+    md.obs[f"occupied_fraction_{name}"] = fraction
+    md.obs[f"occupancy_entropy_{name}"] = entropy
+    md.obs[f"occupancy_peak_{name}"] = peak
+    md.uns.setdefault("occupancy", {})[name] = {
+        "species": species, "bins": int(bins), "coverage": float(coverage),
+        "n_frames": int(frames.shape[0]),
+        "voxel_edges_angstrom": voxels,
+        "samples_per_voxel": sampling,
+        "meaning": "occupied_fraction is the fraction of the cell holding "
+                   f"{coverage:.0%} of the probability of finding a mobile ion",
+    }
+    record(md, "md.occupancy", species=species, source=source, level=level,
+           bins=int(bins), coverage=float(coverage), key_added=name)

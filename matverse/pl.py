@@ -39,26 +39,92 @@ def _axis(ax, figsize=(6.0, 4.0)):
     return _plt().subplots(figsize=figsize)[1]
 
 
+#: Emoji map for status reporting, mirroring omicverse's plot_set.
+EMOJI = {
+    "start": "🔬", "settings": "⚙️", "warnings": "🚫", "gpu": "🖥️",
+    "calc": "🧪", "logo": "🌟", "done": "✅",
+}
+
+#: The logo prints once per session, not once per call.
+_has_printed_logo = False
+
+LOGO = r"""
+                   __
+   ____ ___  ____ _/ /__   _____  _____________
+  / __ `__ \/ __ `/ __/ | / / _ \/ ___/ ___/ _ \
+ / / / / / / /_/ / /_ | |/ /  __/ /  (__  )  __/
+/_/ /_/ /_/\__,_/\__/ |___/\___/_/  /____/\___/
+"""
+
+
 @register_function(
-    aliases=["set style", "plot set", "plotting defaults", "figure style"],
+    aliases=["set style", "plot set", "mv_plot_set", "plotset", "绘图设置",
+             "plotting defaults", "figure style"],
     category="pl",
-    description="Set matplotlib defaults for the session — resolution, font "
-                "size, spines — so every later plot matches without being "
-                "styled one at a time.",
+    description="Configure plotting for matverse — matplotlib rcParams, "
+                "inline figure format, warning suppression — and report which "
+                "calculators and GPUs this installation can actually use.",
     examples=["mv.pl.set_style()",
-              "mv.pl.set_style(dpi=150, fontsize=10)"],
-    related=["mv.pl.spectra", "mv.pl.periodic_table"],
-    notes="Call once at the top of a notebook. It touches only rcParams, so "
-          "anything set afterwards still wins, and a figure built by hand is "
-          "unaffected.",
+              "mv.pl.set_style(dpi=150, fontsize=10)",
+              "mv.pl.set_style(font_path='arial', figsize=8)"],
+    related=["mv.pl.spectra", "mv.pl.periodic_table", "mv.calc.available"],
+    notes="Call once at the top of a notebook. It touches rcParams and "
+          "warning filters and nothing else, so anything set afterwards still "
+          "wins and a figure built by hand is unaffected.\n\n"
+          "The calculator and GPU report is the part worth reading. matverse "
+          "ships one working calculator and dispatches the rest to whatever "
+          "you installed, so 'which levels of theory can I actually run here' "
+          "is a question with a different answer on every machine — and the "
+          "answer decides what the session can do.",
 )
 def set_style(dpi: int = 100, dpi_save: int = 300, fontsize: int = 11,
-              figsize: tuple[float, float] = (6.0, 4.0),
-              facecolor: str = "white", grid: bool = False,
-              quiet: bool = False) -> None:
-    """Apply matverse's plotting defaults. Returns ``None``."""
+              figsize=(6.0, 4.0), facecolor: str = "white",
+              transparent: bool | None = None, grid: bool = False,
+              font_path: str | None = None,
+              ipython_format: str = "retina",
+              suppress_warnings: bool = True,
+              show_calculators: bool = True, show_gpu: bool = True,
+              verbose: bool = True, quiet: bool | None = None) -> None:
+    """Apply matverse's plotting defaults and report the environment.
+
+    Returns ``None``; everything it does is to global state.
+    """
+    global _has_printed_logo
+
+    # quiet= was the whole reporting switch in v0.1.14, which is on PyPI.
+    # Removing it would break working notebooks for a rename, so it stays and
+    # means "say nothing at all".
+    if quiet is not None:
+        verbose = show_calculators = show_gpu = not quiet
+
     plt = _plt()
-    plt.rcParams.update({
+    if verbose:
+        print(f"{EMOJI['start']} Starting plot initialization...")
+
+    # Inline figures at screen resolution, when there is a notebook to do it in.
+    import builtins
+    if getattr(builtins, "__IPYTHON__", False):
+        try:
+            from matplotlib_inline.backend_inline import set_matplotlib_formats
+            set_matplotlib_formats(ipython_format)
+        except (ImportError, AttributeError):
+            # matplotlib_inline 0.2.x reaches for rcParams._get(), which newer
+            # matplotlib removed. Fall back to configuring IPython directly.
+            try:
+                from IPython import get_ipython
+                shell = get_ipython()
+                if shell is not None:
+                    shell.config.InlineBackend.figure_formats = {ipython_format}
+            except Exception:
+                pass
+
+    if font_path is not None:
+        _use_font(font_path, verbose=verbose)
+
+    if isinstance(figsize, (int, float)):
+        figsize = (figsize, figsize)
+
+    settings = {
         "figure.dpi": dpi,
         "savefig.dpi": dpi_save,
         "figure.figsize": figsize,
@@ -76,11 +142,245 @@ def set_style(dpi: int = 100, dpi_save: int = 300, fontsize: int = 11,
         "axes.spines.right": False,
         "axes.grid": grid,
         "grid.alpha": 0.3,
-    })
-    if not quiet:
+    }
+    if transparent is not None:
+        settings["savefig.transparent"] = transparent
+    plt.rcParams.update(settings)
+
+    if suppress_warnings:
+        import warnings
+        for category in (UserWarning, FutureWarning, DeprecationWarning):
+            warnings.simplefilter("ignore", category=category)
+
+    if show_calculators:
+        _report_calculators()
+    if show_gpu:
+        _report_gpu()
+
+    if verbose and not _has_printed_logo:
         from . import __version__
         from ._registry import get_registry
-        print(f"matverse {__version__} — {len(get_registry())} functions")
+
+        print(LOGO)
+        print(f"🔖 Version: {__version__}   "
+              f"🧮 Functions: {len(get_registry())}   "
+              f"📚 Tutorials: https://matverse.readthedocs.io/")
+        _has_printed_logo = True
+
+    if verbose:
+        print(f"{EMOJI['done']} set_style complete.\n")
+
+
+def _use_font(font_path: str, verbose: bool = True) -> None:
+    """Register a font file with matplotlib and make it the default."""
+    import os
+
+    import matplotlib as mpl
+    from matplotlib import font_manager as fm
+
+    if font_path.lower() in ("arial", "arial.ttf") and \
+            not font_path.endswith(".ttf"):
+        # matplotlib ships no Arial, and a paper that asks for it is common
+        # enough to be worth fetching once and caching.
+        import tempfile
+
+        cached = os.path.join(tempfile.gettempdir(), "matverse_arial.ttf")
+        if os.path.exists(cached):
+            font_path = cached
+        else:
+            try:
+                import requests
+
+                url = ("https://github.com/kavin808/arial.ttf/raw/refs/"
+                       "heads/master/arial.ttf")
+                response = requests.get(url, timeout=30)
+                response.raise_for_status()
+                with open(cached, "wb") as handle:
+                    handle.write(response.content)
+                font_path = cached
+                if verbose:
+                    print(f"{EMOJI['settings']} Arial cached at {cached}")
+            except Exception as exc:
+                print(f"{EMOJI['warnings']} could not fetch Arial ({exc}); "
+                      f"keeping the default font")
+                return
+
+    try:
+        fm.fontManager.addfont(font_path)
+        name = fm.FontProperties(fname=font_path).get_name()
+        mpl.rcParams["font.family"] = "sans-serif"
+        mpl.rcParams["font.sans-serif"] = [name, "DejaVu Sans"]
+        if verbose:
+            print(f"{EMOJI['settings']} Font registered as {name!r}")
+    except Exception as exc:
+        print(f"{EMOJI['warnings']} could not set the font ({exc}); "
+              f"keeping the default")
+
+
+def _report_calculators() -> None:
+    """Which levels of theory this installation can actually run."""
+    from .calc import available
+
+    try:
+        entries = available()
+    except Exception as exc:                              # pragma: no cover
+        print(f"{EMOJI['warnings']} calculator detection failed: {exc}")
+        return
+
+    runnable = [name for name, meta in entries.items()
+                if meta.get("importable", True)]
+    print(f"{EMOJI['calc']} Calculators available: {len(runnable)}")
+    for name in runnable:
+        meta = entries[name]
+        method = meta.get("method", name)
+        licence = meta.get("license") or "unstated"
+        print(f"    • {name} — {method} ({licence})")
+    if not runnable:
+        print(f"{EMOJI['warnings']} none — install ASE, or register one with "
+              f"mv.calc.register_calculator")
+
+
+def _report_gpu() -> None:
+    """Report accelerators, because a machine-learned potential needs one."""
+    try:
+        import torch
+    except ImportError:
+        print(f"{EMOJI['gpu']} PyTorch absent — GPU detection skipped. "
+              f"Machine-learned potentials need it.")
+        return
+
+    found = False
+    if torch.cuda.is_available():
+        count = torch.cuda.device_count()
+        print(f"{EMOJI['gpu']} NVIDIA CUDA GPUs: {count}")
+        for index in range(count):
+            props = torch.cuda.get_device_properties(index)
+            print(f"    • [CUDA {index}] {props.name} — "
+                  f"{props.total_memory / 1024 ** 3:.1f} GB, "
+                  f"compute {props.major}.{props.minor}")
+        found = True
+    if getattr(torch.backends, "mps", None) is not None and \
+            torch.backends.mps.is_available():
+        print(f"{EMOJI['gpu']} Apple Silicon MPS available")
+        found = True
+    if getattr(torch.version, "hip", None):
+        print(f"{EMOJI['gpu']} AMD ROCm — HIP {torch.version.hip}")
+        found = True
+    if getattr(torch, "xpu", None) is not None and torch.xpu.is_available():
+        print(f"{EMOJI['gpu']} Intel XPU: {torch.xpu.device_count()}")
+        found = True
+    if not found:
+        print(f"{EMOJI['warnings']} No GPU found — CPU only. Fine for EMT, "
+              f"slow for a machine-learned potential.")
+
+
+@register_function(
+    aliases=["view structure", "show structure", "3d view", "visualise",
+             "look at it", "render structure", "draw the cell"],
+    category="pl",
+    description="Draw a structure in three dimensions — interactive in a "
+                "notebook, a static image otherwise.",
+    requires={"structures": ["{source}"]},
+    examples=["mv.pl.structure(md, 0)",
+              "mv.pl.structure(md, 'LiFePO4', supercell=(2, 2, 2))",
+              "mv.pl.structure(md, 0, backend='matplotlib')"],
+    related=["mv.pl.periodic_table", "mv.env.coordination"],
+    notes="Looking at a structure is how you catch the mistakes a number will "
+          "not show you: a slab built upside down, a molecule that came out of "
+          "a parser inside out, an interface with the film on the wrong side.\n\n"
+          "py3Dmol renders in the browser and is interactive; the matplotlib "
+          "fallback needs nothing extra and produces an axis like every other "
+          "plot here, so it composes into a figure. Neither replaces VESTA or "
+          "Crystal Toolkit for real inspection — this is for the quick look "
+          "you take twenty times a day.",
+)
+def structure(md: AnnData, which=0, source: str = "input",
+              backend: str = "auto", supercell=None, style: str = "stick",
+              width: int = 480, height: int = 360, ax=None):
+    """Draw one structure. Returns the viewer or the axis."""
+    from ._core import structures as _structures
+
+    names = [str(x) for x in md.obs.get("name", md.obs_names)]
+    if isinstance(which, (int, np.integer)):
+        index = int(which)
+    else:
+        text = str(which)
+        pool = names if text in names else [str(x) for x in md.obs_names]
+        if text not in pool:
+            raise KeyError(f"{which!r} is not a row; rows are {pool[:8]}")
+        index = pool.index(text)
+
+    obj = _structures(md, source)[index]
+    if supercell is not None and hasattr(obj, "lattice"):
+        obj = obj.copy()
+        obj.make_supercell(list(supercell))
+
+    if backend == "auto":
+        try:
+            import py3Dmol                                # noqa: F401
+            backend = "py3dmol"
+        except ImportError:
+            backend = "matplotlib"
+
+    if backend == "py3dmol":
+        return _view_py3dmol(obj, style, width, height)
+    if backend == "matplotlib":
+        return _view_matplotlib(obj, ax)
+    raise ValueError(f"backend must be 'auto', 'py3dmol' or 'matplotlib', "
+                     f"got {backend!r}")
+
+
+def _view_py3dmol(obj, style: str, width: int, height: int):
+    import py3Dmol
+
+    from pymatgen.io.xyz import XYZ
+
+    viewer = py3Dmol.view(width=width, height=height)
+    if hasattr(obj, "lattice"):
+        # CIF carries the cell, which is the point of drawing a crystal.
+        from pymatgen.io.cif import CifWriter
+
+        viewer.addModel(str(CifWriter(obj)), "cif")
+        viewer.addUnitCell()
+    else:
+        viewer.addModel(str(XYZ(obj)), "xyz")
+    viewer.setStyle({style: {}, "sphere": {"scale": 0.3}})
+    viewer.zoomTo()
+    return viewer
+
+
+def _view_matplotlib(obj, ax=None):
+    """A projection along the shortest axis. Crude, and needs nothing."""
+    plt = _plt()
+    from .elements import element_frame
+
+    coords = np.asarray(obj.cart_coords, dtype=float)
+    symbols = [str(s.specie.symbol) for s in obj]
+    spread = coords.max(axis=0) - coords.min(axis=0)
+    depth = int(np.argmin(spread))
+    plane = [k for k in range(3) if k != depth]
+
+    ax = _axis(ax, figsize=(4.8, 4.4))
+    frame = element_frame(sorted(set(symbols)))
+    radii = frame["atomic_radius"].to_dict() if "atomic_radius" in frame \
+        else {}
+    order = np.argsort(coords[:, depth])
+    palette = plt.get_cmap("tab20")
+    colours = {el: palette(i % 20) for i, el in enumerate(sorted(set(symbols)))}
+
+    for i in order:
+        radius = radii.get(symbols[i]) or 1.0
+        ax.scatter(coords[i, plane[0]], coords[i, plane[1]],
+                   s=260 * float(radius) ** 2, color=colours[symbols[i]],
+                   edgecolors="#333", linewidths=0.6, zorder=2)
+    for element, colour in colours.items():
+        ax.scatter([], [], color=colour, edgecolors="#333", label=element)
+
+    ax.set_aspect("equal")
+    ax.set_xlabel(f"{'xyz'[plane[0]]} (Å)")
+    ax.set_ylabel(f"{'xyz'[plane[1]]} (Å)")
+    ax.legend(fontsize=8, loc="best")
+    return ax
 
 
 @register_function(
@@ -431,7 +731,7 @@ def embedding(md: AnnData, color: str | None = None, use_rep: str = "X_pca",
     description="Overlay grid-shaped curves — diffraction patterns, densities "
                 "of states — for selected materials, optionally comparing a "
                 "computed level against a measured one.",
-    requires={"obsm": ["{quantity}_{level}"], "uns": ["grids"]},
+    requires={"obsm": ["{quantity}_{levels}"], "uns": ["grids"]},
     prerequisites=["mv.prop.xrd"],
     examples=["mv.pl.spectra(md, 'xrd', rows=[0, 1, 2])",
               "mv.pl.spectra(md, 'xrd', rows=[0], levels=['calc', "
@@ -504,5 +804,5 @@ def provenance(md: AnnData, ax=None):
     return ax
 
 
-__all__ = ["set_style", "periodic_table", "rank_elements_groups", "hull",
+__all__ = ["set_style", "structure", "periodic_table", "rank_elements_groups", "hull",
            "parity", "pareto", "embedding", "spectra", "provenance"]

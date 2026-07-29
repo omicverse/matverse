@@ -184,6 +184,40 @@ script = mv.utils.slurm_script(
 print(Path(script).read_text())"""),
 
     ("markdown", """\
+### Submitting it
+
+`mv.utils.submit` shells out to `sbatch` and records the job id **on the
+object**, so "which job is computing this dataset" is answerable from the data
+rather than from shell history."""),
+
+    ("code", """\
+entry = mv.utils.submit(md, script, dry_run=True)
+entry"""),
+
+    ("markdown", """\
+`dry_run=True` returns the command without running it, which is what you want
+on a login node — and what this page uses, because a documentation build should
+not queue jobs.
+
+Submissions accumulate through the same record machinery as campaign rounds, so
+they survive `write_h5ad`: a list of dicts in `uns` does not."""),
+
+    ("code", """\
+mv.records(md.uns["submissions"], "jobs")"""),
+
+    ("code", """\
+mv.utils.job_status(md)"""),
+
+    ("markdown", """\
+With real submissions that reads `squeue`, and falls back to `sacct` for jobs
+that have finished — because `squeue` forgets a job shortly after it ends,
+which is the usual reason a hand-rolled poll reports a completed job as
+missing.
+
+matverse stops there. It is not a workflow manager and does not retry, chain or
+monitor; atomate2, quacc and AiiDA do that, and a fourth would be a maintenance
+liability. What it adds is the link back to the dataset.
+
 ```{warning}
 It writes `--time`, `--mem`, `--cpus-per-task` and `--partition` explicitly and
 does not rely on defaults. Slurm's defaults are typically one CPU, a few

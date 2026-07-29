@@ -170,9 +170,13 @@ def available(check_imports: bool = True) -> dict:
     category="calc",
     description="Report which levels used in this object carry a licence that "
                 "forbids commercial use.",
-    requires={"levels": ["{level}"]},
     examples=["mv.calc.check_licenses(md)"],
     related=["mv.calc.energy", "mv.calc.available"],
+    notes="Claims no requires. It used to claim levels['{level}'], which is "
+          "unbindable — there is no `level` parameter to interpolate — and "
+          "false besides: on an object with no levels recorded it returns an "
+          "empty list rather than failing, which is the right behaviour for a "
+          "check.",
 )
 def check_licenses(md: AnnData) -> list[str]:
     """Levels in this object whose licence forbids commercial use."""
@@ -234,21 +238,36 @@ def energy(md: AnnData, level: str = "emt", source: str = "input",
               "levels": ["{level}"]},
     dispatch="level= selects the calculator, as for mv.calc.energy",
     examples=["mv.calc.relax(md, level='emt')",
+              "mv.calc.relax(md, level='emt', cell=False)",
               "mv.calc.relax(md, level='emt', source='hop_final', "
               "key_added='relaxed_final')"],
-    related=["mv.calc.energy", "mv.thermo.hull"],
+    related=["mv.calc.energy", "mv.prop.eos", "mv.thermo.hull"],
     notes="The relaxed geometry becomes a named variant rather than replacing "
           "the input, so 'which structure was this energy computed on' stays "
           "answerable from the object alone.\n\n"
+          "**cell=True relaxes the lattice as well as the positions**, and is "
+          "the default because that is what relaxing a crystal means. Until "
+          "v0.1.17 only the positions moved, which for a high-symmetry cell is "
+          "no relaxation at all: the forces on an fcc metal vanish by symmetry, "
+          "so the optimiser converged immediately at whatever lattice constant "
+          "it was given, and the variant was called relaxed_<level> anyway. "
+          "Every property that depends on volume — the bulk modulus, the "
+          "phonon frequencies, the energy entering a hull — was then computed "
+          "under residual stress. Pass cell=False when the cell is meant to be "
+          "held, as for a slab or a fixed-volume comparison; it is also skipped "
+          "for a molecule, which has no cell.\n\n"
           "key_added defaults to 'relaxed_<level>', which is the same name "
           "every time — so relaxing two variants at one level in sequence "
           "overwrites the first. Anything needing two relaxed geometries, such "
           "as the endpoints of an NEB, must name them apart.",
 )
 def relax(md: AnnData, level: str = "emt", source: str = "input",
-          fmax: float = 0.05, steps: int = 200,
+          fmax: float = 0.05, steps: int = 200, cell: bool = True,
           key_added: str | None = None, **params) -> None:
     """Relax every structure and deposit the result as its own variant.
+
+    ``cell`` relaxes the lattice alongside the atomic positions, which is what
+    relaxing a crystal means. It is skipped for a molecule, which has no cell.
 
     ``key_added`` names the output variant, which matters whenever more than one
     variant is relaxed at the same level: the default ``relaxed_<level>`` is the
@@ -268,7 +287,10 @@ def relax(md: AnnData, level: str = "emt", source: str = "input",
         try:
             atoms = adaptor.get_atoms(s)
             atoms.calc = calc
-            opt = BFGS(atoms, logfile=None)
+            target = atoms
+            if cell and getattr(s, "lattice", None) is not None:
+                target = _cell_filter(atoms)
+            opt = BFGS(target, logfile=None)
             ok = bool(opt.run(fmax=fmax, steps=steps))
             val = float(atoms.get_potential_energy())
             forces = np.asarray(atoms.get_forces(), dtype=float)
@@ -290,9 +312,15 @@ def relax(md: AnnData, level: str = "emt", source: str = "input",
     md.obs[f"relax_converged_{level}"] = conv
     md.obs[f"max_force_{level}"] = maxf
     set_level(md, level, **meta, source=source, fmax=fmax, steps=steps,
-              n_failed=failed, **params)
+              cell=bool(cell), n_failed=failed, **params)
     record(md, "calc.relax", level=level, source=source, fmax=fmax,
-           key_added=variant)
+           cell=bool(cell), key_added=variant)
+
+
+def _cell_filter(atoms):
+    """Let the optimiser move the lattice as well as the atoms."""
+    from ase.filters import FrechetCellFilter
+    return FrechetCellFilter(atoms)
 
 
 @register_function(
@@ -303,7 +331,9 @@ def relax(md: AnnData, level: str = "emt", source: str = "input",
                 "deposit it onto the sites axis, where per-atom results are a "
                 "matrix rather than ragged records.",
     requires={"structures": ["{source}"]},
-    produces={"levels": ["{level}"]},
+    produces={"levels": ["{level}"],
+              "sites.obsm": ["forces_{level}"],
+              "sites.obs": ["force_magnitude_{level}"]},
     prerequisites=["mv.multi.sites"],
     dispatch="level= selects the calculator, as for mv.calc.energy",
     examples=["sites = mv.multi.sites(md); mv.calc.forces(md, sites, "
@@ -311,10 +341,10 @@ def relax(md: AnnData, level: str = "emt", source: str = "input",
     related=["mv.multi.sites", "mv.multi.aggregate", "mv.calc.relax"],
     notes="Takes both objects because forces need the structures, which live on "
           "the material axis, and produce one row per atom, which lives on the "
-          "sites axis. Writes sites.obsm['forces_{level}'] and "
-          "sites.obs['force_magnitude_{level}'] — slots on the object passed "
-          "as `sites`, which the contract fields cannot name because they "
-          "describe one object only.",
+          "sites axis. The produces slots say `sites.` for exactly that reason: "
+          "the level is recorded on the material object, the forces on the "
+          "sites object, and a claim that did not distinguish them would be "
+          "pointing an agent at the wrong one.",
 )
 def forces(md: AnnData, sites: AnnData, level: str = "emt",
            source: str = "input", **params) -> None:
@@ -367,7 +397,7 @@ def forces(md: AnnData, sites: AnnData, level: str = "emt",
     description="Combine several levels into a consensus level, recording the "
                 "mean energy and the spread across the committee as an "
                 "uncertainty for active learning.",
-    requires={"obs": ["energy_per_atom_{level}"]},
+    requires={"obs": ["energy_per_atom_{levels}"]},
     produces={"obs": ["energy_per_atom_{key}", "energy_per_atom_{key}_std"],
               "levels": ["{key}"]},
     prerequisites=["mv.calc.energy"],

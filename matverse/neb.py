@@ -33,6 +33,7 @@ promotes candidates that DFT would reject. Every level records this in
 from __future__ import annotations
 
 import numpy as np
+import pandas as pd
 from anndata import AnnData
 
 from ._core import deposit_grid, record, set_level, structures
@@ -288,4 +289,297 @@ def _shift(index: int, removed: int) -> int:
     return index - 1 if index > removed else index
 
 
-__all__ = ["barrier", "hop_endpoints"]
+__all__ = ["barrier", "hop_endpoints", "hops", "percolation"]
+
+
+@register_function(
+    aliases=["percolation", "percolating network", "migration network",
+             "diffusion dimensionality", "percolation threshold",
+             "does it percolate", "connected pathway", "bottleneck"],
+    category="neb",
+    description="Ask whether the mobile ions form a network that crosses the "
+                "crystal rather than a set of isolated pockets, and in how "
+                "many independent directions.",
+    requires={"structures": ["{source}"]},
+    produces={"obs": ["percolation_dimensionality_{species}",
+                      "percolation_threshold_{species}",
+                      "percolation_sites_{species}"]},
+    prerequisites=[],
+    examples=["mv.neb.percolation(md, species='Li')",
+              "mv.neb.percolation(md, species='Li', cutoff=3.5)"],
+    related=["mv.neb.hop_endpoints", "mv.neb.barrier", "mv.md.conductivity"],
+    notes="A barrier is the cost of one hop. It says nothing about whether "
+          "that hop repeated ever gets an ion out of the cell — a material can "
+          "have a low barrier between two sites that form a closed pair, and "
+          "conduct nothing. This asks the connectivity question instead: "
+          "starting from one mobile site, which periodic images of it can be "
+          "reached by hops no longer than the cutoff, and what is the rank of "
+          "the lattice translations those images span.\n\n"
+          "Rank 0 means isolated pockets, 1 a chain, 2 a plane, 3 a fully "
+          "three-dimensional network. Layered LiCoO2 gives 2 at a cutoff that "
+          "spans the in-plane Li-Li distance and 3 only at a cutoff large "
+          "enough to jump the CoO2 slab, which is the honest answer: "
+          "dimensionality is a property of the network *at a hop length*, not "
+          "of the material, so the cutoff is part of the result.\n\n"
+          "obs['percolation_threshold_{species}'] is the smallest cutoff at "
+          "which anything percolates at all — the bottleneck hop the ion "
+          "cannot avoid. It is computed exactly, by testing the distinct "
+          "pair distances in order rather than scanning a grid, and it does "
+          "not depend on the cutoff argument.\n\n"
+          "This is geometry. It uses no energies and no level of theory, so it "
+          "is cheap enough to run before deciding which candidates deserve a "
+          "barrier — but a percolating network is a necessary condition for "
+          "conduction, never a sufficient one.",
+)
+def percolation(md: AnnData, species: str, source: str = "input",
+                cutoff: float = 4.0, max_image: int = 1,
+                key_added: str | None = None) -> None:
+    """Dimensionality and bottleneck of the mobile-ion network."""
+    from pymatgen.core import Structure
+
+    name = key_added or species
+    dimensionality, threshold, counts = [], [], []
+
+    for structure in structures(md, source):
+        mobile = [s for s in structure if s.specie.symbol == species]
+        counts.append(len(mobile))
+        if len(mobile) < 1:
+            dimensionality.append(0)
+            threshold.append(np.nan)
+            continue
+        sub = Structure.from_sites(mobile)
+        dimensionality.append(_percolation_rank(sub, cutoff, max_image))
+        threshold.append(_percolation_threshold(sub, max_image))
+
+    md.obs[f"percolation_dimensionality_{name}"] = np.array(dimensionality,
+                                                            dtype=int)
+    md.obs[f"percolation_threshold_{name}"] = np.array(threshold, dtype=float)
+    md.obs[f"percolation_sites_{name}"] = np.array(counts, dtype=int)
+    md.uns.setdefault("percolation", {})[name] = {
+        "species": species, "cutoff": float(cutoff), "max_image": int(max_image),
+        "threshold_unit": "angstrom",
+        "meaning": "rank of the lattice translations reachable by hops "
+                   "shorter than the cutoff: 0 isolated, 1 chain, 2 plane, "
+                   "3 three-dimensional",
+    }
+    record(md, "neb.percolation", species=species, source=source,
+           cutoff=float(cutoff), key_added=name)
+
+
+def _mobile_graph(sub, cutoff: float):
+    """The mobile sublattice as a periodic graph, edges weighted by distance."""
+    from pymatgen.analysis.graphs import StructureGraph
+
+    graph = StructureGraph.from_empty_graph(sub)
+    for index, site in enumerate(sub):
+        for neighbour in sub.get_neighbors(site, cutoff):
+            image = tuple(int(v) for v in neighbour.image)
+            if (neighbour.index, image) == (index, (0, 0, 0)):
+                continue
+            try:
+                graph.add_edge(index, neighbour.index, from_jimage=(0, 0, 0),
+                               to_jimage=image,
+                               weight=float(neighbour.nn_distance),
+                               warn_duplicates=False)
+            except Exception:
+                # add_edge refuses a duplicate it has already stored; the
+                # neighbour list gives each pair from both ends, so this is the
+                # ordinary case rather than a failure.
+                continue
+    return graph
+
+
+def _percolation_rank(sub, cutoff: float, max_image: int) -> int:
+    """How many independent lattice directions the network reaches."""
+    try:
+        from pymatgen.analysis.diffusion.neb.periodic_dijkstra import (
+            periodic_dijkstra_on_sgraph)
+    except ImportError as exc:                             # pragma: no cover
+        raise ImportError(
+            f"mv.neb.percolation needs pymatgen-analysis-diffusion, one of "
+            f"pymatgen's own add-on packages. Install it with `pip install "
+            f"pymatgen-analysis-diffusion`. ({exc})") from exc
+
+    graph = _mobile_graph(sub, cutoff)
+    if graph.graph.number_of_edges() == 0:
+        return 0
+
+    best = 0
+    for start in range(len(sub)):
+        reached, _ = periodic_dijkstra_on_sgraph(
+            graph, sources={start}, weight="weight", max_image=max_image)
+        # Only an image of the *starting* site counts. Reaching a different
+        # site one cell over says the two are connected, not that the ion got
+        # anywhere: it is the same site in another cell that means the network
+        # repeats, and the ion can keep going.
+        images = np.array([[int(v) for v in key[1]] for key in reached
+                           if key[0] == start and any(key[1])], dtype=int)
+        if len(images):
+            best = max(best, int(np.linalg.matrix_rank(images)))
+        if best == 3:
+            break
+    return best
+
+
+def _percolation_threshold(sub, max_image: int) -> float:
+    """The shortest hop length at which the network first crosses the cell.
+
+    Percolation is monotonic in the cutoff — adding edges never disconnects
+    anything — so the threshold is one of the pair distances, and testing them
+    in order finds it exactly. A bisection would be fewer steps and would land
+    between two distances, which is a number no hop has.
+    """
+    distances = set()
+    span = float(max(sub.lattice.abc)) * 1.5
+    for index, site in enumerate(sub):
+        for neighbour in sub.get_neighbors(site, span):
+            if neighbour.nn_distance > 1e-8:
+                distances.add(round(float(neighbour.nn_distance), 6))
+    for distance in sorted(distances):
+        if _percolation_rank(sub, distance + 1e-6, max_image) >= 1:
+            return distance
+    return float("nan")
+
+
+@register_function(
+    aliases=["hops", "distinct hops", "unique hops", "migration graph",
+             "which barriers do i need", "hop enumeration", "jump network"],
+    category="neb",
+    description="Enumerate the symmetry-distinct hops a mobile ion can make, "
+                "so a barrier is computed once per kind of jump rather than "
+                "once per pair of sites.",
+    requires={"structures": ["{source}"]},
+    examples=["hops = mv.neb.hops(md, species='Li')",
+              "hops = mv.neb.hops(md, species='Li', cutoff=4.0)"],
+    related=["mv.neb.barrier", "mv.neb.hop_endpoints", "mv.neb.percolation"],
+    notes="A cell with n mobile sites has O(n^2) ordered pairs and far fewer "
+          "*kinds* of jump. Computing a NEB for each pair wastes almost all of "
+          "the budget on symmetry copies of a barrier already known, and the "
+          "thing you actually want to know — which distinct hops exist and how "
+          "long they are — is a question about the structure, not about "
+          "energy.\n\n"
+          "Returns rather than deposits: one material gives many hops. "
+          "obs['multiplicity'] is how many copies of that hop the cell "
+          "contains, so a rate summed over the network can be reconstructed "
+          "without re-enumerating, and obs['hop_distance'] is the jump "
+          "length.\n\n"
+          "**How distinctness is decided.** Two hops are treated as the same "
+          "when they connect the same pair of symmetry-equivalent sites over "
+          "the same distance — the equivalence classes come from "
+          "SpacegroupAnalyzer, the distance is rounded to `tol` angstroms. "
+          "That is exact whenever the site pair and the length determine the "
+          "path, which covers ordinary crystals, and it can merge two "
+          "genuinely different routes between the same pair of sites in a low-"
+          "symmetry cell. It does not split what should be merged, so the "
+          "count is a lower bound on the work and never an inflated one.\n\n"
+          "Written here rather than wrapped from "
+          "pymatgen.analysis.diffusion.neb.full_path_mapper: that module calls "
+          "StructureGraph.with_local_env_strategy, renamed upstream to "
+          "from_local_env_strategy, so every MigrationGraph entry point raises "
+          "AttributeError against current pymatgen.",
+)
+def hops(md: AnnData, species: str, source: str = "input",
+         cutoff: float | None = None, tol: float = 0.05) -> AnnData:
+    """Symmetry-distinct hops of one species. Returns a new dataset."""
+    from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
+
+    from .data import from_structures
+
+    names = [str(n) for n in md.obs_names]
+    built, rows, failed = [], [], []
+
+    for row, structure in enumerate(structures(md, source)):
+        mobile = [i for i, site in enumerate(structure)
+                  if site.specie.symbol == species]
+        if not mobile:
+            failed.append(f"{names[row]}: no {species}")
+            continue
+
+        try:
+            dataset = SpacegroupAnalyzer(structure).get_symmetry_dataset()
+            equivalent = list(getattr(dataset, "equivalent_atoms", None)
+                              if not isinstance(dataset, dict)
+                              else dataset["equivalent_atoms"])
+        except Exception:
+            # No symmetry found is not a failure: every site is then its own
+            # class, which is the correct answer for a disordered cell.
+            equivalent = list(range(len(structure)))
+
+        radius = cutoff if cutoff else _first_gap(structure, mobile)
+        seen: dict[tuple, dict] = {}
+        for index in mobile:
+            for neighbour in structure.get_neighbors(structure[index], radius):
+                if neighbour.specie.symbol != species:
+                    continue
+                distance = float(neighbour.nn_distance)
+                if distance < 1e-6:
+                    continue
+                # Unordered: a hop and its reverse are one kind of jump.
+                pair = tuple(sorted((int(equivalent[index]),
+                                     int(equivalent[neighbour.index]))))
+                key = (pair, round(distance / tol))
+                entry = seen.setdefault(key, {
+                    "distance": distance, "count": 0,
+                    "start": index, "end": int(neighbour.index)})
+                entry["count"] += 1
+
+        if not seen:
+            failed.append(f"{names[row]}: no {species}-{species} pair within "
+                          f"{radius:.2f} A")
+            continue
+
+        for (pair, _), entry in sorted(seen.items(),
+                                       key=lambda kv: kv[1]["distance"]):
+            built.append(structure)
+            rows.append({
+                "parent": names[row],
+                "species": species,
+                "hop_distance": entry["distance"],
+                # Each hop was counted from both ends, so the number of
+                # distinct jumps is half the number of sightings.
+                "multiplicity": int(entry["count"] // 2) or 1,
+                "site_class_a": int(pair[0]),
+                "site_class_b": int(pair[1]),
+                "start_index": int(entry["start"]),
+                "end_index": int(entry["end"]),
+            })
+
+    if not built:
+        raise ValueError(f"no {species} hop was found in any of these "
+                         f"{md.n_obs} structures: {failed[:3]}")
+
+    out = from_structures(built, pd.DataFrame(rows))
+    out.uns["hops"] = {
+        "species": species, "source": source, "cutoff": cutoff, "tol": tol,
+        "n_parents": int(md.n_obs), "errors": failed,
+        "distinctness": "same pair of symmetry-equivalent sites and the same "
+                        "distance to within tol angstroms",
+    }
+    record(out, "neb.hops", species=species, source=source, cutoff=cutoff,
+           n_parents=int(md.n_obs))
+    return out
+
+
+def _first_gap(structure, indices, span: float = 8.0) -> float:
+    """A radius that takes the nearest shell of same-species neighbours only.
+
+    Picked from the data rather than defaulted: the first clear gap in the
+    sorted neighbour distances is where one shell ends and the next begins, and
+    a fixed cutoff would take two shells in a close-packed metal and none in an
+    open framework.
+    """
+    distances = sorted(float(n.nn_distance)
+                       for i in indices
+                       for n in structure.get_neighbors(structure[i], span)
+                       if n.specie.symbol == structure[i].specie.symbol
+                       and n.nn_distance > 1e-6)
+    if not distances:
+        return span
+    # The margin is 0.1% rather than an absolute epsilon: rounding a distance
+    # to four decimals and adding 1e-6 puts the cutoff *below* the shell it is
+    # meant to include, which returned zero hops for fcc. 0.1% is far under the
+    # 10% that defines a gap, so it cannot leak into the next shell either.
+    for previous, current in zip(distances, distances[1:]):
+        if current - previous > 0.1 * previous:
+            return previous * 1.001
+    return distances[-1] * 1.001

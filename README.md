@@ -86,7 +86,7 @@ not single compositions.
 | `mv.feat` | descriptors into `obsm` |
 | `mv.tl` | ordination, clustering, element enrichment, novelty |
 | `mv.calc` | energies, forces and relaxation, tagged by level of theory |
-| `mv.prop` | derived properties — elastic moduli, phonons, and curves on a shared grid |
+| `mv.prop` | derived properties — elastic moduli, equation of state, phonons, bonding dimensionality, NMR and piezoelectric tensors, optics and solar efficiency, and curves on a shared grid |
 | `mv.md` | molecular dynamics — diffusivity, thermal expansion, amorphous structures |
 | `mv.neb` | migration barriers by nudged elastic band |
 | `mv.mag` | magnetic orderings, and which one the hull should use |
@@ -242,9 +242,19 @@ attributes on returned objects and nothing is mutated in common.
 
 **Claims are verified by execution, not asserted.** `produces` is checked by
 running the call and looking; `requires` by deleting the slot and confirming the
-call fails. The current state is **68/68 probed claims verified** across 39
-entries and 115 claims — and four claims were deleted rather than repaired when
-they failed their probe:
+call fails. The current state is **480/480 probed claims verified**. Of the 139
+entries that make a contract claim, 125 are probed; the other 14 need the
+network, a real VASP or LOBSTER output, or a tool that is not installed, and
+each is named with its reason in `tests/_contract_cases.py` rather than quietly
+left out.
+
+That distinction is the point. A rate is only as good as its denominator: for
+most of this library's life the harness probed 165 of 491 claims and reported
+100%, which was a statement about the test suite rather than about the registry.
+`test_no_claim_goes_unprobed` now fails if any entry ships a claim nothing
+checks.
+
+Claims are deleted rather than repaired when they fail. The ones that did:
 
 | deleted claim | why it failed |
 |---|---|
@@ -252,12 +262,37 @@ they failed their probe:
 | `thermo.hull requires levels[{level}]` | only read when `references=` is given |
 | `tl.cluster requires obsp['connectivities']` | true of the leiden route, not kmeans |
 | `pp.strain produces structures[{name}]` | template was unresolvable; the default is now a real value |
+| `screen.filter requires obs['{column}']` | no parameter holds a column name to interpolate |
+| `utils.resume requires obs['{column}']` | an absent column means every row is still to do |
+| `utils.job_status requires uns['submissions']` | having submitted nothing is an answer, not an error |
+| `dft.status requires obs['dft_directory']` | scans the root directory, not the object |
+| `exp.attach requires uns['grids']` | a measured curve may be the first grid |
+| `surf.wulff produces uns['wulff']` | never written |
+| `iface.build produces obs['nsites']` | never written |
 
-The third is the informative one. `mv.tl.cluster`'s two routes consume different
-state, and the contract vocabulary has one `requires` field per function rather
-than one per route. That dependency is expressible only in the `dispatch` prose,
-which a caller reads but a tool cannot check — the same shape of limitation as
-the `pymatgen` transfer boundary, one level down.
+Two are informative beyond their own function. `mv.tl.cluster`'s two routes
+consume different state, and the contract vocabulary has one `requires` field
+per function rather than one per route — expressible only in the `dispatch`
+prose, which a caller reads but a tool cannot check. `mv.screen.filter` is the
+sharper case: its consumed columns are encoded in the *keys* of `**criteria`, so
+there is no parameter for a slot template to name. An API whose inputs are
+keyword names puts them beyond what this vocabulary can say, and no wording
+fixes it.
+
+**Which object a slot lands on.** On a library where every operation takes one
+object, naming a container is enough. matverse has operations that take two — a
+material axis and a sites, bands or interface axis — so a container may be
+qualified with the parameter that receives it:
+
+```python
+produces={"sites.obs": ["coordination_number"]}     # mv.env.coordination
+```
+
+This was the one place the omicverse vocabulary needed extending, and it is a
+gap rather than a disagreement: the seven slots are unchanged, the claim simply
+had no way to say *whose* `obs`. `mv.mag.ground_state` is the case that forces
+it — it writes four columns to the parent and a fifth back onto the orderings,
+and an unqualified `obs` said they arrived together.
 
 ## Interoperability
 
@@ -277,8 +312,9 @@ exactly `obs` versus `obsm`.
 
 ## Status
 
-v0.1.14. **121 functions across 21 namespaces**, every one carrying a registry
-entry whose claims are verified by execution — currently **141/141**. See
+v0.1.42. **180 functions across 27 namespaces**, every one carrying a registry
+entry whose claims are verified by execution — currently **480/480**, with
+every claim-making entry either probed or exempted for a stated reason. See
 [DESIGN.md](DESIGN.md) for the full plan and
 [Release notes](matverse_guide/docs/Release_notes.md) for what changed.
 
@@ -310,7 +346,8 @@ Landed:
 - molecular dynamics, migration barriers, surfaces and adsorption
 - magnetic ordering enumeration, lattice thermal conductivity, electronic
   structure ingestion and charged-defect thermodynamics
-- the registry and the probe harness that verifies it: **141/141 claims**
+- the registry and the probe harness that verifies it: **480/480 claims**,
+  with a coverage check that fails if an entry ships a claim nothing probes
 
 Still open:
 

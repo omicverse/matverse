@@ -98,13 +98,13 @@ metric credits a field for being *present*, not for being *true*. matverse ships
 the probe next to the registry and reports a **contract-verified rate**.
 
 ```bash
-pytest tests/test_contracts.py -q -s -k rate
+pytest tests/test_contracts.py tests/test_contract_coverage.py -q -s -k rate
 ```
 
 ```
-contract-verified rate: 68/68 = 100.0%
-  produces       50/50
-  requires       18/18
+contract-verified rate: 268/268 = 100.0%
+  produces       187/187
+  requires       81/81
 ```
 
 | Claim | How it is tested |
@@ -113,9 +113,30 @@ contract-verified rate: 68/68 = 100.0%
 | `requires` | delete the slot, run the call, confirm it fails |
 | `prerequisites` | omit the upstream call, confirm the downstream one breaks |
 
+### The denominator is the part that has to be defended
+
+A rate is only as good as what it is a rate *of*. The probe battery grew
+alongside the first six namespaces; the library grew to twenty-nine and the
+battery did not follow. For several versions the harness probed **165 of 491
+claims and reported 100%** — which is the same kind of statement the audit
+metric is criticised for, one level up.
+
+`tests/test_contract_coverage.py::TestCoverage::test_no_claim_goes_unprobed`
+fails if any entry ships a claim nothing checks. **A new function may not
+introduce a claim without a probe.** If a claim genuinely cannot be decided
+offline — it needs the network, a real VASP output, or a tool that is not
+installed — name it in `UNPROBEABLE` in `tests/_contract_cases.py` with the
+reason. That list is checked too: an entry on it must still exist, must carry a
+reason, and must not in fact be probed.
+
+A claim whose backend is missing is reported as **undecided** rather than
+failed, and excluded from the denominator. `mv.elec.transport` needs BoltzTraP2,
+which does not build in every environment; counting it as a failure would report
+the environment as a defect in the registry.
+
 **A claim that fails its probe is deleted, not repaired by hand.** A registry
 whose claims are all earned is worth more than a larger one whose claims are
-aspirational. Four were deleted while building v0.1.1:
+aspirational. Eleven have been deleted so far:
 
 | deleted claim | why it failed |
 |---|---|
@@ -123,6 +144,57 @@ aspirational. Four were deleted while building v0.1.1:
 | `thermo.hull requires levels[{level}]` | only read when `references=` is given |
 | `tl.cluster requires obsp['connectivities']` | true of the leiden route, not kmeans |
 | `pp.strain produces structures[{name}]` | template was unresolvable |
+| `screen.filter requires obs['{column}']` | no parameter holds a column name |
+| `utils.resume requires obs['{column}']` | an absent column means every row is to do |
+| `utils.job_status requires uns['submissions']` | having submitted nothing is an answer |
+| `dft.status requires obs['dft_directory']` | scans the root, not the object |
+| `exp.attach requires uns['grids']` | a measured curve may be the first grid |
+| `surf.wulff produces uns['wulff']` | never written |
+| `iface.build produces obs['nsites']` | never written |
+
+### A slot may name the object it lands on
+
+Most operations deposit on the object they were handed. Some take two — a
+material axis and a sites, bands or interface axis — and deposit on the second.
+A container may be qualified with the parameter that receives it:
+
+```python
+requires={"sites.obs": ["coordination_number"]},     # mv.env.summarise
+produces={"md.obs": ["mean_coordination", ...]},
+```
+
+Unqualified means the first parameter, so the single-object case is unchanged.
+The qualifier is validated against the signature at import: one that names no
+parameter resolves to no object and could never be probed, so registration
+refuses it.
+
+`mv.mag.ground_state` is the case that forces this. It writes four columns to
+the parent and a fifth back onto the orderings; an unqualified `obs` claimed all
+five arrive on the same object, which would send an agent to the wrong one.
+
+### Probing a call that returns a new dataset
+
+`mv.disorder.orderings`, `mv.surf.slabs` and `mv.mol.fragments` build a *new*
+object — one row per ordering, per slab, per fragment — and deposit there. Both
+kinds obey "operations deposit"; they differ only in which object receives it.
+Probe them with `returns='new'`, which looks at the return value:
+
+```python
+probe_call(mv.surf.slabs, one_metal, max_index=1, returns="new")
+```
+
+Getting this wrong makes a true claim look false, which is worse than not
+probing it.
+
+### The probe's own options are named so they cannot collide
+
+Everything after the dataset factory is forwarded to the call, so `probe_call`'s
+own arguments are `entry_name` and `returns`. `name` was the original spelling
+of the first, and `name` is a real parameter of `mv.pp.supercell` and
+`mv.screen.filter` — passing it sent the value to the probe instead of the
+function, the entry came back empty, and **the call was silently not probed at
+all**. If you add an option to the harness, make sure no matverse function takes
+a parameter by that name.
 
 ### The one that is a finding, not a bug
 

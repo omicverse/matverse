@@ -1,5 +1,1321 @@
 # Release notes
 
+## v0.1.42
+
+**106 of 136 in-scope pymatgen modules, 77.9%.** 10 open gaps, 20 blocked.
+
+### Two more not wrapped, and a sixth kind of reason
+
+`symmetry.maggroups` is a **lookup table with no derivation**. The database
+holds all 1651 magnetic space groups and `MagneticSpaceGroup` takes a BNS or OG
+label — but pymatgen ships no analyser that determines a structure's magnetic
+space group from its moments. There is no `MagneticSpaceGroupAnalyzer` beside
+`SpacegroupAnalyzer`. A function that turns a label into symmetry operations
+touches no object and deposits nothing, which is not what this substrate is for,
+and the gap is upstream's rather than matverse's.
+
+`analysis.defects.thermo` was the more tempting one, because cross-checking
+`mv.thermo.defect_formation` against pymatgen's `FormationEnergyDiagram` is
+exactly the technique that found the relaxation bug and the quasi-harmonic one.
+It does not work here: built from what matverse can compute offline, the
+diagram's formation energies reduce to E_defect − E_bulk + chempot, which is
+precisely what `mv.thermo.defect_formation` already does. The half that would
+differ is the image-charge correction, and that needs the electrostatic
+potential from a real DFT run.
+
+A cross-check that can only agree is not a cross-check. Saying so is more useful
+than a wrapper that appears to validate something.
+
+**Ten open gaps remain**: two chemenv internals, three `compatibility` modules,
+three diffusion modules, `surface_analysis`, and `io.vasp`.
+
+## v0.1.41
+
+**104 of 136 in-scope pymatgen modules, 76.5%.** 12 open gaps, 20 blocked.
+
+### `mv.transform.setting` — cells `supercell` cannot reach
+
+`mv.pp.supercell` scales the axes by integers. This does what that cannot:
+non-diagonal transformations, axis permutations and origin shifts.
+
+`a+b, a-b, c` is the one to look at. It doubles the volume and gives axes of
+3√2 and 4√2, and **no integer scaling of the axes reaches it** — it is the
+transformation that turns a cubic cell into the body-centred tetragonal one.
+
+The other standing use is settings. The same space group has several, and
+"Pnma or Pbnm" is a permanent annoyance in perovskite work: the same structure
+with the axes named differently, so a comparison across the two silently fails.
+
+### A convention I got backwards before checking
+
+`transform_lattice` returned an unchanged `abc` for `b,a,-c`, which looked wrong
+— swapping a and b should surely swap 3 and 4. It is not wrong. pymatgen follows
+the International Tables convention where the string names the new basis in
+terms of the old and the lattice transforms as L′ = L·P, so `b,a,-c` permutes
+which Cartesian direction each axis points along and leaves the three lengths,
+as a set, unchanged. `2a,b,c` doubling the volume is what settled it.
+
+That distinction is easy to get backwards in either direction, which is why
+`obs['<key>_volume_ratio']` is deposited: a transformation meant to relabel that
+instead resized is visible rather than assumed.
+
+## v0.1.40
+
+**103 of 136 in-scope pymatgen modules, 75.7%.** 13 open gaps, 20 blocked.
+
+### `mv.gen.predict_hosts` — the inverse question
+
+`mv.gen.predict_substitutions` starts from a structure and asks what could be
+swapped into it. This starts from a **composition** and asks which of the
+structures you already have could hold it, which is the more useful direction
+when you know what you want.
+
+From LiFePO₄ alone, targeting Na⁺/Mn²⁺/P⁵⁺/O²⁻, it builds **NaMnPO₄** — a real
+sodium-ion cathode — because the model has seen Li→Na and Fe→Mn often enough in
+the ICSD. The library you pass *is* the search space.
+
+The species count has to match, because the model substitutes one for one and
+never changes how many there are. A two-species target against a four-species
+library gets a refusal that says exactly that rather than an empty list.
+
+Two things needed reading pymatgen's source to get right, and both would have
+shipped as dead columns otherwise. `pred_from_structures` takes a list of
+**dicts** `{'structure': ..., 'id': ...}` where its own signature says
+`structures` — the parameter name and the docstring disagree. And the id comes
+back in `history[0]['source']` while the substitution probability is in
+`other_parameters['proba']`, neither under the obvious key.
+
+## v0.1.39
+
+**102 of 136 in-scope pymatgen modules, 75.0%.** 14 open gaps, 20 blocked.
+
+### `mv.mol.match` gains a second question
+
+Grouping molecules by superposition answers "is this the same *shape*". A
+**conformer** is where that comes apart from "is this the same *molecule*".
+
+Rotate ethanol's hydroxyl hydrogen about the C–O bond. Every bond length is
+preserved and the geometry moves by an RMSD of 0.29 Å — outside the default
+tolerance. `method='geometry'` reports two molecules; `method='topology'`
+compares the bond graph, ignores shape, and reports one.
+
+Neither is wrong, and which you want depends on whether conformers are the thing
+you are deduplicating or the thing you are studying. It is a **dispatch** rather
+than a default so the registry entry names both routes and an agent choosing
+between them can see the choice exists — `dispatch` is the least-filled of the
+seven contract slots, and this is what it is for.
+
+Writing the test for it took two attempts. The first "conformer" rotated three
+hydrogens about an arbitrary axis and **broke the C–H bonds**, so the topology
+comparison correctly said "different molecule" and the test asserted the wrong
+thing. A conformer has to preserve every bond, and checking that it does is now
+the first assertion in the class.
+
+## v0.1.38
+
+**101 of 136 in-scope pymatgen modules, 74.3%.** 15 open gaps, 20 blocked.
+
+### `mv.thermo.chempot_diagram` — stable, and stable *when*
+
+`mv.thermo.hull` says whether a phase is stable. This says under what
+conditions, which is the question that decides whether it can be synthesised: a
+phase stable only in a sliver of chemical potential space needs the growth
+atmosphere controlled to match, and one with a wide domain forms over a range of
+conditions.
+
+The domains are exactly consistent with the energies they came from, which is
+what makes them checkable. On an Al–Ni system where Al₃Ni forms at −1.8 eV, its
+domain reaches μ(Ni) = −1.8 at μ(Al) = 0; AlNi forms at −1.4, so their shared
+boundary sits where μ(Al) + μ(Ni) = −1.4. The extents follow: 0.8 for Al₃Ni,
+2.4 for AlNi.
+
+**Two different zeros, and the object tells them apart.** An elemental reference
+gets a window of zero because its domain is *open* — it runs to the artificial
+floor along the other axis, so a width there would be a plotting choice. A phase
+that is never stable also gets zero, but has no domain at all.
+`uns['chempot_diagram']` records which is which.
+
+The alias collision check fired for the sixth time, twice in one function:
+`mv.thermo.chempot_limits` already owned both "stability window" and "growth
+conditions", and it computes exactly those for a single target phase. This one
+does every phase at once and is reached as "chemical potential diagram".
+
+## v0.1.37
+
+**100 of 136 in-scope pymatgen modules, 73.5%.** 16 open gaps, 20 blocked.
+
+### `mv.prop.electrostatic` — a number checkable against a textbook
+
+Almost everything a screening library computes can only be checked against
+another calculation. The Madelung energy is different: it has a closed form.
+
+| | matverse | α·e²/4πε₀r |
+|---|---|---|
+| NaCl, α = 1.747565 | −8.9235 | −8.924 |
+| CsCl, α = 1.762675 | −7.1310 | −7.131 |
+
+Two structure types, two different Madelung constants, both exact. Getting one
+right could be a fitted coincidence; getting both is not. This is the strongest
+verification in the suite — the numbers are not approximations of the textbook
+values, they *are* the textbook values.
+
+It needs oxidation states, and a neutral structure returns **NaN rather than 0**:
+a point-charge sum with no charges is zero, and zero would read as "no
+electrostatic contribution" rather than "nobody assigned any charges".
+
+### The layout split reached a second function
+
+`energy_models` moved from `pymatgen.analysis` to `pymatgen.core` in 2026.5,
+exactly as `molecule_matcher` did two releases ago. The import tries one and
+falls back to the other, and the coverage map lists both names as one
+capability. Running the notebook build on the older interpreter is what caught
+it — the function worked on 3.12 and the docs build failed on 3.10.
+
+That is now twice that supporting two pymatgen versions has cost a fallback
+import, and both times the second environment found it.
+
+## v0.1.36
+
+**99 of 136 in-scope pymatgen modules, 72.8%.** 17 open gaps, 20 blocked.
+
+### `mv.prop.frontier_orbitals`
+
+The cheapest possible statement about electronic structure: line up the atomic
+orbital energies of the elements present and see which sits highest occupied and
+which lowest unoccupied. No calculator, no structure, only the composition.
+
+On SrTiO₃ it says **O 2p and Ti 3d** — the textbook perovskite answer — and it
+says exactly the same for BaTiO₃. That identity is the point: substituting on
+the A site of a perovskite does not touch the frontier orbitals and substituting
+on the B site does, and this reports which element controls each edge. Copper
+comes out a metal; NaCl gets Cl 3p up and Na 3s down, the charge transfer that
+makes rocksalt ionic.
+
+`orbital_gap_estimate` is a difference of atomic orbital energies and not a band
+gap — NaCl comes out near 6 eV against a measured 8.5 — and a test pins that it
+is not accidentally accurate. `likely_metal` is the trustworthy column, because
+"the frontier orbitals overlap" survives a lot of approximation.
+
+### Four modules matverse was already using through returned objects
+
+Checked rather than assumed, and one candidate was refuted by the check:
+
+- `analysis.defects.core` — the generators `mv.pp.defects` calls yield `Defect`
+  objects from there; an antisite comes back as a `defects.core.Substitution`
+- `analysis.defects.supercells` — `Defect.get_supercell_structure` picks its
+  cell in that module
+- `electronic_structure.cohp` — `Icohplist.icohpcollection`, which
+  `mv.elec.cohp` reads, is an `IcohpCollection` defined there
+- `core.ion` — `PourbaixDiagram` represents its aqueous species as `Ion` objects
+
+`symmetry.maggroups` looked like a fifth and is not: `magnetism.analyzer` does
+not import it, so it stays in the gap list.
+
+## v0.1.35
+
+**94 of 136 in-scope pymatgen modules, 69.1%.** 22 open gaps, 20 blocked.
+
+### Two more not wrapped, and the reasons are the release
+
+`analysis.diffusion.aimd.van_hove` exposes `get_1d_plot` and `get_3d_plot` and
+**no data accessor**. Storing the correlation functions would mean reading
+private attributes, and matverse deposits data rather than figures — a deposit
+that depends on an underscore name is a deposit that breaks on the next release.
+
+`analysis.diffusion.aimd.pathway` computes a probability density that is
+reachable, and then `generate_stable_sites` raises on a **single** stable site:
+the condensed distance matrix is empty and scipy's `linkage` refuses it. One
+well-localised site is the commonest case there is. The density is available;
+the sites the function exists to find are not.
+
+With the NEB half already broken by an upstream rename, that is three of four
+halves of `pymatgen-analysis-diffusion` unusable against this stack.
+`aimd.rdf` — wrapped last release — was the clean part.
+
+This branch has now recorded five distinct reasons a gap stays a gap: upstream
+computes the wrong thing (`analysis.disorder`), upstream is stale against the
+installed pymatgen (`neb.full_path_mapper`), upstream exposes no data
+(`van_hove`), upstream crashes on the common case (`pathway`), and nothing here
+can verify the result (`magnetism.heisenberg`). None of them is "we did not get
+to it", and telling them apart is most of what the coverage map is for.
+
+## v0.1.34
+
+**92 of 136 in-scope pymatgen modules, 67.6%.** 25 open gaps, 19 blocked.
+
+### `mv.md.rdf`, and a coordination number that is not one
+
+`mv.prop.rdf` takes one static structure and reports where the atoms *are*.
+This takes a trajectory and reports where they **spend their time**. For a
+crystal near 0 K the two converge; for a liquid, a superionic conductor or
+anything above half its melting point they do not, and that difference is the
+thermal broadening that makes a measured pattern wider than a simulated one.
+
+The trajectory is an argument, because `mv.md.run` deliberately keeps none.
+
+The first peak lands at 2.96 Å against a nearest-neighbour distance of 2.97.
+The coordination number is **11.7 against a true 12**, the shortfall being the
+Gaussian smearing spilling past the cutoff.
+
+That integral is computed here from its definition rather than taken from
+pymatgen's `coordination_number`, which reports the count **per reference
+index**: on a cell where the mobile ion has twelve neighbours spread over three
+reference sites it returns 4.0. Four is not a coordination number for that
+cell, and a column called `first_shell_coordination` had better be one.
+
+This is the third pymatgen output on this branch that had to be replaced by
+computing the definition — after the quasi-harmonic thermal expansion and the
+Warren-Cowley parameters.
+
+### A scan for the bug the last release found
+
+v0.1.32 shipped a function that returned NaN for every structure because
+`prop.py` did not import `warnings` and a bare `except Exception` swallowed the
+`NameError`. Rather than rely on catching the next one by luck, every module was
+scanned for names used but never bound: **there are none**, so that was the only
+instance.
+
+The thirty except handlers were then read. Most are intentional and say so —
+`_charge_balanced` returns `None` because a structure that cannot be assigned
+valences is common and not a defect; the dedup blocking key degrades to a
+coarser block; Fisher's exact test returns a conservative p-value. Two degraded
+silently without a count and now carry one: a structure matcher that fails on
+every pair reports "no duplicates", which is what it reports when there are
+none, and a piezoelectric tensor that fails to rotate to the IEEE frame stays in
+whatever frame the cell was written in.
+
+## v0.1.33
+
+**91 of 136 in-scope pymatgen modules, 66.9%.** 26 open gaps, 19 blocked.
+
+### `mv.mol.bond_lengths`
+
+`mv.pp.qc` catches atoms sitting on top of one another. It cannot catch the
+subtler thing a generated molecule does: bonds that exist and are the wrong
+length. A 1.9 Å C–C bond is not a strained conformer, it is not a molecule — and
+no minimum-distance check will say so, because 1.9 Å is a perfectly ordinary
+distance between two atoms that are *not* bonded.
+
+Water built at exactly the tabulated 0.96 Å O–H comes out at zero deviation.
+
+**The column that matters is `n_bonds_measured`, not the deviation**, and
+finding that out changed the function. Bonds are located by covalent radius, so
+a badly stretched geometry does not report long bonds — it stops having bonds.
+Ethanol scaled by 1.25 leaves one measurable bond out of eight, and a deviation
+computed from the single survivor is nearly meaningless while the count is
+unmistakable. So the count is reported and the note says to read it first.
+
+Lengths are compared against the single-bond value throughout, so a double or
+triple bond reads as short by design: C=C at 1.34 Å against a tabulated 1.54 is
+a deviation of 0.2. `n_unusual_bonds` means "worth looking at", not "wrong".
+
+## v0.1.32
+
+**90 of 136 in-scope pymatgen modules, 66.2%.** 27 open gaps, 19 blocked.
+
+### `mv.prop.tem`
+
+A TEM pattern is spots on a plane, and a plane of spots does not compare across
+materials — two crystals on the same zone axis put different spots in different
+places. What is stored is the ring profile: intensity against the magnitude of
+the scattering vector, which is what a polycrystalline selected-area pattern
+looks like and what can share an axis with an X-ray or neutron pattern.
+
+`obs` keeps what the reduction loses — how many reflections were excited, the
+strongest one's Miller indices, and the zone axis, without which the pattern
+means nothing.
+
+The tests show the F-centring rule rather than assert it. A face-centred lattice
+allows only all-even or all-odd `hkl`, one reflection in four: fcc copper keeps
+**120 of the 483** a simple cubic cell keeps, and (010) — extinct in fcc — is
+the brightest spot in simple cubic.
+
+### The failure mode this project already documents, again
+
+The first version returned NaN for every structure. `prop.py` does not import
+`warnings`, so `warnings.catch_warnings()` raised `NameError`, and a bare
+`except Exception` turned that into a silent NaN.
+
+That is the same bug the defects tutorial has documented since v0.1.11, where
+`SpacegroupAnalyzer` was imported in the caller rather than the helper. The
+function now records why each structure failed, and a test asserts the count is
+zero.
+
+### dscribe, priced
+
+`analysis.defects.finder` needs `DefectSiteFinder`, which needs dscribe. `uv`
+resolves dscribe in this environment to **numba 0.53.1** — a 2021 release
+predating both numpy 2 and Python 3.12. Installing it to gain one module would
+break the environment, so it is recorded as blocked with the resolution rather
+than left as "not installed".
+
+## v0.1.31
+
+**89 of 136 in-scope pymatgen modules, 65.4%.** 29 open gaps, 18 blocked.
+
+### The DFT mixing scheme, and why it is NATIVE rather than wrapped
+
+Combining two levels of theory on one hull is the thing matverse polices hardest
+— `mv.thermo.hull` raises `LevelMismatch` rather than let it happen quietly — so
+pymatgen's `MaterialsProjectDFTMixingScheme`, which mixes GGA(+U) and r2SCAN
+entries, looked like the obvious thing to wrap.
+
+It could not be made to emit a single entry. Given five entries covering two
+elements in both run types, `get_mixing_state_data` builds the comparison table
+correctly — formulae, space groups, both energies, both hull energies — and
+`process_entries` on the *same list* logs "Processing 0 GGA(+U) and 0 r2SCAN
+entries" and returns nothing. Passing `compat_1` explicitly, so the
+`check_potcar=False` flag reaches the internal compatibility object rather than
+the default instance built at import time, does not change it.
+
+`mv.pp.harmonize` already solves the same problem by matverse's own route: fit a
+per-element offset for each source against a reference, using the compositions
+they have in common. It works on any batch key rather than only on a
+GGA/r2SCAN pair, which is the more general form of the same idea — a database
+and a run type are both just a label on where the number came from.
+
+So this is NATIVE: the capability is present, implemented here, and the module
+is recorded with what was tried.
+
+## v0.1.30
+
+**87 of 136 in-scope pymatgen modules, 64.0%.** 31 open gaps, 18 blocked.
+
+### `mv.pp.symmetry`
+
+`mv.pp.describe` reports the space group symbol. This reports what the symbol
+implies and what a screen can filter on: crystal system, crystallographic point
+group, how many operations the group contains, the Wyckoff positions the atoms
+occupy, and the order of the site symmetry group at the least and most symmetric
+site.
+
+SrTiO₃ comes back cubic, m-3m, 48 operations, Wyckoff **1a, 1b, 3c** — the
+standard perovskite assignment, arrived at from the coordinates rather than from
+the label. fcc copper has one distinct site; LiFePO₄ has eight.
+
+**Wyckoff count is the number worth having.** It says how many *distinct* sites
+a structure has, which decides how much work everything downstream is: how many
+vacancies `mv.pp.defects` enumerates, how many NMR environments to expect, how
+many independent parameters a refinement has. The defect tutorial gets six
+inequivalent vacancies from a 28-atom LiFePO₄ cell rather than twenty-eight, and
+that is this number. A test asserts the two agree.
+
+The alias collision check fired a fifth time: `mv.mol.point_group` owns "point
+group", where for a molecule it is the whole symmetry answer. For a crystal it
+is one fact among several, so this is reached as "crystallographic point group".
+
+## v0.1.29
+
+**84 of 136 in-scope pymatgen modules, 61.8%** — and this release is mostly
+bookkeeping, so the number needs unpacking before it is believed.
+
+### A gap that cannot be closed is still a gap
+
+The coverage map said which modules were uncovered. It could not say *why*, and
+the difference between "nobody has done it" and "this needs a DFT run matverse
+does not perform" is the difference between a backlog and a wish.
+
+`BLOCKED` now records the eighteen with an external blocker — the Freysoldt and
+Kumagai charge corrections need the electrostatic potential from a real DFT run,
+XPS needs a projected density of states rather than a total one, three molecular
+modules need openbabel, BoltzTraP needs a binary that does not build here.
+**They stay in scope and uncovered.** What they gain is a reason.
+
+That leaves **34 open gaps** out of 136 in-scope modules.
+
+### Two reclassifications, and one of them was wrong
+
+`phonon.*`, `core.trajectory` and `core.units` moved to NATIVE: matverse builds
+the dynamical matrix from ASE displacements, keeps its own trajectory
+statistics, and records units on the object. Those are the NATIVE definition.
+
+Fifteen `core` and `symmetry` modules were then moved to INTERNAL as "data types
+rather than capabilities", which took coverage from 53.5% to 65.4% in one step.
+That was too aggressive, and checking each one the way this branch has been
+checking pymatgen showed it: `core.bonds` has `get_bond_order` and `is_bonded`,
+`core.molecular_orbitals` has `obtain_band_edges`, `symmetry.groups` has the
+symmetry operations and crystal system. Those are real API and belong in the gap
+list.
+
+Only six are genuinely data types or enums — `Site`, `SymmOp`, `Spectrum`, the
+two XC functional enums, and the package re-export. `core.interface` turned out
+to be neither: `CoherentInterfaceBuilder.get_interfaces` yields `Interface`
+objects that `mv.iface.build` stores, so it is transitive use.
+
+The corrected figure is 61.8%, not 65.4%. The three-point difference is the
+whole point of writing this down.
+
+## v0.1.28
+
+**76 of 142 in-scope pymatgen modules, 53.5%.**
+
+### Three modules matverse was already using without an import
+
+`SubstrateAnalyzer` runs the Zur-McGill lattice search out of
+`analysis.interfaces.zsl`; `HighSymmKpath` is the front door to
+`symmetry.kpath`; `PiezoTensor` subclasses `core.tensors.Tensor`, so the
+symmetry check and IEEE conversion in `mv.prop.piezoelectric` are that module's
+code. All three are used, none is imported, and each is recorded in `TRANSITIVE`
+with the object that hands it over.
+
+### One thing deliberately not added
+
+`analysis.chempot_diagram` builds the full chemical potential domain per phase,
+where `mv.thermo.chempot_limits` gives the window for one target. It is not
+added, and the reason is shape rather than difficulty: a domain is a polytope,
+not a scalar, so there is no obvious `obs` column for it — and EMT finds no
+stable Al-Ni compound, so there is no worked example on a calculator matverse
+ships to check the deposit against.
+
+Adding it would have moved the number by one. That is not a reason.
+
+## v0.1.27
+
+**73 of 142 in-scope pymatgen modules, 51.4%.**
+
+### `mv.mol.match` compared a fingerprint, not the molecules
+
+It grouped molecules by the sorted list of pairwise distances between their
+**heavy atoms**. That is invariant to rotation, translation and relabelling —
+and it is not a proof of congruence. Two different geometries can share a
+distance spectrum, and hydrogens were ignored entirely, so every CH₄ had the
+same one-atom fingerprint no matter where its hydrogens sat.
+
+It now superposes: Kabsch for the rotation, Hungarian assignment over the atom
+labels, and a match when the best RMSD is within tolerance. `obs['match_rmsd']`
+carries that RMSD in angstrom, so a tolerance can be chosen by looking rather
+than guessed.
+
+A rotated ethanol matches at RMSD 0. The same ethanol with 0.5 Å of noise per
+atom does not, at a tolerance of 0.1. A stretched methane no longer reads as
+tetrahedral methane.
+
+pymatgen's default `MoleculeMatcher` needs openbabel, a C++ library rather than
+a wheel. The ordering matchers used here need nothing beyond numpy and scipy.
+
+### A layout split that reached the library code
+
+`molecule_matcher` moved from `pymatgen.analysis` to `pymatgen.core` in 2026.5,
+and matverse supports both sides of that move — so the import tries one and
+falls back to the other. The coverage map already had `EQUIVALENT` for exactly
+this; this is the first time the split reached a function rather than the
+bookkeeping, and running the suite on both interpreters is what caught it.
+
+## v0.1.26
+
+**72 of 142 in-scope pymatgen modules, 50.7%.**
+
+### `mv.env.chemenv` was returning empty results, silently
+
+Building `mv.env.connectivity` on top of ChemEnv exposed a bug in the ChemEnv
+wrapper that has been shipped since v0.1.15.
+
+`LocalGeometryFinder` keeps state that `setup_structure` does not clear.
+`mv.env.chemenv` built one and reused it across the dataset, so **every material
+after the first got empty environments** — a blank string, not an error, not a
+warning, not a count in `n_failed`.
+
+Nothing caught it because **every test and every notebook cell used a
+single-material dataset**. The olivine fixture is `[:1]`. The tutorial loads
+`[:1]`. A bug that only appears from the second row onward was invisible to a
+suite that never had a second row.
+
+Both functions now build a fresh finder per structure, and
+`TestOrderIndependence` pins the answer against dataset order rather than
+against a stored value.
+
+### `mv.env.connectivity`
+
+`mv.prop.dimensionality` asks whether the *bonds* close in three directions.
+This asks whether the **polyhedra** do, which is a different question and the
+one an ion conductor turns on: a framework whose octahedra share corners in only
+two directions cannot conduct in the third, however low the individual hop
+barrier is — and the hop barrier is the expensive thing to compute.
+
+Rocksalt and cubic perovskite both come back 3D-connected, which is what
+edge-sharing and corner-sharing octahedral frameworks are.
+
+The alias collision check fired for the fourth time on this branch:
+`mv.env.bonds` already owned "connectivity" for the same idea one level down —
+which *atoms* connect rather than which polyhedra — so this one is reached as
+"polyhedral connectivity".
+
+### A third kind of coverage claim
+
+Two chemenv connectivity modules are reached through objects a third hands over,
+never by an import: `ConnectivityFinder` returns a `StructureConnectivity`, and
+the components it yields are `ConnectedComponent`s. The direct-import check
+caught the overclaim, and the answer was to record *how* they are reached rather
+than to weaken the check.
+
+## v0.1.25
+
+**69 of 142 in-scope pymatgen modules, 48.6%.**
+
+### `mv.pp.prototype`
+
+A space group says which symmetries a structure has. A prototype says which
+structure it *is*, and the two are different questions: Fm-3m covers rocksalt,
+face-centred cubic and half-Heusler alike, so a screen that groups by space
+group puts them in one bin.
+
+Matched against the AFLOW prototype encyclopedia, and the textbook symbols come
+back: NaCl → B1 Halite, diamond → A4, GaAs → B3 Zincblende, fcc Cu → A1 Copper.
+
+An unmatched structure gets an empty string rather than a guess. The library is
+large but finite, and "not in AFLOW" is worth keeping distinct from "matched
+something wrong".
+
+### Three capabilities not wrapped, each with a tested reason
+
+The coverage map now records *why* a gap is a gap, not only that it is one.
+
+**`analysis.disorder`** — `get_warren_cowley_parameters` returns the same value
+for every pair. On B2, where every nearest neighbour is unlike, the definition
+requires α = −1 for the unlike pairs and **+1** for the like ones; it returns
+−1.0 for all four. It also raises on a genuinely disordered cell, which is what
+the module is named for. A wrapper around output that cannot be reproduced from
+the definition is worse than the gap.
+
+**`analysis.diffusion.neb.full_path_mapper`** — the add-on calls
+`StructureGraph.with_local_env_strategy`, renamed upstream to
+`from_local_env_strategy`, so every migration-graph entry point raises against
+the pymatgen installed here.
+
+**`analysis.magnetism.heisenberg`** — fitting exchange couplings needs
+spin-polarised energies and no calculator matverse ships is spin-polarised.
+
+Three different reasons — upstream is wrong, upstream is stale, and nothing here
+can verify it — and none of them is "we did not get to it". Each was found by
+checking output against a value computed independently, which is the same
+discipline the contract probes apply to matverse's own claims.
+
+## v0.1.24
+
+**65 of 142 in-scope pymatgen modules, 45.8%.**
+
+### Interstitials and antisites
+
+`mv.pp.defects` built vacancies and substitutions. Both are a site you can point
+at. The two it could not build are the ones that are not: an **interstitial**
+has to be *found* — it is a hole, and the Voronoi construction locates them —
+and an **antisite** is the cross product of the species present, which for a
+quaternary is more combinations than anyone enumerates by hand.
+
+On LiFePO₄: 24 antisites and 12 lithium interstitials. The Fe-on-Li antisite
+among them is *the* defect that blocks the one-dimensional lithium channel that
+cathode conducts through.
+
+Both route through `pymatgen-analysis-defects`, which also picks the supercell
+itself — targeting a minimum image distance rather than a fixed multiple — so
+`supercell=` does not apply to those two kinds. Vacancies and substitutions
+still need no extra package.
+
+A supercell window nothing can satisfy now says so. It used to report "no defect
+was generated", which blames the chemistry for what is an argument problem: the
+generator targets an image distance as well as an atom count, so a small
+`max_atoms` can leave no legal cell. The message names the count, the window and
+the first real failure.
+
+### One of the three add-ons does not work
+
+`pymatgen-analysis-diffusion` 2025.11.15 calls
+`StructureGraph.with_local_env_strategy`, which pymatgen renamed to
+`from_local_env_strategy`. Against the installed pymatgen 2026.5.4 every entry
+point that builds a migration graph raises `AttributeError`.
+
+That is worth stating plainly, because these three add-ons were installed
+earlier on this branch *to count toward coverage* and never wired into a code
+path. One of them could not have been. `MigrationGraph` is the capability worth
+having — it finds every symmetry-distinct hop and whether they percolate, where
+`mv.neb.hop_endpoints` finds one — and it stays in the gap list until the
+upstream package catches up rather than being wrapped into a function that
+raises on every call.
+
+`pymatgen-analysis-alloys` is installed and its `AlloyPair.from_structures`
+signature does not match its documentation either; it is unwrapped for now.
+
+## v0.1.23
+
+**64 of 142 in-scope pymatgen modules, 45.1%** — of which 39.5% was new
+capability and the rest a correction to the map, flagged below rather than
+quietly banked.
+
+### A classification the map had inconsistent
+
+Two families sat in the gap list only because matverse uses *one* module from
+each: `mv.elec.cohp` reads ICOHPLIST through `io.lobster.outputs`, and `mv.dft`
+writes inputs through `io.vasp.sets`. The other fifteen lobster modules and two
+vasp ones are more file formats, input writers and a parallel "future" API —
+which is exactly the parsing surface the other thirty-three `io` families are
+already exempted for, on a policy the README and the migration guide both state.
+
+Leaving them in TODO implied matverse intended to wrap them. It does not, and
+saying so is the honest classification; the alternative mistake — marking a
+whole family covered because one module in it is used — is the one this file was
+written to prevent. pymatgen's own 2D plotters joined `vis` in the same bucket,
+and `transformations.transformation_abc` is an abstract base class.
+
+**78 real gaps remain**, the largest clusters being `analysis.defects` (9),
+`analysis.diffusion` (7), `analysis.chemenv` (6) and `analysis.compatibility`
+(4).
+
+### `mv.mag.jahn_teller`
+
+Magnetic ordering is one consequence of a partly filled d shell; distortion is
+the other, and it is structural rather than magnetic. A degenerate electronic
+ground state in an octahedral site lowers its energy by distorting the
+octahedron — which is why LaMnO₃ is orthorhombic rather than cubic and why
+manganese spinel cathodes fade on cycling.
+
+LaMnO₃ and LaNiO₃ come out strong and SrTiO₃ inactive: Mn³⁺ and Ni³⁺ both put an
+electron in a doubly degenerate e_g level, and Ti⁴⁺ is d⁰ with no degeneracy to
+lift. `jahn_teller_species` names the ion responsible, because knowing a
+material distorts is not useful without knowing which site is doing it; the
+ligand bond lengths, which are the distortion rather than a label for it, stay
+in `uns`.
+
+### Two capabilities deliberately not shipped, with the reason
+
+**Exchange couplings.** `pymatgen.analysis.magnetism.heisenberg` maps a set of
+ordered magnetic structures and their energies onto a Heisenberg model. matverse
+has the orderings and the energies, so the fit is available — but **EMT is not
+spin-polarised**, so every ordering matverse can compute has the same energy and
+the couplings that come out are meaningless. There is no calculator shipped here
+that can verify the function, so it is not shipped either. With DFT energies it
+would work, and that is a different claim from "it works".
+
+**Freysoldt and Kumagai image-charge corrections.** `mv.thermo.defect_formation`
+already records `image_charge_correction: False` and says so in its notes; the
+corrections need the electrostatic potential from a real DFT run, which is the
+`mv.dft` boundary. Upgrading a declared limitation to a capability is worth
+doing and is not doable offline.
+
+## v0.1.22
+
+Where the candidates come from. **63 of 162 in-scope pymatgen modules, 38.9%**,
+up from 37.0%.
+
+Every other namespace assumes a list of candidates already exists. These three
+make it, from the statistics of what has been synthesised rather than from a
+calculation.
+
+**`mv.gen.predict_substitutions`** ranks the swaps you did not think of, using
+the data-mined ionic substitution model of Hautier et al. — how often two
+species replace one another across the ICSD, rather than whether their radii
+match. From LiFePO₄ it reaches LiVPO₄ and LiTiPO₄, both real olivine analogues,
+without being told anything about olivines.
+
+It needs oxidation states and refuses without them, because the model is defined
+over ionic species: Fe²⁺ and Fe³⁺ substitute differently and that distinction is
+the point. A probability here is a prior from what has been made before; it says
+nothing about stability in this structure, which is what the hull is for.
+
+**`mv.gen.predict_dopants`** asks the same statistics a narrower question and
+gets fluorine as the n-type choice for LiFePO₄ — the doping strategy that
+material is actually treated with. n-type versus p-type is arithmetic on
+oxidation states, not a calculation of where the level lands; the top choice
+goes to `obs` and the full ranking stays in `uns`, because the second and third
+are usually the interesting ones.
+
+**`mv.pp.predict_volume`** predicts the equilibrium volume from tabulated bond
+lengths, within 3% on three published cathodes, and deposits a rescaled variant.
+A candidate built by substitution keeps the cell it was built from, which can be
+several percent from where the new composition wants to sit — starting a
+relaxation there costs steps and can land in a different minimum.
+`obs['volume_scale']` records how far the cell moved, so a suspicious rescaling
+is visible rather than silent.
+
+## v0.1.21
+
+Four more of the gaps the coverage map named. **60 of 162 in-scope pymatgen
+modules, 37.0%**, up from 33.3%.
+
+### `mv.prop.quasiharmonic`, and a number that had to be recomputed
+
+The quasi-harmonic Debye model gets a material off the zero-kelvin hull: compute
+the energy at several volumes, let the Debye model supply a vibrational free
+energy at each, and minimise the Gibbs free energy over volume at every
+temperature.
+
+pymatgen's `QuasiharmonicDebyeApprox` reports a Gruneisen parameter that matches
+experiment — 1.91 for copper against a measured 1.96, 2.17 for silver against
+2.4 — and a set of optimum volumes that do not. Its volume minimum moves
+**twelve times too little**: 4.3e-6 /K for copper against a measured 5.0e-5.
+
+So the expansion is computed from the thermodynamic identity instead:
+
+    alpha_V = gamma C_V / (B V)
+
+with the model's own Gruneisen parameter, the bulk modulus fitted from the same
+E(V) points, and the Debye heat capacity rather than the Dulong-Petit constant.
+That gives 4.5e-5 for copper and 5.1e-5 for silver — within 15% of measurement
+for the metals EMT reproduces.
+
+The discrepancy was findable because the bulk modulus from `mv.prop.eos` and the
+Gruneisen parameter from the Debye model sit on one object under names that say
+what they are. That is the second time on this branch that two quantities which
+had to agree, and did not, located a defect neither number showed alone.
+
+Aluminium is the usual outlier and is pinned as one: EMT gives it a Gruneisen
+parameter of 0.83 against a measured 2.2, so its expansion is held to a factor
+of two rather than to 25%.
+
+### `mv.prop.cost` and `mv.prop.supply_risk`
+
+Two screening axes that need no calculator and end more projects than any energy
+does. Raw-material cost from elemental prices, and the Herfindahl-Hirschman
+indices for how concentrated the world's production and reserves are.
+
+Cost will not tell you what a synthesis route costs — it is elements only. It
+will tell you that platinum oxide is four orders of magnitude dearer than iron
+oxide, and no process optimisation closes that. Supply concentration is a
+**different** risk from price: cobalt and the rare earths are affordable and
+concentrated, which is exactly what makes them awkward.
+
+`mv.prop.cost` needs `bibtexparser`, which pymatgen uses to read the citations
+in its price table and does not require itself; it is declared as the `cost`
+extra and reports the install command rather than a traceback.
+
+### `mv.prop.neutron`
+
+Powder neutron diffraction on the same grid convention as the X-ray pattern.
+Not redundant with it: neutrons scatter off nuclei rather than electrons, so
+scattering lengths do not follow atomic number and light atoms show up here and
+nowhere else. Copper's tallest X-ray line is at 43.4 degrees and its tallest
+neutron line at 38.5 — the same allowed reflections, reweighted. For a lithium
+cathode this is the pattern that locates the lithium.
+
+### The alias collision check fired again
+
+`mv.md.sweep` already claimed "thermal expansion", and it measures the quantity
+directly by running dynamics at several temperatures. Both functions compute the
+same thing by different routes and the registry cannot give one name to two
+functions, so the direct measurement keeps the plain alias and the model is
+reached as "quasiharmonic". Third time this mechanism has caught a name landing
+on the wrong function.
+
+## v0.1.20
+
+### "Is pymatgen covered?" now has a number that cannot drift
+
+Asked directly, the honest answer was no — and the figures quoted earlier in
+this branch were wrong. "15 of 48 analysis modules" counted only the top level
+of `pymatgen.analysis`, where the real tree has 110 leaves. Three pymatgen
+add-ons were installed, counted toward coverage, and never wired into a single
+code path.
+
+`matverse._coverage` classifies every public pymatgen module into one of five
+buckets — WRAPPED, NATIVE, INTERNAL, NOT_A_GOAL, TODO — and
+`tests/test_pymatgen_coverage.py` enforces it:
+
+- an unclassified module fails the test, so TODO cannot quietly shrink
+- a module claimed as WRAPPED must actually be **reached by an import**,
+  resolved at runtime rather than matched textually
+- a matverse function named in the map must actually be registered
+- the covered count may not fall
+
+**56 of 162 in-scope modules, 34.6%.** 107 gaps are listed by name.
+
+Three things the enforcement caught immediately, each of which would have
+inflated the number:
+
+**22 modules are re-export shims.** pymatgen 2026.5 moved much of `analysis`
+into `core`, leaving three-line stubs behind. Counting both names doubles the
+denominator *and* files the real module under TODO while the stub reads as
+covered. Shims are detected by reading the source, so the next reorganisation is
+absorbed rather than mismeasured.
+
+**A package `__init__.py` can hold real API.** pymatgen's correction schemes live
+in `analysis/compatibility/__init__.py`; skipping package inits made the classes
+matverse calls invisible to the count.
+
+**The two supported pymatgen versions ship different trees** — 162 modules in
+scope on 2026.5, 134 on 2025.10 — so a count from one is not a ratchet for the
+other. The number is reported on both and asserted on one.
+
+### `mv.thermo.corrections` — the gap that made hulls wrong
+
+The largest real gap, and it affects correctness rather than convenience.
+Materials Project energies arrive **already corrected**; energies you computed
+yourself and read back through `mv.dft.read_outputs` do not. Putting them on one
+hull is the same class of error as mixing EMT with PBE, except that nothing
+about the column names says so.
+
+`mv.thermo.corrections` applies the published schemes — MP2020, the aqueous
+variant, the legacy set, MIT — and deposits the result as **its own level**:
+`energy_pbe` in, `energy_pbe-mp2020` out, with `uns['levels']['pbe-mp2020']`
+recording the scheme and what it was corrected from. That is the level-of-theory
+rule applied one step further along, and it makes a hull built on the wrong
+column a visible mistake.
+
+The magnitudes are not small. Against the ~0.05 eV/atom threshold a screen calls
+"close to the hull":
+
+| | correction | why |
+|---|---|---|
+| Al₂O₃ | −2.06 eV | 3 × −0.687, the oxide anion correction, once per oxygen |
+| Fe₂O₃ | −6.57 eV | the same anion term plus 4.5 eV of +U correction on two irons |
+| Cu | 0 | an elemental metal has no anion to correct and no U |
+
+`run_type` is inferred by MP's own rule — a transition metal from its table
+together with oxygen or fluorine — and recorded next to the result rather than
+assumed.
+
+The `produces` slots interpolate `level` and `scheme` rather than `key_added`,
+because those are the two parameters the default output name is built from. A
+template naming `key_added` resolves to nothing on the call everybody makes,
+which is what probing the claim showed.
+
+## v0.1.19
+
+### The four functions that "would raise on every dataset"
+
+v0.1.18 left piezoelectric constants, NMR shieldings, SLME and XAS out, on the
+argument that they are ingestion rather than calculation and would therefore
+raise on any dataset a user could build. The first half of that was right and
+the conclusion did not follow, which the library itself already demonstrated:
+`mv.elec.bands` takes pymatgen band structures as an argument, `mv.exp.attach`
+takes measured curves, `mv.elec.transport` takes a bands object. Taking a result
+somebody else computed is a pattern matverse already has.
+
+What these functions do is the step *after* the calculation — reduce a tensor to
+the parameters a spectrum is described by, check it against the crystal
+symmetry, turn a dielectric function into an efficiency. That step is arithmetic
+with conventions in it, and conventions are what gets a result quoted wrongly.
+
+**`mv.prop.nmr`** and **`mv.prop.efg`** reduce per-atom shielding and electric
+field gradient tensors on the sites axis. Both Haeberlen and Herzfeld-Berger
+parameters are reported, because both are in use and they disagree about what
+"anisotropy" names: Haeberlen's ζ is σ₃₃ − σ_iso, and the reduced anisotropy
+most spectrometer software prints is 3/2 of it. A single column called
+`anisotropy` would be wrong for half its readers. The quadrupolar coupling
+constant is looked up from the element, since a quadrupole moment belongs to the
+isotope rather than to the calculation.
+
+**`mv.prop.piezoelectric`** checks a tensor against the structure's point group,
+converts it to the IEEE frame, and reports the largest longitudinal response
+over all directions. Validated on α-quartz: given the measured d₁₁ = 2.3 pC/N
+and d₁₄ = −0.67 pC/N, it recovers 2.297 pC/N without being told where to look,
+because for class 32 the basal-plane response goes as d₁₁cos 3θ and its maximum
+is d₁₁ itself. Components depend on how somebody oriented the cell; the maximum
+does not. The same tensor on fcc copper reports `piezo_symmetry_valid = False` —
+inversion symmetry forbids piezoelectricity, so a non-zero tensor there is an
+error rather than a discovery.
+
+**`mv.prop.dielectric`** and **`mv.prop.slme`** take a dielectric function onto
+the existing grid convention, derive the absorption coefficient from it
+(α = 2Ek/ħc — derived, so ε stays recoverable), and compute the spectroscopic
+limited maximum efficiency under AM1.5G. Calibrated against Shockley-Queisser: a
+step absorption edge with no indirect gap gives 33.94% at a 1.34 eV gap, and the
+limit falls away on both sides.
+
+SLME is reported **as a percentage with the unit recorded**. pymatgen's `slme()`
+returns the same number with no unit in its docstring, which is the kind of
+thing that becomes a factor of 100 three functions downstream.
+
+The reason to compute it at all shows up in one table: four model absorbers with
+the *same* 1.34 eV gap and the same Shockley-Queisser ceiling of 33.94% score
+33.94, 30.79, 7.61 and 0.86. A screen ranked on band gap cannot tell them apart.
+
+### XAS, and what is actually left out
+
+XAS did not get a function, and this time the reason survives inspection: an XAS
+spectrum is a curve on an energy grid, which is what `uns['grids']` and an
+`obsm` block already are. `mv.exp.attach(md, 'xas', spectra, energies)` stores
+one today, and `mv.prop.compare_grids` compares a measured edge against a
+computed one. A wrapper would add a name, not a capability.
+
+What genuinely remains outside is generating these quantities, which needs a DFT
+code, and reading them back from specific output formats — the boundary
+`mv.dft` already draws.
+
+## v0.1.18
+
+### `mv.calc.relax` never moved the lattice
+
+Adding `mv.prop.eos` gave a second, independent route to the bulk modulus — a
+curvature in volume against `mv.prop.elastic`'s curvature in strain. The two are
+the same quantity, and they disagreed by **9–12%, always in the same direction**.
+Both were converged: the EOS value moved by 0.2% between a ±4% and a ±10% strain
+series, and the elastic value by 0.2% between a 0.2% and a 2% strain.
+
+The cause was not in either function. `mv.calc.relax` built a bare
+`BFGS(atoms)`, with no cell filter, so it relaxed the atomic positions and never
+the lattice. For a high-symmetry cell that is not a weak relaxation — it is *no*
+relaxation, because the forces on an fcc metal vanish by symmetry. The optimiser
+converged immediately, changed nothing, reported `relax_converged = True`, and
+deposited the input geometry under the name `relaxed_emt`.
+
+Everything downstream inherited it. Elastic constants were second derivatives
+taken about a geometry under residual tensile stress, which softens them; phonon
+frequencies, Debye temperatures and any energy entering a hull were computed at
+whatever lattice constant the input happened to carry.
+
+`cell=True` is now the default, via ASE's `FrechetCellFilter`, and is skipped
+for molecules. Five of the seven bundled fcc metals moved closer to experiment:
+
+| bulk modulus (GPa) | before | after | experiment |
+|---|---|---|---|
+| Cu | 123 | 135 | 140 |
+| Ni | 157 | 176 | 180 |
+| Ag | 93 | 100 | 101 |
+| Au | 159 | 174 | 180 |
+| Al | 35 | 40 | 76 |
+
+With the cell relaxed, the two routes agree to **1.1% at worst and under 0.4%
+for six of seven**.
+
+The part worth keeping is how it was found. Neither number looked wrong on its
+own — 123 GPa for copper is a plausible answer from a cheap potential, and no
+test asserted otherwise. **The disagreement between two quantities that had to
+match was the only visible symptom**, and it was visible only because both sit
+on one object under names that say what they are. Pass `cell=False` when the
+lattice is meant to be held, as for a slab.
+
+Also worth recording: no existing test failed when this was fixed. Nothing in
+the suite had asserted that relaxation relaxes anything, so
+`tests/test_equation_of_state.py` now pins it directly.
+
+### `mv.prop.eos` — the equation of state
+
+Compress each cell over a series of volume scale factors, fit a Birch-Murnaghan
+(or Vinet, Murnaghan, Poirier-Tarantola) equation of state, and deposit the bulk
+modulus, its pressure derivative, the equilibrium volume and the RMS misfit. The
+energy-volume curves land in `obsm` on a shared **scale-factor** grid rather
+than a volume grid, because materials of different size have no common volume
+axis while the strain series they were computed on is common by construction.
+
+`B0'` earns its place beyond the bulk modulus: aluminium comes out at 1.95
+against a measured 4.4, so EMT has the wrong *shape* for aluminium's
+energy-volume curve rather than merely the wrong curvature at one point.
+
+### `mv.prop.dimensionality` — 0D, 1D, 2D or 3D
+
+Classify the bonded network so a screen can ask for exfoliable candidates
+directly. This is the archetypal property `X` cannot reach: graphite and diamond
+have the same composition matrix, the same `var` and the same element counts,
+and differ by whether the bonds close in three directions.
+
+Validated against textbook answers — graphite 2D, MoS2 2D with two layers per
+cell, fcc copper 3D, well-separated I2 0D. The near-neighbour strategy is
+recorded next to the answer for the same reason `mv.env.coordination` records
+it, and the stakes are higher here: the classification turns entirely on whether
+a long contact counts as a bond, which is exactly what a van der Waals gap is.
+
+### What was not built, and why
+
+The roadmap for this batch listed piezoelectric constants, NMR shieldings, SLME
+and XAS alongside the equation of state. Those four are **ingestion, not
+calculation**: pymatgen's `PiezoTensor`, `ChemicalShielding` and SLME all take a
+DFT-computed tensor or dielectric function as *input*, and there is nothing for
+a cheap potential to compute. They belong behind `mv.dft`, on the same boundary
+as `read_outputs`, and pretending otherwise would have produced four functions
+that raise on every dataset a user can actually build.
+
+### A note on `uns['levels']`
+
+`set_level` replaces its entry rather than merging, so per-call parameters
+written by one operation are overwritten by the next at the same level —
+`mv.prop.elastic` after `mv.calc.relax` leaves `strain` where `fmax` and `cell`
+had been. Per-operation parameters are kept in order by `uns['provenance']`,
+which is where they belong and where `mv.provenance(md)` reads them from, so
+nothing is lost. The level entry should probably hold only level-defining
+fields; that is not changed here.
+
+## v0.1.17
+
+### The contract-verified rate was measuring the test suite
+
+matverse reports a **contract-verified rate** rather than a field-coverage
+score, on the argument that the audit metric in common use credits a registry
+field for being *present* rather than *true*. That argument only holds if the
+probe reaches the whole registry, and it had stopped doing so: the battery grew
+alongside the first six namespaces, the library grew to twenty-nine, and the
+probe list did not follow. **165 of 491 claims were probed — 33.6% — and the
+reported rate was 100%.**
+
+A rate is only as good as its denominator. 100% of a third of the claims is the
+same kind of statement the audit metric was criticised for.
+
+The battery now covers everything: **433 claims verified by execution**, up from
+165. Of the 132 entries that make a claim, 118 are probed and 14 are exempt —
+each named with its reason (needs the network, needs a real VASP or LOBSTER
+output, needs a tool that is not installed). `test_no_claim_goes_unprobed` fails
+if an entry ships a claim that nothing checks, so this cannot silently reopen.
+
+### Eleven claims were false, and the harness was hiding some of them
+
+Probing the other two thirds deleted seven more claims and corrected five. The
+ones worth reading:
+
+`mv.screen.filter requires obs['{column}']` was not wrong so much as
+**unsayable**. Its columns are encoded in the *keys* of `**criteria` —
+`e_above_hull_emt__lt` is a column and an operator joined by `__` — so no
+parameter holds a column name for a slot template to interpolate. This is the
+second boundary this line of work has found, and it is a different one from the
+`pymatgen` case: there the library had no named state to point at, here the
+state is named but the name never becomes an argument.
+
+`mv.utils.resume`, `mv.utils.job_status` and `mv.dft.status` each claimed to
+require the thing they exist to report on. All three answer correctly when it is
+absent — no column means every row is still to do — which is the right behaviour
+and makes the claim false.
+
+Three failures were in the **harness**, not the registry, and the last is the
+one that matters:
+
+- `probe_call(..., name=...)` — the lookup argument shadowed a real parameter of
+  `mv.pp.supercell`, `mv.screen.filter` and others. Passing `name='big'` sent it
+  to the probe, the entry came back empty, and the call was **silently not
+  probed at all**. A harness that reports nothing wrong because it tested
+  nothing is worse than no harness.
+- The entry was looked up by bare function name, so `mv.pl.pareto` resolved to
+  `mv.screen.pareto` and reported a claim the function never made.
+- A `produces` claim on a call that returns a *new* dataset — one row per
+  ordering, per slab, per fragment — was checked against the input object, where
+  it correctly was not present.
+
+### A contract slot can now say which object it lands on
+
+The one place the omicverse contract vocabulary needed extending, and it is a
+gap rather than a disagreement. On a library where every operation takes one
+object, naming a container is enough. matverse has operations that take two:
+
+```python
+produces={"sites.obs": ["coordination_number"]}      # mv.env.coordination
+```
+
+`mv.mag.ground_state` is the case that forces it. It writes four columns onto
+the parent and a fifth back onto the orderings, and an unqualified `obs` said
+all five arrived together. `mv.env.coordination`, `mv.calc.forces` and
+`mv.surf.wulff` had the same problem — and in every one of them **the prose note
+already said which object**, while the machine-readable claim did not.
+`mv.calc.forces` went further and said the fields "cannot name" those slots
+"because they describe one object only", which is exactly the limitation now
+lifted.
+
+A qualifier is checked against the signature at import: one that names no
+parameter resolves to no object and could never be probed, so it is refused
+rather than allowed to become an unverifiable claim.
+
+### A claim can now be undecided rather than failed
+
+`mv.elec.transport` needs BoltzTraP2, which does not build here. Counting its
+three claims as failures would report the environment as a defect in the
+registry, and counting them as passes would be a lie. They are reported
+separately and excluded from the rate's denominator.
+
+## v0.1.16
+
+### Molecules were never out of scope
+
+The design note said molecules were out of scope "by construction". That was
+wrong, and checking it took one line: a `Molecule` has a composition, so `X`
+and `var` build for water exactly as they do for a crystal — H:2, O:1. The only
+thing that failed was a decoder that assumed a lattice.
+
+So molecules live on the same axes as everything else, and **one object holds
+both**. `obs['is_periodic']` tells them apart; `volume` and `density` become
+NaN for a molecule rather than absent, so a dataset mixing a catalyst with its
+adsorbates stays one table. `mv.pp.qc`, `mv.feat.element_stats` and even
+`mv.calc.energy` needed no changes at all.
+
+**`mv.mol`** adds what genuinely differs — a point group rather than a space
+group, covalent bonds rather than a coordination polyhedron, fragments rather
+than defects. Validated against textbook answers: C2v for water, Td for
+methane, C3v for ammonia, with group orders 4, 24 and 6.
+
+The methane row is the one worth reading. `can_be_polar` comes out **False**,
+and not as a tendency: Td contains operations that map any candidate dipole
+onto its own negative, so symmetry forbids it outright. A dipole survives only
+in C1, Cs, Cn and Cnv.
+
+`fragments` breaks every acyclic bond and keeps the pieces, conserving atoms on
+every cut. It records the **unreduced** formula next to the reduced one,
+because pymatgen's reduced formula applies the diatomic convention — a single
+hydrogen atom reads `H2` and a hydroxyl reads `H2O2`, which is right for a
+stoichiometry and actively misleading for a fragment.
+
+### `mv.pl.structure`
+
+"Crystal Toolkit and VESTA do that better" was a reason not to compete, not a
+reason to have nothing. Draws either kind of material, interactively through
+py3Dmol when it is installed and through matplotlib when it is not. It is the
+quick look you take twenty times a day to catch a slab built upside down.
+
+### `mv.utils.submit` and `mv.utils.job_status`
+
+matverse still runs no DFT and is not a workflow manager — atomate2, quacc and
+AiiDA do that. What was missing was the link back: `submit` shells out to
+`sbatch` and records the job id **on the object**, so "which job is computing
+this dataset" is answerable from the data rather than from shell history.
+`job_status` reads `squeue`, falling back to `sacct` for jobs that have
+finished, because `squeue` forgets a job shortly after it ends.
+
+`mv.records` is now exported, since reading the submissions back needs it.
+
+### Another alias that pointed at the wrong function
+
+`mv.utils.slurm_script` claimed `submit` and `sbatch`. It writes a script and
+stops. This is the second time the registry's collision check has caught a
+misdirected alias — the first was `mv.dft.read_dos` claiming `band structure` —
+which is the machinery working rather than a coincidence.
+
+## v0.1.15
+
+### Two namespaces for what composition cannot reach
+
+matverse wrapped 15 of pymatgen's 48 `analysis` modules, and the two biggest
+holes were the two questions a composition vector provably cannot answer.
+
+**`mv.env` — local and coordination environments.** Near-neighbour algorithms,
+ChemEnv's polyhedron classifier, and the bond network. Validated on olivine
+LiFePO₄: Li and Fe come out six-coordinate, P four-coordinate, and the
+**continuous symmetry measure** tells the structural story a coordination
+number cannot — 0.14 for the rigid phosphate tetrahedron against 2.37 for the
+heavily distorted FeO₆ octahedron. That contrast is why the olivine framework
+does not collapse when lithium leaves it.
+
+Results land where their shape belongs: per-atom to the sites axis, the bond
+network to `obsp` (the atoms × atoms slot a kNN graph occupies in single-cell
+analysis), per-material summaries back to `obs` where a screen can reach them.
+
+**`mv.elec` — electronic structure.** Previously `mv.dft` could read a density
+of states and nothing else.
+
+A band structure is *bands × k-points* per material and ragged in the number of
+bands, so it gets **its own axis**: one row per band per spin per material, `X`
+its energy along the path, `var` the k-points. Structurally a cells × genes
+matrix again.
+
+Two materials generally have different k-paths — Cu gets 102 points and Al 95 —
+so bands are resampled onto a normalised path fraction. That is the same move
+that puts two diffraction patterns on one 2θ grid, and the axis must be read as
+"fraction along this material's own path", never as a wavevector.
+
+Energies are stored relative to the Fermi level, because an absolute eigenvalue
+means nothing across codes or even across two runs of one code.
+
+`kpath`, `bands`, `read_bands`, `band_features`, `dos_fingerprint`, `cohp` and
+`transport`. Registry 121 → 132, all of them exercised in a notebook.
+
+**`mv.iface` — interfaces between two materials.** A pairing is not a
+material, so rows are *pairs*, with `obs['film']` and `obs['substrate']`
+pointing back at the parent — the same derived-axis-with-foreign-keys shape as
+the sites and bands axes.
+
+`match` runs Zur and McGill's epitaxial search and reports the strain each match
+would need; `reactivity` reads off whether the contact survives; `build` returns
+the interface cells as an ordinary materials object, one per termination.
+
+The pairing is **ordered**: copper grown on aluminium is a different problem
+from aluminium grown on copper, because the substrate is the fixed lattice and
+the film is what has to stretch.
+
+Validated on Ni–Al, where `reactivity` finds **Ni + 3 Al → Al₃Ni at
+−0.45 eV/atom** — the intermetallic that actually forms, and the reason
+diffusion barriers exist in turbine coatings. This is the question that decides
+whether a solid electrolyte works: lithium metal and most sulfide electrolytes
+are each stable and destroy each other on contact, which no hull computed on
+either one alone can see.
+
+**`mv.disorder` — partial occupancy.** Everything else in matverse assumes a
+structure is ordered; a large fraction of real materials are not, and a
+first-principles code cannot take a fractionally occupied cell as input.
+
+`describe` reports where the disorder is and the ideal **configurational
+entropy**, which comes out exactly at `k_B ln m` for an equiatomic mixture of
+*m* species. That number is the argument for high-entropy alloys: at a
+synthesis temperature of 1500 K a five-component equiatomic alloy gets
+−0.21 eV/atom, four times the 50 meV a screen typically calls "close to the
+hull". A screen that ignores `-TS` rejects exactly the phases the field exists
+to study.
+
+`orderings` produces ordered approximants, and admits when its ranking is
+arbitrary: Ewald energies need oxidation states, and without them every
+arrangement scores zero — honest for a metallic alloy and wrong for an oxide.
+
+`sqs` **refuses** when ATAT is absent rather than handing back the ordered
+ground state, which is the opposite of a solid solution and would be a
+plausible-looking answer to a different question.
+
+`dope` catches a silent failure in pymatgen: `DopingTransformation` enumerates
+with enumlib and returns an **empty list** rather than raising when it is
+missing, so a doping study runs to completion and produces nothing. matverse
+reports which of the two things happened.
+
+**`mv.transform` — pymatgen's transformations, on the object.** There are
+around forty-five `Transformation` classes. Wrapping forty-five of them as
+forty-five matverse functions would be a bad trade: most are one line, the
+registry would be mostly noise, and every pymatgen release would need another
+wrapper.
+
+So there is one function that takes the transformation **by name**, looked up
+in pymatgen at call time — which means a transformation added upstream is
+available the day it lands:
+
+```python
+mv.transform.apply(md, 'PrimitiveCellTransformation')
+mv.transform.apply(md, 'CubicSupercellTransformation', min_length=10)
+```
+
+The result becomes a structure **variant**, so the input survives and "which
+structure was this computed on" stays answerable. A transformation that fails
+on one row leaves that row alone and records `False` — a dataset where
+something applies to some materials and not others is the normal case, not the
+exceptional one.
+
+`expand` keeps every result of a one-to-many transformation as its own row;
+`chain` applies a sequence; `oxidation_states` is the missing prerequisite
+behind three of pymatgen's more confusing errors (`Element has no attribute
+oxi_state!`, `Valences cannot be assigned!`, and Ewald ranking that silently
+scores everything zero).
+
+### A migration guide for pymatgen users
+
+`tutorials/from_pymatgen.ipynb` answers the question a pymatgen user actually
+has, which is not "what do I learn instead" but "what does putting my
+structures in an object buy me". It is explicit about what matverse does *not*
+do — molecules, visualisation, running anything — so nobody goes looking.
+
+### Structures carrying numpy site properties could not be stored
+
+`mv.iface.build` returns pymatgen `Interface` objects, which carry the
+interface-normal vector as a numpy array in their site properties. matverse
+serialises structures to JSON so the object survives `write_h5ad`, and `json`
+refused, with a bare `TypeError: Object of type ndarray is not JSON
+serializable` naming neither the structure nor the property.
+
+The encoder now converts arrays and numpy scalars, and refuses anything it
+genuinely cannot store with a message that names the offending property type
+and says what to do about it. Any structure from any source was affected, not
+just interfaces.
+
+### `mv.pl.set_style` follows omicverse's `plot_set`
+
+Same shape: emoji status lines, inline retina format, font support including
+the Arial download, scalar `figsize` promoted to a square, warning suppression,
+accelerator detection, an ASCII logo printed once with the version and tutorial
+link, and a closing line.
+
+One item differs on purpose. Where omicverse reports scanpy's verbosity,
+matverse reports **which calculators this installation can actually run** —
+because it ships one working calculator and dispatches the rest to whatever you
+installed, so that answer differs on every machine and decides what the session
+can do.
+
+`quiet=` still works and still silences everything, because v0.1.15's
+predecessor is on PyPI and a rename is not worth breaking a working notebook
+over.
+
+### A wrong alias, caught by the registry
+
+`mv.dft.read_dos` claimed the alias `band structure`. It reads a density of
+states. The collision check refused to let `mv.elec.bands` register the name it
+should have owned all along, which is the alias machinery doing exactly what it
+was built for.
+
 ## v0.1.14
 
 ### Every registered function is called in a notebook

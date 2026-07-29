@@ -46,12 +46,19 @@ VASP_PRESETS = {
              "as one."),
     "hse": ("pymatgen.io.vasp.sets", "MPHSERelaxSet",
             "HSE06 hybrid. Expensive; screen with something cheaper first."),
+    "neb-endpoint": ("pymatgen.analysis.diffusion.neb.io",
+                     "MVLCINEBEndPointSet",
+                     "Relaxation of one end of a migration path. Fixed cell "
+                     "(ISIF=2) and symmetry off (ISYM=0), which is what makes "
+                     "the two ends comparable and stops the hop being "
+                     "symmetrised away. Pair it with mv.neb.hop_endpoints. "
+                     "Needs pymatgen-analysis-diffusion."),
 }
 
 #: What each preset reproduces, recorded on the level so a hull can check.
 PRESET_REFERENCE = {
     "relax": "PBE+U", "static": "PBE+U", "bands": "PBE+U",
-    "scan": "r2SCAN", "hse": "HSE06",
+    "scan": "r2SCAN", "hse": "HSE06", "neb-endpoint": "PBE+U",
 }
 
 #: The file matverse writes into each directory to keep the row identity.
@@ -98,9 +105,14 @@ def write_inputs(md: AnnData, root, preset: str = "relax",
         module = __import__(module_name, fromlist=[class_name])
         input_set = getattr(module, class_name)
     except (ImportError, AttributeError) as exc:          # pragma: no cover
+        if module_name.startswith("pymatgen.analysis.diffusion"):
+            raise ImportError(
+                f"preset {preset!r} needs pymatgen-analysis-diffusion, one of "
+                f"pymatgen's own add-on packages. Install it with `pip install "
+                f"pymatgen-analysis-diffusion`. ({exc})") from exc
         raise ImportError(
             f"pymatgen does not expose {class_name}; the input sets were "
-            f"reorganised in recent releases. Check pymatgen.io.vasp.sets."
+            f"reorganised in recent releases. Check {module_name}."
         ) from exc
 
     root = Path(root)
@@ -334,9 +346,10 @@ def _band_gap(run) -> float:
 
 
 @register_function(
-    aliases=["read dos", "electronic structure", "density of states",
-             "band gap", "parse dos", "electronic descriptors",
-             "band structure"],
+    # 'band structure' used to be claimed here and should not have been: this
+    # reads a density of states. mv.elec.bands owns it now.
+    aliases=["read dos", "density of states", "band gap", "parse dos",
+             "electronic descriptors", "dos from vasprun"],
     category="dft",
     description="Parse the electronic density of states from completed runs "
                 "onto a shared energy grid, and derive the scalars a screen "
@@ -480,13 +493,16 @@ def presets() -> dict:
     category="dft",
     description="Report how many first-principles runs are finished, missing or "
                 "unconverged, and which rows they belong to.",
-    requires={"obs": ["dft_directory"]},
     prerequisites=["mv.dft.write_inputs"],
     examples=["mv.dft.status(md, 'runs/')"],
     related=["mv.dft.read_outputs", "mv.utils.resume"],
     notes="Worth running before read_outputs on a large campaign: a directory "
           "that never started and one that crashed look identical from the "
-          "object, and the difference decides whether to resubmit.",
+          "object, and the difference decides whether to resubmit.\n\n"
+          "Claims no requires. It used to claim obs['dft_directory'], and "
+          "probing deleted it: status looks under `root` for a directory named "
+          "after each row, so it answers for an object that never ran "
+          "write_inputs — which is the case where the answer matters.",
 )
 def status(md: AnnData, root, filename: str = "vasprun.xml") -> dict:
     """How many runs have produced output, and which rows have not."""

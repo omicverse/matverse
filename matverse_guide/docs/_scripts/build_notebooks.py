@@ -26,6 +26,11 @@ NOTEBOOKS = [
     "surfaces_and_adsorption",
     "dynamics",
     "magnetic_ordering",
+    "structure_and_bands",
+    "interfaces",
+    "disorder",
+    "from_pymatgen",
+    "molecules",
     "data_io",
     "infrastructure",
 ]

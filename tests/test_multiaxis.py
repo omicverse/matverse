@@ -396,3 +396,124 @@ class TestSubstitution:
     def test_nothing_to_substitute_says_so(self, md):
         with pytest.raises(ValueError, match="no candidate survived"):
             mv.gen.substitute(md, {"Xe": ["Kr"]})
+
+
+class TestExperimentalHull:
+    """A hull from measured enthalpies, checked against the Fe-O system.
+
+    The numbers are NIST-JANAF standard formation enthalpies at 298 K, and the
+    answer is a known piece of metallurgy: hematite and magnetite are stable,
+    and wustite is not — FeO disproportionates to iron and magnetite below
+    about 570 C. A hull that puts all three on it has got the units or the
+    references wrong.
+    """
+
+    #: kJ/mol at 298 K, NIST-JANAF.
+    DHF = {"Fe2O3": -824.2, "Fe3O4": -1118.4, "FeO": -272.0, "Fe": 0.0}
+    EV_PER_KJ_MOL = 1.0 / 96.48533212331
+
+    @staticmethod
+    def _cell(formula):
+        from pymatgen.core import Composition, Lattice, Structure
+        composition = Composition(formula)
+        symbols = [str(element) for element in composition.elements
+                   for _ in range(int(composition[element]))]
+        n = len(symbols)
+        return Structure(Lattice.cubic(10.0), symbols,
+                         [[i / n, 0, 0] for i in range(n)])
+
+    @pytest.fixture
+    def iron_oxides(self):
+        names = list(self.DHF)
+        md = mv.data.from_structures([self._cell(f) for f in names])
+        md.obs_names = names
+        mv.exp.measure(md, "dHf", [self.DHF[f] for f in names],
+                       level="janaf", instrument="NIST-JANAF")
+        return md
+
+    @staticmethod
+    def _column(md):
+        return next(c for c in md.obs.columns if c.startswith("dHf"))
+
+    def test_the_conversion_is_per_atom_of_the_formula(self, iron_oxides):
+        """-824.2 kJ/mol of Fe2O3 is -8.542 eV per formula unit, and Fe2O3 has
+        five atoms, so -1.7084 eV/atom. Two divisions, both easy to skip."""
+        mv.exp.formation_hull(iron_oxides, self._column(iron_oxides),
+                              unit="kJ/mol", level="janaf")
+        expected = self.DHF["Fe2O3"] * self.EV_PER_KJ_MOL / 5.0
+        assert float(iron_oxides.obs["formation_energy_janaf"]["Fe2O3"]) == \
+            pytest.approx(expected, rel=1e-9)
+        assert expected == pytest.approx(-1.7084, abs=1e-4)
+
+    def test_hematite_and_magnetite_are_stable(self, iron_oxides):
+        mv.exp.formation_hull(iron_oxides, self._column(iron_oxides),
+                              unit="kJ/mol", level="janaf")
+        stable = iron_oxides.obs["is_stable_janaf"]
+        assert bool(stable["Fe2O3"]) and bool(stable["Fe3O4"])
+
+    def test_wustite_comes_out_metastable(self, iron_oxides):
+        """The result worth having, and it is not an artefact: the tie line
+        from Fe to Fe3O4 at x_O = 1/2 sits at -1.4489 eV/atom and FeO is at
+        -1.4095, so it is 0.0394 above. Computed here from the tie line rather
+        than pasted, so a change in either number has to move both."""
+        mv.exp.formation_hull(iron_oxides, self._column(iron_oxides),
+                              unit="kJ/mol", level="janaf")
+        magnetite = self.DHF["Fe3O4"] * self.EV_PER_KJ_MOL / 7.0
+        on_tie_line = magnetite * (0.5 / (4.0 / 7.0))
+        feo = self.DHF["FeO"] * self.EV_PER_KJ_MOL / 2.0
+        assert float(iron_oxides.obs["e_above_hull_janaf"]["FeO"]) == \
+            pytest.approx(feo - on_tie_line, abs=1e-6)
+        assert not bool(iron_oxides.obs["is_stable_janaf"]["FeO"])
+
+    def test_the_oxygen_reference_is_supplied_without_a_row(self, iron_oxides):
+        """An oxide hull needs its O2 corner, and nobody has a row for oxygen
+        gas. pymatgen's ExpEntry cannot hold one at all — it rejects any phase
+        marked gas or liquid — which is a large part of why this is not a
+        wrapper."""
+        mv.exp.formation_hull(iron_oxides, self._column(iron_oxides),
+                              unit="kJ/mol", level="janaf")
+        assert "O2" in iron_oxides.uns["experimental_hull"]["janaf"]["stable"]
+        assert "O" not in list(iron_oxides.obs_names)
+
+    def test_the_unit_is_required_and_checked(self, iron_oxides):
+        with pytest.raises(ValueError, match="unit must be one of"):
+            mv.exp.formation_hull(iron_oxides, self._column(iron_oxides),
+                                  unit="joules")
+
+    def test_quoting_the_same_data_two_ways_agrees(self, iron_oxides):
+        """The unit argument has to actually do something. Feeding eV/atom
+        directly must reproduce the kJ/mol route exactly — this is the check
+        that a silently-ignored unit would fail, which is the failure mode
+        ExpEntry has."""
+        column = self._column(iron_oxides)
+        mv.exp.formation_hull(iron_oxides, column, unit="kJ/mol",
+                              level="from_kj")
+        iron_oxides.obs["dHf_ev"] = \
+            iron_oxides.obs["formation_energy_from_kj"]
+        mv.exp.formation_hull(iron_oxides, "dHf_ev", unit="eV/atom",
+                              level="from_ev")
+        assert np.allclose(iron_oxides.obs["e_above_hull_from_kj"],
+                           iron_oxides.obs["e_above_hull_from_ev"], atol=1e-9)
+
+    def test_treating_kj_as_ev_would_be_wrong_by_96(self, iron_oxides):
+        """Documents the failure this function exists to prevent. Handing the
+        table's numbers over as if they were eV — which is exactly what
+        ExpEntry does — leaves a hull whose energies are off by the Faraday
+        constant, and it does not complain."""
+        column = self._column(iron_oxides)
+        mv.exp.formation_hull(iron_oxides, column, unit="kJ/mol",
+                              level="right")
+        mv.exp.formation_hull(iron_oxides, column, unit="eV", level="wrong")
+        ratio = (float(iron_oxides.obs["formation_energy_wrong"]["Fe2O3"])
+                 / float(iron_oxides.obs["formation_energy_right"]["Fe2O3"]))
+        assert ratio == pytest.approx(96.485, rel=1e-3)
+
+    def test_a_missing_column_says_how_to_make_one(self, iron_oxides):
+        with pytest.raises(ValueError, match="mv.exp.measure"):
+            mv.exp.formation_hull(iron_oxides, "not_a_column", unit="kJ/mol")
+
+    def test_the_level_records_where_the_numbers_came_from(self, iron_oxides):
+        mv.exp.formation_hull(iron_oxides, self._column(iron_oxides),
+                              unit="kJ/mol", level="janaf")
+        assert "janaf" in mv.levels_used(iron_oxides)
+        assert iron_oxides.uns["levels"]["janaf"]["kind"] == "experiment"

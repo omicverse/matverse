@@ -216,4 +216,51 @@ would silently use the wrong energy.
 of. [Defects and diffusion](defects_and_diffusion.ipynb) has the same shape:
 enumerate configurations, compute them all, let the object record which won.
 ```"""),
+
+    ("markdown", """\
+## The other thing a d shell does
+
+Magnetic ordering is one consequence of a partly filled d shell. Distortion is
+the other, and it is structural rather than magnetic: a degenerate electronic
+ground state in an octahedral site lowers its energy by distorting the
+octahedron.
+
+That is not a detail. It is why LaMnO₃ is orthorhombic rather than cubic, and
+why manganese spinel cathodes fade on cycling."""),
+
+    ("code", """\
+from pymatgen.core import Lattice, Structure
+
+def perovskite(a_site, b_site, a):
+    return Structure(Lattice.cubic(a), [a_site, b_site, "O", "O", "O"],
+                     [[0, 0, 0], [.5, .5, .5], [.5, .5, 0],
+                      [.5, 0, .5], [0, .5, .5]])
+
+perovskites = mv.data.from_structures([perovskite("La", "Mn", 3.9),
+                                       perovskite("Sr", "Ti", 3.905),
+                                       perovskite("La", "Ni", 3.85)])
+mv.pp.describe(perovskites)
+mv.mag.jahn_teller(perovskites)
+
+perovskites.obs[["formula", "jahn_teller_active", "jahn_teller_strength",
+                 "jahn_teller_species"]]"""),
+
+    ("markdown", """\
+Mn³⁺ and Ni³⁺ come out **strong** and Ti⁴⁺ inactive, which is the textbook
+answer: both of the first two put an electron in a doubly degenerate e_g level,
+and Ti⁴⁺ is d⁰ with no degeneracy to lift.
+
+The column that matters is `jahn_teller_species` — knowing a material distorts
+is not useful without knowing which site is doing it. The ligand bond lengths,
+which are the distortion itself rather than a label for it, stay in `uns`.
+
+```{warning}
+`strong` means an e_g degeneracy and `weak` a t₂_g one, and the difference is
+large: a weak Jahn-Teller distortion usually does not survive room temperature.
+Reading `weak` as `distorted` is the common mistake.
+
+The answer also depends on the spin state, which is guessed only if you ask
+with `guess_spin=True`. A structure that already carries oxidation states from
+`mv.transform.oxidation_states` is used as given rather than re-assigned.
+```"""),
 ]

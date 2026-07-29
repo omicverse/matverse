@@ -252,3 +252,59 @@ class TestOptimade:
     def test_an_unknown_provider_names_the_alternative(self):
         with pytest.raises(ValueError, match="pass base_url"):
             mv.data.from_optimade("nelements=2", provider="nowhere")
+
+
+class TestSubmission:
+    """Submitting is a small step past writing a script, and the useful part
+    is the link back: which job is computing this dataset."""
+
+    def _script(self, md, tmp_path):
+        return mv.utils.slurm_script(
+            "echo matverse", path=tmp_path / "job.sbatch",
+            partition="normal", hours=1, cpus=1, memory="2GB")
+
+    def test_a_dry_run_returns_the_command_without_running_it(self, md,
+                                                              tmp_path):
+        """What you want on a login node, and in a test."""
+        script = self._script(md, tmp_path)
+        entry = mv.utils.submit(md, script, dry_run=True)
+        assert entry["state"] == "dry run"
+        assert entry["job_id"] is None
+        assert entry["command"].startswith("sbatch ")
+
+    def test_the_job_is_recorded_on_the_object(self, md, tmp_path):
+        script = self._script(md, tmp_path)
+        mv.utils.submit(md, script, dry_run=True)
+        jobs = mv.records(md.uns["submissions"], "jobs")
+        assert len(jobs) == 1
+        assert jobs[0]["script"] == str(script)
+
+    def test_submissions_accumulate_rather_than_replace(self, md, tmp_path):
+        script = self._script(md, tmp_path)
+        mv.utils.submit(md, script, dry_run=True)
+        mv.utils.submit(md, script, dry_run=True)
+        assert len(mv.records(md.uns["submissions"], "jobs")) == 2
+
+    def test_a_missing_script_says_what_writes_one(self, md, tmp_path):
+        with pytest.raises(FileNotFoundError, match="slurm_script"):
+            mv.utils.submit(md, tmp_path / "nothing.sbatch")
+
+    def test_status_of_a_dry_run_says_nothing_was_submitted(self, md,
+                                                            tmp_path):
+        script = self._script(md, tmp_path)
+        mv.utils.submit(md, script, dry_run=True)
+        report = mv.utils.job_status(md)
+        assert report["n_jobs"] == 1
+        assert "dry runs" in report["note"]
+
+    def test_the_record_survives_a_round_trip(self, md, tmp_path):
+        """Submissions go through append_record, so they are h5ad-writable —
+        a list of dicts in uns is not."""
+        import anndata
+
+        script = self._script(md, tmp_path)
+        mv.utils.submit(md, script, dry_run=True)
+        path = tmp_path / "with_jobs.h5ad"
+        md.write_h5ad(path)
+        back = anndata.read_h5ad(path)
+        assert len(mv.records(back.uns["submissions"], "jobs")) == 1

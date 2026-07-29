@@ -212,7 +212,199 @@ mdata = mv.multi.to_mudata(md, sites)     # needs matverse[multi]
 ```
 
 Optional throughout. matverse's operations take `AnnData`, and the sites object
-is useful without ever being assembled.
+is useful without ever being assembled."""),
+
+    ("code", """\
+mv.prop.tem(md, r_max=1.2, step=0.02)
+md.obs[["formula", "tem_n_reflections_calc", "tem_strongest_calc",
+        "tem_zone_axis"]]"""),
+
+    ("markdown", """\
+A TEM pattern is spots on a plane, and a plane of spots does not compare across
+materials — two crystals on the same zone axis put different spots in different
+places. What goes into `obsm` is the **ring profile**: intensity against the
+magnitude of the scattering vector, which is what a polycrystalline
+selected-area pattern looks like and what can share an axis with an X-ray or
+neutron pattern.
+
+`obs` keeps the two facts the reduction loses — how many reflections were
+excited, and the strongest one's Miller indices — and the **zone axis**, without
+which the pattern means nothing.
+
+```{note}
+Those columns show the F-centring rule rather than assert it. A face-centred
+lattice allows only all-even or all-odd `hkl`, one reflection in four, so an fcc
+metal keeps a quarter of what a simple cubic cell does — and (010), extinct in
+fcc, is the brightest spot in simple cubic.
+```"""),
+
+    ("markdown", """\
+## A result computed somewhere else
+
+Everything so far, matverse computed. Plenty of the results a screen wants it
+cannot compute at all: a chemical shielding tensor, a piezoelectric tensor and
+a dielectric function all come out of a DFT code, and no cheap potential
+produces any of them.
+
+That is not a reason for the object to have nothing to say about them. The step
+*after* the calculation — reduce a tensor to the parameters a spectrum is
+described by, check it against the crystal symmetry, turn a dielectric function
+into an efficiency — is arithmetic with conventions in it, and conventions are
+exactly what gets a result quoted wrongly.
+
+So these functions take the computed quantity as an **argument**, the same way
+`mv.elec.bands` takes band structures and `mv.exp.attach` takes measured curves.
+
+### A tensor per atom
+
+NMR shielding is per-atom, so it lands on the sites axis. Here is a tensor with
+principal values 10, 20 and 60 — round numbers, so every convention has a hand
+answer."""),
+
+    ("code", """\
+shieldings = np.tile(np.diag([10.0, 20.0, 60.0]), (sites.n_obs, 1, 1))
+mv.prop.nmr(md, sites, shieldings, level="pbe")
+
+sites.obs[["material", "element", "shielding_iso_pbe",
+           "shielding_anisotropy_pbe", "shielding_asymmetry_pbe",
+           "shielding_span_pbe", "shielding_skew_pbe"]].head(4).round(3)"""),
+
+    ("markdown", """\
+`sigma_iso` is 30, the trace over three. `zeta` is 30, which is
+`sigma_33 - sigma_iso`. `eta` is 1/3, the span is 50 and the skew −0.6.
+
+Two conventions are reported because both are in use and **they disagree about
+what "anisotropy" means**: Haeberlen's `zeta` is `sigma_33 - sigma_iso`, while
+the reduced anisotropy most spectrometer software prints is 3/2 of it. Span and
+skew are the Herzfeld-Berger pair a sideband analysis returns. A single column
+called `anisotropy` would be wrong for half its readers.
+
+These are **shieldings**, not shifts — a shift is a shielding referenced to a
+standard compound, and it runs the other way in sign.
+
+The electric field gradient is the other half of a solid-state NMR experiment,
+and it sets the lineshape of every quadrupolar nucleus."""),
+
+    ("code", """\
+gradients = np.tile(np.diag([-1.0, -2.0, 3.0]), (sites.n_obs, 1, 1))
+mv.prop.efg(md, sites, gradients, level="pbe")
+
+sites.obs[["element", "efg_vzz_pbe", "efg_asymmetry_pbe",
+           "efg_coupling_pbe"]].head(4).round(3)"""),
+
+    ("markdown", """\
+The coupling constant is the only one of the three that needs to know which
+*nucleus* it is looking at — a quadrupole moment is a property of the isotope,
+not of the calculation — so it is looked up from the element on the site.
+
+### A tensor per material, checked against symmetry
+
+α-quartz is the piezoelectric everyone learns first. Its measured constants are
+d₁₁ = 2.3 pC/N and d₁₄ = −0.67 pC/N, and its point group 32 fixes the rest of
+the matrix."""),
+
+    ("code", """\
+from pymatgen.core import Lattice, Structure
+
+quartz = mv.data.from_structures([Structure.from_spacegroup(
+    "P3121", Lattice.hexagonal(4.913, 5.405), ["Si", "O"],
+    [[0.4697, 0.0, 0.0], [0.4135, 0.2669, 0.1191]])])
+mv.pp.describe(quartz)
+
+d11, d14 = 2.3, -0.67
+voigt = np.array([[[d11, -d11, 0, d14, 0, 0],
+                   [0, 0, 0, 0, -d14, -2 * d11],
+                   [0, 0, 0, 0, 0, 0]]])
+
+mv.prop.piezoelectric(quartz, voigt, level="exp")
+quartz.obs[["formula", "piezo_max_longitudinal_exp",
+            "piezo_symmetry_valid_exp"]].round(3)"""),
+
+    ("markdown", """\
+**2.30 pC/N**, recovered from the tensor without being told where to look. For
+class 32 the longitudinal response in the basal plane goes as `d11 cos(3θ)`, so
+its maximum over all directions *is* d₁₁ — which is why the maximum is the
+screening number rather than any single component. Components depend on how
+somebody oriented the cell; the maximum does not.
+
+`piezo_symmetry_valid` is the column to read first. Put the same tensor on a
+centrosymmetric crystal and it fails, because inversion symmetry forbids
+piezoelectricity outright:"""),
+
+    ("code", """\
+copper = mv.datasets.metals(["Cu"])
+mv.pp.describe(copper)
+mv.prop.piezoelectric(copper, voigt, level="bogus")
+
+bool(copper.obs["piezo_symmetry_valid_bogus"].iloc[0])"""),
+
+    ("markdown", """\
+`False` — and a non-zero piezoelectric tensor on an fcc metal is an error in the
+calculation, or a tensor paired with the wrong structure, rather than a
+discovery.
+
+### A spectrum per material, and what it is worth
+
+A dielectric function is a curve, so it goes where curves go. The absorption
+coefficient is **derived** from it rather than stored alongside it, because
+`α = 2Ek/ħc` is a definition and a spectrum that has been through it twice
+cannot be reconstructed."""),
+
+    ("code", """\
+energies = np.linspace(0.3, 4.0, 800)
+gaps = [1.34, 0.90, 2.50, 1.34, 1.34, 1.34, 1.34]
+
+# A model absorber: a step edge at the gap. The last four share a gap and
+# differ only in how strongly they absorb above it.
+strength = [6.0, 6.0, 6.0, 6.0, 0.5, 0.05, 0.005]
+eps1 = np.tile(4.0, (md.n_obs, energies.size))
+eps2 = np.stack([np.where(energies >= g, s, 0.0)
+                 for g, s in zip(gaps, strength)])
+
+mv.prop.dielectric(md, energies, eps1, eps2, level="pbe")
+md.obs["band_gap_pbe"] = gaps
+md.obsm["absorption_pbe"].shape"""),
+
+    ("code", """\
+mv.prop.slme(md, level="pbe", thickness=5e-7)
+
+md.obs[["band_gap_pbe", "slme_pbe", "sq_limit_pbe"]].round(2)"""),
+
+    ("markdown", """\
+Read the first three rows against the last four.
+
+Rows 0–2 differ only in **gap**, and `sq_limit` traces the Shockley-Queisser
+curve: 1.34 eV beats both 0.90 and 2.50, which is why 1.34 eV is quoted as the
+optimum for a single junction. Row 0 lands near 33%, the textbook limit — a
+model absorber with a step edge and no indirect gap *is* the Shockley-Queisser
+idealisation, so reproducing it is the calibration rather than a result.
+
+Rows 3–6 all have the **same gap** and therefore the same `sq_limit`, and
+wildly different `slme`. That spread is the whole reason this function exists.
+A screen ranked on band gap cannot tell those four apart — by that measure they
+are one candidate. They are not one candidate.
+
+```{note}
+`slme` is a **percentage**, and the unit is recorded rather than left to the
+reader; `mv.utils.check_units(md)` will say so. pymatgen's own `slme()` returns
+the same number with no unit in its docstring, which is precisely the kind of
+thing that becomes a factor of 100 three functions downstream.
+```
+
+An indirect gap costs efficiency on top of that, through the radiative fraction
+`exp(-(E_direct - E_indirect)/kT)`. Left unset, the direct gap is used for both,
+which is the optimistic Shockley-Queisser assumption:"""),
+
+    ("code", """\
+md.obs["gap_indirect_pbe"] = [g - 0.3 for g in gaps]
+mv.prop.slme(md, level="pbe", thickness=5e-7,
+             indirect_key="gap_indirect_pbe")
+
+md.obs[["band_gap_pbe", "gap_indirect_pbe", "slme_pbe"]].head(3).round(2)"""),
+
+    ("markdown", """\
+That is the penalty silicon pays, and the reason a direct-gap absorber a tenth
+as thick can outperform it.
 
 ## Experiment is a level of theory
 
@@ -440,8 +632,156 @@ GdNiSn₄ and LuNiSn₄, despite both being built from known motifs — current 
 recombine compositions within known structural families. A high novelty rate
 measured against a database does not contradict that.
 
+### Where the candidates come from in the first place
+
+`mv.gen.substitute` enumerates the swaps you name. `mv.gen.predict_substitutions`
+ranks the swaps you did not think of, from the data-mined ionic substitution
+model of Hautier et al. — how often two species replace one another across the
+ICSD, rather than whether their radii match.
+
+It needs **oxidation states**, because the model is defined over ionic species:
+Fe²⁺ and Fe³⁺ substitute differently and that distinction is the whole point."""),
+
+    ("code", """\
+cathode = mv.datasets.load("battery_cathodes")[:1].copy()
+mv.pp.describe(cathode)
+mv.transform.oxidation_states(cathode)
+
+proposed = mv.gen.predict_substitutions(cathode, source="oxidized", n=8)
+mv.pp.describe(proposed)
+proposed.obs[["parent", "substitution", "substitution_probability",
+              "formula"]].round(5)"""),
+
+    ("markdown", """\
+From LiFePO₄ it reaches **LiVPO₄** and **LiTiPO₄** — both real olivine
+analogues — without being told anything about olivines. The probability is a
+prior from what has been made before; it says nothing about whether the
+substitution is stable in this structure, which is what the hull is for.
+
+The result is an ordinary materials object, so the whole pipeline runs on it:
+`mv.pp.qc`, `mv.calc.relax`, `mv.thermo.hull`.
+
+Doping is the same statistics asked a narrower question:"""),
+
+    ("code", """\
+mv.gen.predict_dopants(cathode, source="oxidized", n=5)
+cathode.obs[["name", "n_type_dopant", "n_type_probability",
+             "p_type_dopant", "p_type_probability"]].round(4)"""),
+
+    ("markdown", """\
+Fluorine comes out as the n-type choice, which is the doping strategy LiFePO₄ is
+actually treated with. n-type versus p-type here is arithmetic on oxidation
+states — the dopant carries more charge than the site it replaces, or less — not
+a calculation of where the level lands. Whether it is shallow, soluble or
+compensated is `mv.thermo.defect_formation`'s question.
+
+A candidate built by substitution keeps the cell it was built from, which can be
+several percent from where the new composition wants to sit. Starting a
+relaxation there costs steps and can land in a different minimum:"""),
+
+    ("code", """\
+mv.pp.predict_volume(proposed)
+proposed.obs[["formula", "volume", "predicted_volume", "volume_scale"]].round(3)"""),
+
+    ("markdown", """\
+No calculator involved — the prediction comes from tabulated bond lengths — and
+`volume_scale` records how far the cell moved, so a suspicious rescaling is
+visible rather than silent.
+
+### The inverse question
+
+`mv.gen.predict_substitutions` starts from a structure and asks what could be
+swapped into it. `mv.gen.predict_hosts` starts from a **composition** and asks
+which of the structures you already have could hold it — which is the more
+useful direction when you know what you want."""),
+
+    ("code", """\
+hosts = mv.gen.predict_hosts(cathode, ["Na+", "Mn2+", "P5+", "O2-"],
+                             source="oxidized")
+mv.pp.describe(hosts)
+hosts.obs[["parent", "target", "host_probability", "formula"]].round(5)"""),
+
+    ("markdown", """\
+From LiFePO₄ alone it builds **NaMnPO₄** — a real sodium-ion cathode — because
+the model has seen Li→Na and Fe→Mn often enough in the ICSD.
+
+The library you pass *is* the search space, so a database export finds far more
+than three structures will.
+
+```{note}
+The species count has to match. A four-species target only considers
+four-species hosts, because the model substitutes one for one and never changes
+how many there are. Ask for a two-species target against this library and it
+says so rather than returning an empty list — "no host found... it only
+considers hosts with 2 distinct species; this library has [4]".
+```
+
 ```{seealso}
 [Models and campaigns](models_and_campaigns.ipynb) covers the other half:
 predicting what you have not computed, and choosing what to compute next.
 ```"""),
+
+    ("markdown", """\
+## A hull the laboratory built
+
+Everything above compares a calculation with a measurement one row at a time.
+Stability is not a row-at-a-time quantity — it is a property of a whole chemical
+system — so comparing *it* means building the convex hull twice, once from
+computed energies and once from measured formation enthalpies.
+
+`mv.exp.formation_hull` does the second. The unit is a required argument, and
+that is the whole point:"""),
+
+    ("code", """\
+from pymatgen.core import Composition, Lattice, Structure
+
+def cell(formula):
+    comp = Composition(formula)
+    syms = [str(e) for e in comp.elements for _ in range(int(comp[e]))]
+    return Structure(Lattice.cubic(10.0), syms,
+                     [[i / len(syms), 0, 0] for i in range(len(syms))])
+
+# NIST-JANAF standard formation enthalpies at 298 K, in kJ/mol
+janaf = {"Fe2O3": -824.2, "Fe3O4": -1118.4, "FeO": -272.0, "Fe": 0.0}
+
+oxides = mv.data.from_structures([cell(f) for f in janaf])
+oxides.obs_names = list(janaf)
+mv.exp.measure(oxides, "dHf", list(janaf.values()), level="janaf",
+               instrument="NIST-JANAF tables")
+mv.exp.formation_hull(oxides, "dHf_janaf", unit="kJ/mol", level="janaf")
+
+oxides.obs[["dHf_janaf", "formation_energy_janaf", "e_above_hull_janaf",
+            "is_stable_janaf"]].round(4)"""),
+
+    ("markdown", """\
+Hematite and magnetite sit on the hull. **Wüstite sits 0.039 eV/atom above it**
+— and that is not a defect of the method, it is metallurgy: FeO is metastable at
+room temperature and disproportionates into iron and magnetite below about
+570 °C. A hull built from measured enthalpies that put all three phases on it
+would be the suspicious result.
+
+Two things had to go right to get there, and both are places pymatgen's
+`ExpEntry` goes wrong.
+
+The first is **units**. A table quotes kJ per mole of formula unit; a hull is in
+eV per atom. Between them sit a factor of 96.485 and the number of atoms in the
+formula. `ExpEntry` hands the table's number straight to `PDEntry` as though it
+were already eV, and `ThermoData` carries no unit for it to check against — so
+the hull comes out wrong by two orders of magnitude, and still ranks, still
+plots, still returns an `e_above_hull`.
+
+The second is the **oxygen corner**. A formation enthalpy is measured against
+the elements, so an Fe–O hull needs an O₂ reference at zero, and nobody has a
+row for oxygen gas. `mv.exp.formation_hull` adds the elemental references
+itself; `ExpEntry` cannot hold one at all, because it rejects any phase marked
+gas or liquid."""),
+
+    ("code", """\
+oxides.uns["experimental_hull"]["janaf"]["stable"]"""),
+
+    ("markdown", """\
+Now the comparison this was for. Run `mv.thermo.hull` at a computed level on the
+same object and the two `e_above_hull` columns sit side by side on the same
+rows, which is the only honest way to ask whether a functional is *right* about
+stability rather than merely self-consistent."""),
 ]

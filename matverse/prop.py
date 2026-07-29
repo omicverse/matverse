@@ -14,6 +14,8 @@ export.
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 from anndata import AnnData
 
@@ -193,6 +195,573 @@ def elastic(md: AnnData, level: str = "emt", source: str = "input",
     md.obs[f"elastic_stable_{level}"] = stable
     set_level(md, level, **meta, source=source, strain=strain, n_failed=failed)
     record(md, "prop.elastic", level=level, source=source, strain=strain)
+
+
+@register_function(
+    aliases=["equation of state", "eos", "energy volume curve", "e-v curve",
+             "birch murnaghan", "compressibility", "fit eos"],
+    category="prop",
+    description="Fit an equation of state to the energy-volume curve of every "
+                "structure at one level of theory, giving the bulk modulus, "
+                "its pressure derivative and the equilibrium volume.",
+    requires={"structures": ["{source}"]},
+    produces={"obs": ["bulk_modulus_eos_{level}",
+                      "bulk_modulus_derivative_{level}",
+                      "equilibrium_volume_{level}",
+                      "equilibrium_energy_{level}",
+                      "eos_residual_{level}"],
+              "obsm": ["eos_{level}"], "uns": ["grids"], "levels": ["{level}"]},
+    prerequisites=["mv.calc.relax"],
+    dispatch="level= selects the calculator, as for mv.calc.energy",
+    examples=["mv.prop.eos(md, level='emt')",
+              "mv.prop.eos(md, level='emt', source='relaxed_emt', "
+              "model='vinet')"],
+    related=["mv.prop.elastic", "mv.calc.relax", "mv.screen.filter"],
+    notes="The bulk modulus this returns and the one mv.prop.elastic derives "
+          "from the stiffness tensor are the same quantity by two routes — a "
+          "curvature in volume against a curvature in strain — and they agree "
+          "when the input is relaxed and the calculator is well behaved. When "
+          "they disagree, the usual cause is that the input was not at a "
+          "minimum, and the disagreement is the cheapest available warning. "
+          "Both live on the object, so comparing them is a subtraction.\n\n"
+          "The curve is stored against the **volume scale factor**, not against "
+          "absolute volume: materials of different size have no common volume "
+          "axis, and the strain series they were computed on is common by "
+          "construction. obs['eos_residual'] is the RMS misfit in eV/atom; a "
+          "value far above a meV is a fit that should not be read.",
+)
+def eos(md: AnnData, level: str = "emt", source: str = "input",
+        scales=None, model: str = "birch_murnaghan",
+        key_added: str | None = None) -> None:
+    """Equation of state by isotropic compression. Deposits; returns ``None``."""
+    from pymatgen.analysis.eos import EOS
+    from pymatgen.io.ase import AseAtomsAdaptor
+
+    from .calc import _get
+
+    factory, meta = _get(level)
+    adaptor = AseAtomsAdaptor()
+    calculator = factory()
+    quantity = key_added or "eos"
+
+    grid = (np.linspace(0.94, 1.06, 7) if scales is None
+            else np.asarray(scales, dtype=float))
+    if grid.ndim != 1 or grid.size < 4:
+        raise ValueError(
+            f"an equation of state needs at least four volume scale factors to "
+            f"fit four parameters; got {grid.size}. Pass scales=np.linspace("
+            f"0.94, 1.06, 7) or leave it at the default.")
+
+    curves = np.full((md.n_obs, grid.size), np.nan)
+    moduli = np.full(md.n_obs, np.nan)
+    derivatives = np.full(md.n_obs, np.nan)
+    volumes = np.full(md.n_obs, np.nan)
+    energies0 = np.full(md.n_obs, np.nan)
+    residuals = np.full(md.n_obs, np.nan)
+    failed = 0
+
+    for i, structure in enumerate(structures(md, source)):
+        n = len(structure)
+        try:
+            sampled_v, sampled_e = [], []
+            for j, scale in enumerate(grid):
+                strained = structure.copy()
+                strained.scale_lattice(structure.volume * float(scale))
+                atoms = adaptor.get_atoms(strained)
+                atoms.calc = calculator
+                energy = float(atoms.get_potential_energy())
+                curves[i, j] = energy / n
+                sampled_v.append(strained.volume)
+                sampled_e.append(energy)
+
+            fit = EOS(eos_name=model).fit(sampled_v, sampled_e)
+            moduli[i] = float(fit.b0_GPa)
+            derivatives[i] = float(fit.b1)
+            volumes[i] = float(fit.v0)
+            energies0[i] = float(fit.e0) / n
+            predicted = np.asarray(
+                [fit.func(v) for v in sampled_v], dtype=float)
+            residuals[i] = float(np.sqrt(np.mean(
+                ((predicted - np.asarray(sampled_e)) / n) ** 2)))
+        except Exception:
+            failed += 1
+
+    deposit_grid(md, quantity, level, curves, grid, unit="eV/atom",
+                 grid_unit="V/V_input", model=model, source=source)
+    md.obs[f"bulk_modulus_eos_{level}"] = moduli
+    md.obs[f"bulk_modulus_derivative_{level}"] = derivatives
+    md.obs[f"equilibrium_volume_{level}"] = volumes
+    md.obs[f"equilibrium_energy_{level}"] = energies0
+    md.obs[f"eos_residual_{level}"] = residuals
+    set_level(md, level, **meta, source=source, eos_model=model,
+              n_scales=int(grid.size), n_failed=failed)
+    record(md, "prop.eos", level=level, source=source, model=model,
+           n_scales=int(grid.size))
+
+
+@register_function(
+    aliases=["dimensionality", "is it layered", "2d material", "layered",
+             "bonding dimensionality", "van der waals layered",
+             "molecular crystal"],
+    category="prop",
+    description="Classify every structure by the dimensionality of its bonded "
+                "network — 0D molecular, 1D chains, 2D layers, 3D framework — "
+                "so a screen can ask for exfoliable candidates directly.",
+    requires={"structures": ["{source}"]},
+    produces={"obs": ["dimensionality", "n_components", "is_layered",
+                      "dimensionality_strategy"]},
+    examples=["mv.prop.dimensionality(md)",
+              "mv.prop.dimensionality(md, strategy='minimum_distance')",
+              "mv.prop.dimensionality(md); "
+              "mv.screen.filter(md, dimensionality__eq=2, name='exfoliable')"],
+    related=["mv.env.bonds", "mv.env.coordination", "mv.screen.filter"],
+    notes="A layered material and a framework can have identical compositions, "
+          "identical space groups and nearly identical densities, so this is "
+          "not derivable from X or from obs — it is a property of the bond "
+          "graph, which is why it needs a near-neighbour algorithm to exist "
+          "at all.\n\n"
+          "Which algorithm is recorded next to the answer, for the same reason "
+          "mv.env.coordination records it: the algorithms disagree, and a "
+          "dimensionality without its strategy is not reproducible. The "
+          "disagreement is worse here than for a coordination number, because "
+          "the classification turns on whether a long contact counts as a bond "
+          "at all — which is exactly the question a van der Waals gap poses.\n\n"
+          "n_components counts the disconnected pieces in the unit cell, so a "
+          "2D material with two layers per cell reports 2. It is one and the "
+          "same number for a 3D framework, which is 1 by construction.",
+)
+def dimensionality(md: AnnData, source: str = "input",
+                   strategy: str = "crystalnn") -> None:
+    """Bonded-network dimensionality per material. Deposits; returns ``None``."""
+    from pymatgen.analysis.dimensionality import (get_dimensionality_larsen,
+                                                  get_structure_components)
+    from pymatgen.analysis.graphs import StructureGraph
+
+    from .env import _strategy
+
+    finder = _strategy(strategy)
+    dims = np.full(md.n_obs, -1, dtype=int)
+    counts = np.full(md.n_obs, -1, dtype=int)
+    failed = 0
+
+    for i, structure in enumerate(structures(md, source)):
+        try:
+            graph = StructureGraph.from_local_env_strategy(structure, finder)
+            dims[i] = int(get_dimensionality_larsen(graph))
+            counts[i] = len(get_structure_components(graph))
+        except Exception:
+            failed += 1
+
+    md.obs["dimensionality"] = dims
+    md.obs["n_components"] = counts
+    md.obs["is_layered"] = dims == 2
+    md.obs["dimensionality_strategy"] = str(strategy)
+    md.uns["dimensionality"] = {"strategy": str(strategy), "source": source,
+                                "n_failed": int(failed)}
+    record(md, "prop.dimensionality", source=source, strategy=str(strategy))
+
+
+@register_function(
+    aliases=["nmr", "chemical shielding", "chemical shift", "shielding tensor",
+             "solid state nmr", "magnetic shielding", "csa"],
+    category="prop",
+    description="Reduce a per-atom chemical shielding tensor to the parameters "
+                "a solid-state NMR spectrum is described by — isotropic shift, "
+                "anisotropy, asymmetry, span and skew — on the sites axis.",
+    requires={"sites.obs": ["material"]},
+    produces={"sites.obs": ["shielding_iso_{level}",
+                            "shielding_anisotropy_{level}",
+                            "shielding_asymmetry_{level}",
+                            "shielding_span_{level}",
+                            "shielding_skew_{level}"],
+              "sites.obsm": ["shielding_tensor_{level}"],
+              "levels": ["{level}"]},
+    prerequisites=["mv.multi.sites"],
+    examples=["sites = mv.multi.sites(md); mv.prop.nmr(md, sites, shieldings)",
+              "mv.prop.nmr(md, sites, shieldings, level='pbe')"],
+    related=["mv.prop.efg", "mv.multi.sites", "mv.dft.read_outputs"],
+    notes="Takes the tensors as an argument rather than reading them off the "
+          "object, for the same reason mv.elec.bands takes band structures: "
+          "nothing in matverse computes a shielding tensor, and the honest "
+          "place for a result someone else computed is an argument.\n\n"
+          "Both conventions are reported because both are in use and they "
+          "disagree on what 'anisotropy' names. Haeberlen's zeta is "
+          "sigma_33 - sigma_iso; the reduced anisotropy quoted by most "
+          "spectrometer software is 3/2 of it. span and skew are the "
+          "Herzfeld-Berger pair, which is what a sideband analysis returns.\n\n"
+          "These are **shieldings**, not shifts. A chemical shift is a "
+          "shielding referenced to a standard compound and runs the other way "
+          "in sign; converting needs a reference this function is not given.",
+)
+def nmr(md: AnnData, sites: AnnData, shieldings, level: str = "dft") -> None:
+    """NMR shielding parameters per atom. Deposits on ``sites``."""
+    from pymatgen.analysis.nmr import ChemicalShielding
+
+    from .env import _require_sites
+
+    _require_sites(sites, md)
+    tensors = np.asarray(shieldings, dtype=float)
+    if tensors.shape != (sites.n_obs, 3, 3):
+        raise ValueError(
+            f"got shieldings of shape {tensors.shape} for {sites.n_obs} atoms; "
+            f"expected ({sites.n_obs}, 3, 3) — one 3x3 tensor per row of the "
+            f"sites object, in the order mv.multi.sites produced them")
+
+    iso = np.full(sites.n_obs, np.nan)
+    zeta = np.full(sites.n_obs, np.nan)
+    eta = np.full(sites.n_obs, np.nan)
+    span = np.full(sites.n_obs, np.nan)
+    skew = np.full(sites.n_obs, np.nan)
+
+    for i, tensor in enumerate(tensors):
+        shielding = ChemicalShielding(tensor)
+        haeberlen = shielding.haeberlen_values
+        mehring = shielding.mehring_values
+        s11, s22, s33 = (float(np.real(mehring.sigma_11)),
+                         float(np.real(mehring.sigma_22)),
+                         float(np.real(mehring.sigma_33)))
+        iso[i] = float(np.real(haeberlen.sigma_iso))
+        zeta[i] = float(np.real(haeberlen.zeta))
+        eta[i] = float(np.real(haeberlen.eta))
+        # Herzfeld-Berger: the span is the full width, the skew says which
+        # side of the isotropic value the third principal component sits on.
+        span[i] = s33 - s11
+        skew[i] = (3.0 * (s22 - iso[i]) / span[i]
+                   if abs(span[i]) > 1e-12 else 0.0)
+
+    sites.obsm[f"shielding_tensor_{level}"] = tensors.reshape(sites.n_obs, 9)
+    sites.obs[f"shielding_iso_{level}"] = iso
+    sites.obs[f"shielding_anisotropy_{level}"] = zeta
+    sites.obs[f"shielding_asymmetry_{level}"] = eta
+    sites.obs[f"shielding_span_{level}"] = span
+    sites.obs[f"shielding_skew_{level}"] = skew
+    set_level(md, level, kind="dft", method="chemical shielding tensor",
+              reference=None, surrogate=False, license=None, uncertainty=None,
+              quantity="nmr shielding")
+    record(md, "prop.nmr", level=level, n_sites=int(sites.n_obs))
+
+
+@register_function(
+    aliases=["efg", "electric field gradient", "quadrupolar coupling",
+             "quadrupole coupling constant", "nuclear quadrupole"],
+    category="prop",
+    description="Reduce a per-atom electric field gradient tensor to Vzz, the "
+                "asymmetry parameter and the quadrupolar coupling constant, "
+                "which is what a quadrupolar NMR lineshape is set by.",
+    requires={"sites.obs": ["element"]},
+    produces={"sites.obs": ["efg_vzz_{level}", "efg_asymmetry_{level}",
+                            "efg_coupling_{level}"],
+              "sites.obsm": ["efg_tensor_{level}"],
+              "levels": ["{level}"]},
+    prerequisites=["mv.multi.sites"],
+    examples=["sites = mv.multi.sites(md); mv.prop.efg(md, sites, gradients)",
+              "mv.prop.efg(md, sites, gradients, level='pbe')"],
+    related=["mv.prop.nmr", "mv.multi.sites"],
+    notes="The coupling constant needs the nuclear quadrupole moment of a "
+          "specific isotope, which is a property of the nucleus rather than of "
+          "the calculation. It is looked up from the element on each site, so "
+          "it is the most abundant NMR-active isotope; for an element with no "
+          "tabulated moment the coupling is NaN while Vzz and the asymmetry "
+          "are still reported, because those are properties of the gradient "
+          "alone.\n\n"
+          "The convention is |Vzz| >= |Vyy| >= |Vxx|, so eta lies in [0, 1] "
+          "by construction and a value outside it means the tensor was not "
+          "traceless.",
+)
+def efg(md: AnnData, sites: AnnData, gradients, level: str = "dft") -> None:
+    """Electric field gradient parameters per atom. Deposits on ``sites``."""
+    from pymatgen.analysis.nmr import ElectricFieldGradient
+
+    from .env import _require_sites
+
+    _require_sites(sites, md)
+    tensors = np.asarray(gradients, dtype=float)
+    if tensors.shape != (sites.n_obs, 3, 3):
+        raise ValueError(
+            f"got gradients of shape {tensors.shape} for {sites.n_obs} atoms; "
+            f"expected ({sites.n_obs}, 3, 3) — one 3x3 tensor per row of the "
+            f"sites object, in the order mv.multi.sites produced them")
+
+    elements = sites.obs["element"].astype(str).to_numpy()
+    vzz = np.full(sites.n_obs, np.nan)
+    asymmetry = np.full(sites.n_obs, np.nan)
+    coupling = np.full(sites.n_obs, np.nan)
+
+    for i, tensor in enumerate(tensors):
+        gradient = ElectricFieldGradient(tensor)
+        vzz[i] = float(np.real(gradient.V_zz))
+        asymmetry[i] = float(np.real(gradient.asymmetry))
+        try:
+            coupling[i] = float(np.real(
+                gradient.coupling_constant(elements[i])))
+        except Exception:
+            coupling[i] = np.nan       # no tabulated quadrupole moment
+
+    sites.obsm[f"efg_tensor_{level}"] = tensors.reshape(sites.n_obs, 9)
+    sites.obs[f"efg_vzz_{level}"] = vzz
+    sites.obs[f"efg_asymmetry_{level}"] = asymmetry
+    sites.obs[f"efg_coupling_{level}"] = coupling
+    set_level(md, level, kind="dft", method="electric field gradient",
+              reference=None, surrogate=False, license=None, uncertainty=None,
+              quantity="efg")
+    record(md, "prop.efg", level=level, n_sites=int(sites.n_obs))
+
+
+@register_function(
+    aliases=["piezoelectric", "piezo", "piezoelectric tensor", "d33",
+             "piezoelectric coefficient", "electromechanical"],
+    category="prop",
+    description="Check a piezoelectric tensor against the crystal symmetry, "
+                "put it in the IEEE frame, and derive the largest longitudinal "
+                "response over all directions for screening.",
+    requires={"structures": ["{source}"]},
+    produces={"obs": ["piezo_max_longitudinal_{level}",
+                      "piezo_max_direction_{level}",
+                      "piezo_symmetry_valid_{level}"],
+              "obsm": ["piezo_tensor_{level}"], "levels": ["{level}"]},
+    examples=["mv.prop.piezoelectric(md, tensors)",
+              "mv.prop.piezoelectric(md, tensors, level='pbe')"],
+    related=["mv.prop.elastic", "mv.screen.rank", "mv.dft.read_outputs"],
+    notes="A piezoelectric tensor is forbidden by symmetry in any "
+          "centrosymmetric crystal, so a non-zero one there is an error in the "
+          "calculation or in the structure it was paired with rather than a "
+          "discovery. piezo_symmetry_valid is pymatgen's check of the tensor "
+          "against the structure's point group, and it is worth reading before "
+          "the magnitude.\n\n"
+          "The screening number is the largest **longitudinal** response — "
+          "the maximum of d_ijk n_i n_j n_k over unit vectors n — because that "
+          "is the quantity a stack actuator or a single-crystal transducer is "
+          "built around, and it is invariant to how the tensor was oriented. "
+          "It is found by sampling directions rather than solved in closed "
+          "form, so it is a lower bound that tightens with n_directions.",
+)
+def piezoelectric(md: AnnData, tensors, level: str = "dft",
+                  source: str = "input", n_directions: int = 2000,
+                  tolerance: float = 1e-3) -> None:
+    """Piezoelectric response per material. Deposits; returns ``None``."""
+    from pymatgen.analysis.piezo import PiezoTensor
+
+    array = np.asarray(tensors, dtype=float)
+    if array.shape == (md.n_obs, 3, 6):
+        array = np.stack([_from_voigt(v) for v in array])
+    if array.shape != (md.n_obs, 3, 3, 3):
+        raise ValueError(
+            f"got tensors of shape {array.shape} for {md.n_obs} materials; "
+            f"expected ({md.n_obs}, 3, 3, 3) in full notation or "
+            f"({md.n_obs}, 3, 6) in Voigt notation")
+
+    directions = _fibonacci_sphere(int(n_directions))
+    not_rotated = 0
+    longitudinal = np.full(md.n_obs, np.nan)
+    best = np.empty(md.n_obs, dtype=object)
+    valid = np.zeros(md.n_obs, dtype=bool)
+    ieee = np.full((md.n_obs, 3, 3, 3), np.nan)
+
+    for i, (structure, tensor) in enumerate(zip(structures(md, source), array)):
+        try:
+            piezo = PiezoTensor(tensor)
+            valid[i] = bool(piezo.is_fit_to_structure(structure,
+                                                      tol=tolerance))
+            try:
+                ieee[i] = np.asarray(piezo.convert_to_ieee(structure),
+                                     dtype=float)
+            except Exception:
+                # Counted: without the IEEE rotation the components are in
+                # whatever frame the cell happened to be written in, and the
+                # longitudinal maximum is the only number that survives that.
+                not_rotated += 1
+                ieee[i] = tensor
+        except Exception:
+            not_rotated += 1
+            ieee[i] = tensor
+        # d(n) = d_ijk n_i n_j n_k, maximised over the sampled directions.
+        response = np.einsum("ijk,ni,nj,nk->n", ieee[i], directions,
+                             directions, directions)
+        winner = int(np.argmax(np.abs(response)))
+        longitudinal[i] = float(np.abs(response[winner]))
+        best[i] = ",".join(f"{c:.3f}" for c in directions[winner])
+
+    md.obsm[f"piezo_tensor_{level}"] = ieee.reshape(md.n_obs, 27)
+    md.obs[f"piezo_max_longitudinal_{level}"] = longitudinal
+    md.obs[f"piezo_max_direction_{level}"] = best
+    md.obs[f"piezo_symmetry_valid_{level}"] = valid
+    set_level(md, level, kind="dft", method="piezoelectric tensor",
+              reference=None, surrogate=False, license=None, uncertainty=None,
+              source=source, n_directions=int(n_directions),
+              n_not_rotated_to_ieee=int(not_rotated))
+    record(md, "prop.piezoelectric", level=level, source=source,
+           n_directions=int(n_directions))
+
+
+#: Voigt index -> the pair of Cartesian indices it stands for.
+_VOIGT_PAIRS = ((0, 0), (1, 1), (2, 2), (1, 2), (0, 2), (0, 1))
+
+
+def _from_voigt(voigt: np.ndarray) -> np.ndarray:
+    """A 3x6 piezoelectric matrix as the full 3x3x3 tensor."""
+    full = np.zeros((3, 3, 3))
+    for i in range(3):
+        for v, (j, k) in enumerate(_VOIGT_PAIRS):
+            # The shear columns carry a factor of two in the Voigt convention
+            # for strain-like second indices, split between the two symmetric
+            # positions so the full tensor stays symmetric in j and k.
+            value = voigt[i, v] / (1.0 if v < 3 else 2.0)
+            full[i, j, k] = value
+            full[i, k, j] = value
+    return full
+
+
+def _fibonacci_sphere(n: int) -> np.ndarray:
+    """``n`` near-uniformly spaced unit vectors, deterministically."""
+    n = max(int(n), 1)
+    index = np.arange(n) + 0.5
+    phi = np.arccos(1.0 - 2.0 * index / n)
+    theta = np.pi * (1.0 + 5.0 ** 0.5) * index
+    return np.stack([np.cos(theta) * np.sin(phi),
+                     np.sin(theta) * np.sin(phi),
+                     np.cos(phi)], axis=1)
+
+
+@register_function(
+    aliases=["dielectric function", "optical absorption", "absorption "
+             "coefficient", "refractive index", "optical properties",
+             "epsilon"],
+    category="prop",
+    description="Deposit a frequency-dependent dielectric function and derive "
+                "the refractive index and absorption coefficient from it, on "
+                "the shared energy grid the rest of the object uses for curves.",
+    produces={"obsm": ["dielectric_real_{level}", "dielectric_imag_{level}",
+                       "absorption_{level}", "extinction_{level}"],
+              "obs": ["static_dielectric_{level}",
+                      "refractive_index_{level}"],
+              "uns": ["grids"], "levels": ["{level}"]},
+    examples=["mv.prop.dielectric(md, energies, eps_real, eps_imag)",
+              "mv.prop.dielectric(md, energies, eps1, eps2, level='pbe')"],
+    related=["mv.prop.slme", "mv.exp.attach", "mv.dft.read_outputs"],
+    notes="The absorption coefficient is derived rather than taken, because "
+          "alpha = 2 E k / (hbar c) is a definition and a dielectric function "
+          "that has been through it twice is a dielectric function nobody can "
+          "reconstruct. Storing epsilon and deriving alpha keeps the input "
+          "recoverable.\n\n"
+          "alpha is in m^-1, which is the unit mv.prop.slme expects and a "
+          "factor of 100 away from the cm^-1 that optics papers quote. The "
+          "static dielectric constant is epsilon_1 at the lowest energy on the "
+          "grid, so it is only the true zero-frequency limit if the grid "
+          "starts near zero.",
+)
+def dielectric(md: AnnData, energies, real, imag, level: str = "dft") -> None:
+    """Dielectric function and what follows from it. Deposits; returns ``None``."""
+    grid = np.asarray(energies, dtype=float)
+    eps1 = np.atleast_2d(np.asarray(real, dtype=float))
+    eps2 = np.atleast_2d(np.asarray(imag, dtype=float))
+    for name, block in (("real", eps1), ("imag", eps2)):
+        if block.shape != (md.n_obs, grid.size):
+            raise ValueError(
+                f"got {name} part of shape {block.shape}; expected "
+                f"({md.n_obs}, {grid.size}) — one row per material on the "
+                f"energy grid given")
+
+    modulus = np.sqrt(eps1 ** 2 + eps2 ** 2)
+    n = np.sqrt(np.maximum(modulus + eps1, 0.0) / 2.0)
+    k = np.sqrt(np.maximum(modulus - eps1, 0.0) / 2.0)
+
+    # alpha = 2 omega k / c, with omega = E / hbar and E in joules.
+    joules = grid * _ELEMENTARY_CHARGE
+    alpha = 2.0 * (joules / _HBAR) * k / _SPEED_OF_LIGHT
+
+    deposit_grid(md, "dielectric_real", level, eps1, grid, unit="eV")
+    deposit_grid(md, "dielectric_imag", level, eps2, grid, unit="eV")
+    deposit_grid(md, "extinction", level, k, grid, unit="eV")
+    deposit_grid(md, "absorption", level, alpha, grid, unit="eV",
+                 value_unit="m^-1")
+    md.obs[f"static_dielectric_{level}"] = eps1[:, 0]
+    md.obs[f"refractive_index_{level}"] = n[:, 0]
+    set_level(md, level, kind="dft", method="dielectric function",
+              reference=None, surrogate=False, license=None, uncertainty=None,
+              quantity="optics")
+    record(md, "prop.dielectric", level=level, n_points=int(grid.size))
+
+
+#: Physical constants, SI, CODATA 2018.
+_ELEMENTARY_CHARGE = 1.602176634e-19
+_HBAR = 1.054571817e-34
+_SPEED_OF_LIGHT = 299792458.0
+
+
+@register_function(
+    aliases=["slme", "solar efficiency", "photovoltaic efficiency",
+             "spectroscopic limited maximum efficiency", "solar absorber",
+             "shockley queisser"],
+    category="prop",
+    description="Spectroscopic limited maximum efficiency: the ceiling on a "
+                "single-junction solar cell made of each material, from its "
+                "absorption spectrum and its gap under the AM1.5G spectrum.",
+    requires={"obsm": ["absorption_{level}"], "uns": ["grids"],
+              "obs": ["band_gap_{level}"]},
+    produces={"obs": ["slme_{level}", "sq_limit_{level}"]},
+    prerequisites=["mv.prop.dielectric"],
+    examples=["mv.prop.slme(md, level='pbe')",
+              "mv.prop.slme(md, level='pbe', thickness=1e-6)"],
+    related=["mv.prop.dielectric", "mv.screen.rank", "mv.elec.band_features"],
+    notes="Returned as a **percentage**, matching how cell efficiencies are "
+          "quoted, and the unit is recorded so mv.utils.check_units can say so. "
+          "The Shockley-Queisser limit for the same gap is reported next to it: "
+          "SLME is always the smaller of the two, and the gap between them is "
+          "what the material's own absorption costs it. A material with a "
+          "perfect step absorption edge and no indirect gap reproduces "
+          "Shockley-Queisser exactly, peaking near 33% at 1.34 eV.\n\n"
+          "indirect_key names the column holding the indirect gap. Left unset, "
+          "the direct gap is used for both, which sets the radiative fraction "
+          "to one — that is the Shockley-Queisser assumption and it is "
+          "optimistic for any real indirect semiconductor, silicon most of all.",
+)
+def slme(md: AnnData, level: str = "dft", thickness: float = 5e-7,
+         temperature: float = 293.15, indirect_key: str | None = None) -> None:
+    """Spectroscopic limited maximum efficiency, in percent. Deposits."""
+    from pymatgen.analysis.solar.slme import slme as _slme
+
+    from ._core import grid_of
+
+    block = f"absorption_{level}"
+    if block not in md.obsm:
+        raise ValueError(
+            f"obsm[{block!r}] absent; run mv.prop.dielectric(md, energies, "
+            f"eps1, eps2, level={level!r}) first, which derives the absorption "
+            f"coefficient from the dielectric function")
+    gap_key = f"band_gap_{level}"
+    if gap_key not in md.obs:
+        raise ValueError(
+            f"obs[{gap_key!r}] absent; a solar efficiency needs a gap. "
+            f"mv.elec.band_features or mv.dft.read_dos deposits one.")
+
+    grid = grid_of(md, "absorption")
+    alpha = np.asarray(md.obsm[block], dtype=float)
+    direct = md.obs[gap_key].to_numpy(dtype=float)
+    indirect = (md.obs[indirect_key].to_numpy(dtype=float)
+                if indirect_key else direct)
+
+    efficiency = np.full(md.n_obs, np.nan)
+    ceiling = np.full(md.n_obs, np.nan)
+    for i in range(md.n_obs):
+        if not np.isfinite(direct[i]) or direct[i] <= 0:
+            continue
+        try:
+            efficiency[i] = float(_slme(grid, alpha[i], direct[i], indirect[i],
+                                        thickness=thickness,
+                                        temperature=temperature))
+            perfect = np.where(grid >= direct[i], 1e8, 0.0)
+            ceiling[i] = float(_slme(grid, perfect, direct[i], direct[i],
+                                     thickness=thickness,
+                                     temperature=temperature))
+        except Exception:
+            continue
+
+    md.obs[f"slme_{level}"] = efficiency
+    md.obs[f"sq_limit_{level}"] = ceiling
+    md.uns.setdefault("units", {})[f"slme_{level}"] = "percent"
+    md.uns["units"][f"sq_limit_{level}"] = "percent"
+    record(md, "prop.slme", level=level, thickness=thickness,
+           temperature=temperature)
 
 
 #: eV/angstrom^3 -> GPa
@@ -704,5 +1273,717 @@ def compare_grids(md: AnnData, quantity: str, a: str, b: str) -> None:
     record(md, "prop.compare_grids", quantity=quantity, a=a, b=b)
 
 
-__all__ = ["xrd", "rdf", "elastic", "phonon", "free_energy",
+__all__ = ["xrd", "rdf", "neutron", "tem", "elastic", "eos", "dimensionality",
+           "phonon", "free_energy", "quasiharmonic",
+           "nmr", "efg", "piezoelectric", "dielectric", "slme",
+           "cost", "supply_risk", "frontier_orbitals", "electrostatic",
            "thermal_conductivity", "compare_grids"]
+
+
+@register_function(
+    aliases=["cost", "material cost", "price", "how much does it cost",
+             "raw material price", "economic screening"],
+    category="prop",
+    description="Raw-material cost per kilogram and per mole from elemental "
+                "prices, so a screen can rank on what a candidate would cost "
+                "to make rather than only on what it would do.",
+    requires={"X": ["composition"]},
+    produces={"obs": ["cost_per_kg", "cost_per_mol"]},
+    examples=["mv.prop.cost(md)",
+              "mv.prop.cost(md); mv.screen.filter(md, cost_per_kg__lt=50)"],
+    related=["mv.prop.supply_risk", "mv.screen.filter", "mv.screen.pareto"],
+    notes="Elemental prices only — the cost of the elements in the formula, "
+          "not of the synthesis, the processing or the yield. A material made "
+          "of cheap elements by an expensive route will look cheap here. What "
+          "it does catch is the case that ends a project: platinum oxide "
+          "comes out around 42,000 $/kg against iron oxide's 0.92, and five "
+          "orders of magnitude is not a number any amount of process "
+          "optimisation closes.\n\n"
+          "The prices are pymatgen's table, which is a snapshot rather than a "
+          "feed. Use it to separate the affordable from the impossible, not to "
+          "quote a budget.",
+)
+def cost(md: AnnData, source: str = "input") -> None:
+    """Raw-material cost per material. Deposits; returns ``None``."""
+    from pymatgen.analysis.cost import CostAnalyzer, CostDBElements
+
+    try:
+        analyzer = CostAnalyzer(CostDBElements())
+        analyzer.get_cost_per_kg("Fe")            # forces the table to load
+    except ImportError as exc:
+        raise ImportError(
+            f"mv.prop.cost needs bibtexparser, which pymatgen uses to read the "
+            f"citations in its elemental price table and does not require "
+            f"itself. Install it with `pip install bibtexparser`. ({exc})"
+        ) from exc
+    per_kg = np.full(md.n_obs, np.nan)
+    per_mol = np.full(md.n_obs, np.nan)
+    failed = 0
+
+    for i, structure in enumerate(structures(md, source)):
+        formula = structure.composition.reduced_formula
+        try:
+            per_kg[i] = float(analyzer.get_cost_per_kg(formula))
+            per_mol[i] = float(analyzer.get_cost_per_mol(formula))
+        except Exception:
+            failed += 1
+
+    md.obs["cost_per_kg"] = per_kg
+    md.obs["cost_per_mol"] = per_mol
+    md.uns.setdefault("units", {})["cost_per_kg"] = "USD/kg"
+    md.uns["units"]["cost_per_mol"] = "USD/mol"
+    md.uns["cost"] = {"source": source, "database": "pymatgen elemental",
+                      "n_failed": int(failed)}
+    record(md, "prop.cost", source=source)
+
+
+@register_function(
+    aliases=["supply risk", "hhi", "criticality", "herfindahl",
+             "element criticality", "supply chain"],
+    category="prop",
+    description="Herfindahl-Hirschman indices for the elements in each "
+                "material, measuring how concentrated their production and "
+                "their reserves are in a few countries.",
+    requires={"X": ["composition"]},
+    produces={"obs": ["hhi_production", "hhi_reserve", "supply_risk"]},
+    examples=["mv.prop.supply_risk(md)",
+              "mv.prop.supply_risk(md); "
+              "mv.screen.filter(md, hhi_reserve__lt=4000)"],
+    related=["mv.prop.cost", "mv.screen.filter"],
+    notes="A high index means a few countries hold most of the world's "
+          "production or reserves, which is a different risk from being "
+          "expensive: cobalt and the rare earths are affordable and "
+          "concentrated, and that is what makes them awkward. The US "
+          "Department of Justice reads above 2500 as concentrated and above "
+          "1500 as moderately so; supply_risk carries pymatgen's own "
+          "designation rather than a threshold chosen here.\n\n"
+          "Production and reserve indices differ and both are reported, "
+          "because they answer different questions — production is who makes "
+          "it now, reserves are who could.",
+)
+def supply_risk(md: AnnData, source: str = "input") -> None:
+    """Supply-concentration indices per material. Deposits; returns ``None``."""
+    from pymatgen.analysis.hhi import HHIModel
+
+    model = HHIModel()
+    production = np.full(md.n_obs, np.nan)
+    reserve = np.full(md.n_obs, np.nan)
+    designation = np.empty(md.n_obs, dtype=object)
+    failed = 0
+
+    for i, structure in enumerate(structures(md, source)):
+        formula = structure.composition.reduced_formula
+        designation[i] = ""
+        try:
+            production[i] = float(model.get_hhi_production(formula))
+            reserve[i] = float(model.get_hhi_reserve(formula))
+            designation[i] = str(model.get_hhi_designation(production[i]))
+        except Exception:
+            failed += 1
+
+    md.obs["hhi_production"] = production
+    md.obs["hhi_reserve"] = reserve
+    md.obs["supply_risk"] = designation.astype(str)
+    md.uns["supply_risk"] = {"source": source, "n_failed": int(failed)}
+    record(md, "prop.supply_risk", source=source)
+
+
+@register_function(
+    aliases=["neutron diffraction", "neutron pattern", "nd pattern",
+             "simulate neutron", "powder neutron"],
+    category="prop",
+    description="Simulate a powder neutron diffraction pattern on the same "
+                "shared grid convention as the X-ray one, so the two can be "
+                "compared or fitted together.",
+    requires={"structures": ["{source}"]},
+    produces={"obsm": ["neutron_{level}"], "uns": ["grids"],
+              "levels": ["{level}"]},
+    examples=["mv.prop.neutron(md)",
+              "mv.prop.neutron(md, two_theta=(10, 120), wavelength=1.54)"],
+    related=["mv.prop.xrd", "mv.exp.attach", "mv.prop.compare_grids"],
+    notes="Neutrons scatter off nuclei rather than off electrons, so the two "
+          "patterns are not redundant. X-rays barely see hydrogen or lithium "
+          "next to a transition metal and cannot tell neighbouring elements "
+          "apart at all; neutron scattering lengths do not follow atomic "
+          "number, so light atoms and Mn/Fe ordering show up here and nowhere "
+          "else. For a lithium battery cathode this is the pattern that "
+          "locates the lithium.",
+)
+def neutron(md: AnnData, source: str = "input", level: str = "calc",
+            wavelength: float = 1.54184, two_theta: tuple = (5.0, 90.0),
+            step: float = 0.02, fwhm: float = 0.1,
+            normalize: bool = True) -> None:
+    """Powder neutron diffraction patterns on a shared two-theta grid."""
+    from pymatgen.analysis.diffraction.neutron import NDCalculator
+
+    grid = np.arange(two_theta[0], two_theta[1] + step / 2, step)
+    sigma = float(fwhm) / (2.0 * np.sqrt(2.0 * np.log(2.0)))
+    calculator = NDCalculator(wavelength=wavelength)
+
+    rows, failed = [], 0
+    for structure in structures(md, source):
+        try:
+            pattern = calculator.get_pattern(structure,
+                                             two_theta_range=two_theta)
+            rows.append(_broaden(np.asarray(pattern.x, dtype=float),
+                                 np.asarray(pattern.y, dtype=float),
+                                 grid, sigma, normalize))
+        except Exception:
+            rows.append(np.full(len(grid), np.nan))
+            failed += 1
+
+    deposit_grid(md, "neutron", level, np.vstack(rows), grid,
+                 unit="degrees 2theta", wavelength=wavelength, fwhm=fwhm,
+                 normalized=bool(normalize))
+    set_level(md, level, kind="model", method=f"neutron ({wavelength} A)",
+              reference=None, surrogate=False, license=None, uncertainty=None,
+              source=source, n_failed=failed)
+    record(md, "prop.neutron", source=source, level=level,
+           wavelength=wavelength, fwhm=fwhm)
+
+
+@register_function(
+    aliases=["quasiharmonic", "qha", "quasiharmonic expansion",
+             "thermal expansion from an equation of state",
+             "gibbs free energy", "debye model", "gruneisen",
+             "finite temperature volume"],
+    category="prop",
+    description="Quasi-harmonic Debye model over an energy-volume curve, "
+                "giving the Gibbs free energy, thermal expansion and Gruneisen "
+                "parameter as functions of temperature.",
+    requires={"structures": ["{source}"]},
+    produces={"obs": ["thermal_expansion_qha_{level}",
+                      "gruneisen_{level}", "debye_temperature_qha_{level}",
+                      "heat_capacity_300K_{level}"],
+              "obsm": ["gibbs_{level}", "thermal_expansion_{level}"],
+              "uns": ["grids"], "levels": ["{level}"]},
+    prerequisites=["mv.calc.relax"],
+    dispatch="level= selects the calculator, as for mv.calc.energy",
+    examples=["mv.prop.quasiharmonic(md, level='emt', source='relaxed_emt')",
+              "mv.prop.quasiharmonic(md, level='emt', t_max=1200)"],
+    related=["mv.prop.eos", "mv.prop.phonon", "mv.prop.free_energy"],
+    notes="A 0 K hull is a hull at 0 K. The quasi-harmonic approximation is "
+          "the cheapest way to move off it: compute the energy at several "
+          "volumes, let the Debye model supply the vibrational free energy at "
+          "each, and minimise the Gibbs free energy over volume at every "
+          "temperature. The cell expands because the minimum moves, which is "
+          "what thermal expansion is.\n\n"
+          "The Debye model is a coarse phonon spectrum — one sound velocity "
+          "standing in for the whole dispersion — so this is the right tool "
+          "for a trend across candidates and the wrong one for a number to "
+          "quote. mv.prop.phonon and mv.prop.free_energy do the harmonic "
+          "calculation properly at one volume; this does a crude one at many, "
+          "and the volume dependence is the part harmonic theory cannot give "
+          "you at all.\n\n"
+          "**The expansion is computed from the thermodynamic identity** "
+          "alpha = gamma C_V / (B V), not from where pymatgen's model puts the "
+          "volume minimum. The two disagree by a factor of twelve, and the "
+          "identity is the one that is right: with the model's own Gruneisen "
+          "parameter and the bulk modulus fitted from the same E(V) points, "
+          "copper comes out at 4.5e-5 /K against a measured 5.0e-5, silver at "
+          "5.1e-5 against 5.7e-5, while the model's own optimum_volumes give "
+          "4.3e-6 for copper. gamma is right and B is right, so a volume "
+          "minimisation inconsistent with both is the part to discard. C_V is "
+          "the Debye heat capacity rather than the Dulong-Petit constant, so "
+          "the expansion falls off correctly below the Debye temperature.\n\n"
+          "That comparison was only available because the bulk modulus from "
+          "mv.prop.eos and the Gruneisen parameter from this model sit on the "
+          "same object under names that say what they are.\n\n"
+          "The bare alias 'thermal expansion' belongs to mv.md.sweep, which "
+          "measures it by running the dynamics at several temperatures and so "
+          "carries the anharmonicity this model approximates away. Both "
+          "compute the same quantity by different routes and the registry "
+          "cannot give one name to two functions, so the direct measurement "
+          "keeps the plain name and this one is reached as 'quasiharmonic'.",
+)
+def quasiharmonic(md: AnnData, level: str = "emt", source: str = "input",
+                  scales=None, t_min: float = 300.0, t_max: float = 1000.0,
+                  t_step: float = 100.0, eos_model: str = "vinet",
+                  poisson: float = 0.25) -> None:
+    """Quasi-harmonic thermodynamics from an E(V) curve. Deposits."""
+    from pymatgen.analysis.eos import EOS
+    from pymatgen.analysis.quasiharmonic import QuasiharmonicDebyeApprox
+    from pymatgen.io.ase import AseAtomsAdaptor
+
+    from .calc import _get
+
+    factory, meta = _get(level)
+    adaptor = AseAtomsAdaptor()
+    calculator = factory()
+
+    fractions = (np.linspace(0.94, 1.06, 7) if scales is None
+                 else np.asarray(scales, dtype=float))
+    if fractions.ndim != 1 or fractions.size < 5:
+        raise ValueError(
+            f"the Debye model is fitted through an equation of state, which "
+            f"needs at least five volume points; got {fractions.size}")
+    grid = np.arange(t_min, t_max + t_step / 2, t_step)
+
+    gibbs = np.full((md.n_obs, grid.size), np.nan)
+    alpha_of_t = np.full((md.n_obs, grid.size), np.nan)
+    expansion = np.full(md.n_obs, np.nan)
+    gruneisen = np.full(md.n_obs, np.nan)
+    debye = np.full(md.n_obs, np.nan)
+    heat_capacity = np.full(md.n_obs, np.nan)
+    failed = 0
+
+    for i, structure in enumerate(structures(md, source)):
+        try:
+            energies, volumes = [], []
+            for scale in fractions:
+                strained = structure.copy()
+                strained.scale_lattice(structure.volume * float(scale))
+                atoms = adaptor.get_atoms(strained)
+                atoms.calc = calculator
+                energies.append(float(atoms.get_potential_energy()))
+                volumes.append(float(strained.volume))
+
+            model = QuasiharmonicDebyeApprox(
+                energies, volumes, structure, t_min=float(grid[0]),
+                t_step=float(t_step), t_max=float(grid[-1]),
+                eos=eos_model, poisson=poisson)
+            summary = model.get_summary_dict()
+            temperatures = np.asarray(summary["temperatures"], dtype=float)
+
+            gibbs[i] = np.interp(
+                grid, temperatures,
+                np.asarray(summary["gibbs_free_energy"], dtype=float))
+            gamma = float(np.mean(summary["gruneisen_parameter"]))
+            theta = float(np.mean(summary["debye_temperature"]))
+            gruneisen[i] = gamma
+            debye[i] = theta
+
+            # Bulk modulus from the same E(V) points, so every term in the
+            # expansion comes from one curve.
+            fit = EOS(eos_name=eos_model).fit(volumes, energies)
+            bulk_pa = float(fit.b0_GPa) * 1e9
+            volume_m3 = float(fit.v0) * 1e-30
+
+            capacity = _debye_heat_capacity(grid, theta, len(structure))
+            heat_capacity[i] = float(np.interp(300.0, grid, capacity))
+            alpha_of_t[i] = gamma * capacity / (bulk_pa * volume_m3)
+            expansion[i] = float(np.interp(300.0, grid, alpha_of_t[i]))
+        except Exception:
+            failed += 1
+
+    deposit_grid(md, "gibbs", level, gibbs, grid, unit="K", value_unit="eV")
+    deposit_grid(md, "thermal_expansion", level, alpha_of_t, grid, unit="K",
+                 value_unit="1/K")
+    md.obs[f"thermal_expansion_qha_{level}"] = expansion
+    md.obs[f"gruneisen_{level}"] = gruneisen
+    md.obs[f"debye_temperature_qha_{level}"] = debye
+    md.obs[f"heat_capacity_300K_{level}"] = heat_capacity
+    set_level(md, level, **meta, source=source, eos_model=eos_model,
+              poisson=poisson, n_failed=failed)
+    record(md, "prop.quasiharmonic", level=level, source=source,
+           t_min=t_min, t_max=t_max, eos_model=eos_model)
+
+
+#: Boltzmann's constant, J/K.
+_K_B = 1.380649e-23
+
+
+def _debye_heat_capacity(temperatures: np.ndarray, theta: float,
+                         n_atoms: int) -> np.ndarray:
+    """Debye heat capacity at constant volume, J/K per cell.
+
+    Nine n k_B (T/theta)^3 times the Debye integral, evaluated by quadrature.
+    Tends to the Dulong-Petit value 3 n k_B well above the Debye temperature
+    and falls as T^3 well below it, which is the part a constant would miss.
+    """
+    out = np.zeros_like(np.asarray(temperatures, dtype=float))
+    if not np.isfinite(theta) or theta <= 0:
+        return out
+    for i, temperature in enumerate(np.atleast_1d(temperatures)):
+        if temperature <= 0:
+            continue
+        upper = theta / float(temperature)
+        x = np.linspace(1e-8, upper, 512)
+        integrand = x ** 4 * np.exp(x) / np.expm1(x) ** 2
+        integral = float(np.trapezoid(integrand, x))
+        out[i] = 9.0 * n_atoms * _K_B * (float(temperature) / theta) ** 3 \
+            * integral
+    return out
+
+
+@register_function(
+    aliases=["tem", "electron diffraction", "saed", "selected area diffraction",
+             "tem pattern", "zone axis"],
+    category="prop",
+    description="Simulate selected-area electron diffraction: the reflections "
+                "excited along a zone axis, reduced to a ring profile on the "
+                "shared grid convention.",
+    requires={"structures": ["{source}"]},
+    produces={"obsm": ["tem_{level}"], "uns": ["grids"],
+              "obs": ["tem_n_reflections_{level}", "tem_strongest_{level}",
+                      "tem_zone_axis"],
+              "levels": ["{level}"]},
+    examples=["mv.prop.tem(md)",
+              "mv.prop.tem(md, beam_direction=(1, 1, 1), voltage=300)"],
+    related=["mv.prop.xrd", "mv.prop.neutron", "mv.prop.compare_grids"],
+    notes="A TEM pattern is spots on a plane, not a curve, and a plane of "
+          "spots is not a shape that compares across materials — two crystals "
+          "on the same zone axis have different spots in different places. "
+          "What is stored is the **ring profile**: intensity against the "
+          "magnitude of the scattering vector, which is what a "
+          "polycrystalline selected-area pattern actually looks like and what "
+          "can be put on one axis with an X-ray or neutron pattern.\\n\\n"
+          "obs keeps the two facts the reduction loses: how many reflections "
+          "were excited, and the strongest one's Miller indices. The zone axis "
+          "is recorded because the pattern is meaningless without it — the "
+          "same crystal down [001] and [111] gives different patterns, and "
+          "that is the point of choosing an axis.\\n\\n"
+          "Electron scattering factors are much larger than X-ray ones and "
+          "multiple scattering is the rule rather than the exception, so a "
+          "kinematic intensity like this one orders reflections correctly and "
+          "should not be fitted against.",
+)
+def tem(md: AnnData, source: str = "input", level: str = "calc",
+        beam_direction: tuple = (0, 0, 1), voltage: float = 200.0,
+        r_max: float = 2.0, step: float = 0.01, sigma: float = 0.02) -> None:
+    """Electron diffraction ring profiles on a shared grid. Deposits."""
+    from pymatgen.analysis.diffraction.tem import TEMCalculator
+
+    grid = np.arange(step, r_max + step / 2, step)
+    calculator = TEMCalculator(voltage=voltage,
+                               beam_direction=tuple(beam_direction))
+    axis = ",".join(str(int(x)) for x in beam_direction)
+
+    rows = []
+    counts = np.full(md.n_obs, np.nan)
+    strongest = np.empty(md.n_obs, dtype=object)
+    reasons: list[str] = []
+    failed = 0
+
+    for i, structure in enumerate(structures(md, source)):
+        strongest[i] = ""
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                pattern = calculator.get_pattern(structure)
+            intensity = np.asarray(
+                pattern["Intensity (norm)"], dtype=float)
+            spacing = np.asarray(
+                pattern["Interplanar Spacing"], dtype=float)
+            keep = np.isfinite(intensity) & np.isfinite(spacing) & \
+                (spacing > 0) & (intensity > 1e-6 * max(intensity.max(), 1e-30))
+            g = 1.0 / spacing[keep]
+            weight = intensity[keep]
+            counts[i] = int(keep.sum())
+            if keep.any():
+                best = np.argmax(weight)
+                strongest[i] = str(pattern["(hkl)"].to_numpy()[keep][best])
+            rows.append(_broaden(g, weight, grid, sigma, True))
+        except Exception as exc:
+            reasons.append(f"{structure.composition.reduced_formula}: "
+                           f"{type(exc).__name__}: {exc}".split("\n")[0])
+            rows.append(np.full(len(grid), np.nan))
+            failed += 1
+
+    deposit_grid(md, "tem", level, np.vstack(rows), grid,
+                 unit="1/angstrom", beam_direction=axis, voltage=voltage,
+                 normalized=True)
+    md.obs[f"tem_n_reflections_{level}"] = counts
+    md.obs[f"tem_strongest_{level}"] = strongest.astype(str)
+    md.obs["tem_zone_axis"] = axis
+    set_level(md, level, kind="model", method=f"electron diffraction ({voltage} kV)",
+              reference=None, surrogate=False, license=None, uncertainty=None,
+              source=source, beam_direction=axis, n_failed=failed,
+              failures=reasons[:5])
+    record(md, "prop.tem", source=source, level=level,
+           beam_direction=axis, voltage=voltage)
+
+
+@register_function(
+    aliases=["frontier orbitals", "band edge elements", "homo lumo",
+             "which element sets the band edge", "orbital gap estimate",
+             "is it likely a metal"],
+    category="prop",
+    description="Estimate which atomic orbitals form the band edges, and "
+                "whether the material is likely a metal, from atomic orbital "
+                "energies alone — no calculator and no structure needed.",
+    requires={"X": ["composition"]},
+    produces={"obs": ["homo_element", "homo_orbital", "homo_energy",
+                      "lumo_element", "lumo_orbital", "lumo_energy",
+                      "orbital_gap_estimate", "likely_metal"]},
+    examples=["mv.prop.frontier_orbitals(md)",
+              "mv.prop.frontier_orbitals(md); "
+              "mv.screen.filter(md, likely_metal__eq=False)"],
+    related=["mv.elec.band_features", "mv.dft.read_dos", "mv.prop.slme"],
+    notes="This is the cheapest possible statement about electronic structure: "
+          "line up the atomic orbital energies of the elements present and see "
+          "which sits highest occupied and which lowest unoccupied. It costs "
+          "nothing and needs only the composition.\\n\\n"
+          "On SrTiO3 it says O 2p and Ti 3d, which is the textbook answer for "
+          "a perovskite oxide — the valence band is oxygen 2p and the "
+          "conduction band titanium 3d. **What it tells you is which element "
+          "controls each edge**, and that is a real design handle: it is why "
+          "substituting on the A site of a perovskite barely moves the gap and "
+          "substituting on the B site moves it a lot.\\n\\n"
+          "The gap it reports is a **difference of atomic orbital energies**, "
+          "not a band gap. It has no hybridisation, no crystal field, no "
+          "Madelung potential and no structure — two polymorphs get the same "
+          "answer. Use it to sort a list before computing, never as a number. "
+          "likely_metal is the more trustworthy column, because 'the frontier "
+          "orbitals overlap' survives a lot of approximation.",
+)
+def frontier_orbitals(md: AnnData, source: str = "input") -> None:
+    """Atomic-orbital band-edge estimate. Deposits; returns ``None``."""
+    from pymatgen.core.molecular_orbitals import MolecularOrbitals
+
+    fields = ("homo_element", "homo_orbital", "lumo_element", "lumo_orbital")
+    text = {name: np.empty(md.n_obs, dtype=object) for name in fields}
+    homo_e = np.full(md.n_obs, np.nan)
+    lumo_e = np.full(md.n_obs, np.nan)
+    gap = np.full(md.n_obs, np.nan)
+    metal = np.full(md.n_obs, False)
+    failures = []
+
+    for i, structure in enumerate(structures(md, source)):
+        for name in fields:
+            text[name][i] = ""
+        formula = structure.composition.reduced_formula
+        try:
+            edges = MolecularOrbitals(formula).obtain_band_edges()
+        except Exception as exc:
+            failures.append(f"{formula}: {type(exc).__name__}: {exc}")
+            continue
+        metal[i] = bool(edges.get("metal", False))
+        homo = edges.get("HOMO")
+        lumo = edges.get("LUMO")
+        if homo:
+            text["homo_element"][i] = str(homo[0])
+            text["homo_orbital"][i] = str(homo[1])
+            homo_e[i] = float(homo[2])
+        if lumo:
+            text["lumo_element"][i] = str(lumo[0])
+            text["lumo_orbital"][i] = str(lumo[1])
+            lumo_e[i] = float(lumo[2])
+        if np.isfinite(homo_e[i]) and np.isfinite(lumo_e[i]) and not metal[i]:
+            gap[i] = (lumo_e[i] - homo_e[i]) * _HARTREE_TO_EV
+
+    for name in fields:
+        md.obs[name] = text[name].astype(str)
+    md.obs["homo_energy"] = homo_e
+    md.obs["lumo_energy"] = lumo_e
+    md.obs["orbital_gap_estimate"] = gap
+    md.obs["likely_metal"] = metal
+    md.uns["frontier_orbitals"] = {
+        "source": source, "n_failed": len(failures), "failures": failures[:10],
+        "note": "a difference of atomic orbital energies, not a band gap: no "
+                "hybridisation, no crystal field, no structure",
+    }
+    record(md, "prop.frontier_orbitals", source=source)
+
+
+#: Atomic orbital energies are tabulated in Hartree.
+_HARTREE_TO_EV = 27.211386245988
+
+
+@register_function(
+    aliases=["electrostatic energy", "madelung", "ewald energy",
+             "lattice energy", "coulomb energy", "ionic energy"],
+    category="prop",
+    description="Electrostatic energy of every structure by Ewald summation, "
+                "which for an ionic crystal is the Madelung energy and the "
+                "bulk of its lattice energy.",
+    requires={"structures": ["{source}"]},
+    produces={"obs": ["electrostatic_energy", "electrostatic_per_atom",
+                      "electrostatic_per_formula_unit"]},
+    prerequisites=["mv.transform.oxidation_states"],
+    examples=["mv.transform.oxidation_states(md); "
+              "mv.prop.electrostatic(md, source='oxidized')",
+              "mv.prop.electrostatic(md, source='oxidized', "
+              "real_space_cut=12.0)"],
+    related=["mv.transform.oxidation_states", "mv.disorder.orderings",
+             "mv.thermo.hull"],
+    notes="Needs **oxidation states**, because a point-charge sum with no "
+          "charges is zero. Run mv.transform.oxidation_states first and pass "
+          "its variant; a neutral structure returns NaN rather than 0, since a "
+          "zero here would read as 'no electrostatic contribution' rather than "
+          "'nobody assigned any charges'.\\n\\n"
+          "For rocksalt this reproduces the Madelung constant exactly: NaCl at "
+          "a 2.82 angstrom separation comes out at -8.924 eV per formula unit, "
+          "against 1.747565 x 14.39965 / 2.82 = -8.924. That is the check "
+          "worth knowing, because it means the number is the textbook quantity "
+          "and not a parameterised approximation of it.\\n\\n"
+          "It is a point-charge model. There is no covalency, no polarisation "
+          "and no short-range repulsion, so it is the right tool for ranking "
+          "cation orderings on a fixed lattice — which is what "
+          "mv.disorder.orderings uses it for — and the wrong one for comparing "
+          "different chemistries.",
+)
+def electrostatic(md: AnnData, source: str = "input",
+                  real_space_cut: float | None = None,
+                  reciprocal_space_cut: float | None = None) -> None:
+    """Ewald electrostatic energy per material. Deposits; returns ``None``."""
+    # energy_models moved from pymatgen.analysis to pymatgen.core in 2026.5,
+    # and matverse supports both sides of that move.
+    try:
+        from pymatgen.core.energy_models import EwaldElectrostaticModel
+    except ImportError:
+        from pymatgen.analysis.energy_models import EwaldElectrostaticModel
+
+    model = EwaldElectrostaticModel(real_space_cut=real_space_cut,
+                                    recip_space_cut=reciprocal_space_cut)
+    total = np.full(md.n_obs, np.nan)
+    per_atom = np.full(md.n_obs, np.nan)
+    per_formula = np.full(md.n_obs, np.nan)
+    uncharged = []
+    failures = []
+
+    for i, (row, structure) in enumerate(
+            zip(md.obs_names, structures(md, source))):
+        charges = [getattr(site.specie, "oxi_state", None) for site in structure]
+        if any(q is None for q in charges) or not any(charges):
+            uncharged.append(str(row))
+            continue
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                energy = float(model.get_energy(structure))
+        except Exception as exc:
+            failures.append(f"{row}: {type(exc).__name__}: {exc}")
+            continue
+        total[i] = energy
+        per_atom[i] = energy / len(structure)
+        units = structure.composition.get_reduced_composition_and_factor()[1]
+        per_formula[i] = energy / units if units else np.nan
+
+    md.obs["electrostatic_energy"] = total
+    md.obs["electrostatic_per_atom"] = per_atom
+    md.obs["electrostatic_per_formula_unit"] = per_formula
+    md.uns["electrostatic"] = {
+        "source": source, "n_without_charges": len(uncharged),
+        "without_charges": uncharged[:10],
+        "n_failed": len(failures), "failures": failures[:5],
+        "note": "point charges only: no covalency, polarisation or short-range "
+                "repulsion",
+    }
+    record(md, "prop.electrostatic", source=source)
+
+
+@register_function(
+    aliases=["capture", "capture coefficient", "srh", "recombination",
+             "non-radiative", "killer defect", "carrier lifetime",
+             "shockley-read-hall", "trap"],
+    category="prop",
+    description="Carrier capture coefficient of a defect, radiative or "
+                "non-radiative, from its configuration-coordinate parameters.",
+    requires={"structures": ["{source}"]},
+    produces={"obs": ["capture_coefficient_{kind}"]},
+    prerequisites=[],
+    examples=["mv.prop.capture(md, dQ=1.2, dE=0.8, omega_i=0.03, "
+              "omega_f=0.025, coupling=2e-3)",
+              "mv.prop.capture(md, dQ=1.2, dE=0.8, omega_i=0.03, "
+              "omega_f=0.025, coupling=1e-3, temperature=500.0)"],
+    related=["mv.thermo.defect_formation", "mv.prop.slme", "mv.pp.defects"],
+    notes="A defect level in the gap is not automatically a problem. What "
+          "decides whether it kills a solar cell is how fast it captures "
+          "carriers, and that depends on how far the lattice relaxes when the "
+          "charge state changes — a deep level with little relaxation is "
+          "harmless and a shallow one with a lot is not. This is the "
+          "Shockley-Read-Hall coefficient in the one-dimensional "
+          "configuration-coordinate approximation.\\n\\n"
+          "It scales as the square of the electron-phonon matrix element and "
+          "is thermally activated, so a coefficient quoted without its "
+          "temperature says little. Both are arguments and both are "
+          "recorded.\\n\\n"
+          "**The configuration-coordinate parameters are arguments**, because "
+          "they come from a calculation matverse does not do: dQ is the mass-"
+          "weighted displacement between the two relaxed charge states in "
+          "amu^(1/2) angstrom, dE their energy separation in eV, omega_i and "
+          "omega_f the two harmonic frequencies in eV, and coupling the "
+          "electron-phonon matrix element. Each may be one number for the "
+          "whole dataset or one per row. The cell volume is taken from the "
+          "structure, which is the one thing that is already here.\\n\\n"
+          "kind='radiative' switches to the radiative coefficient instead, "
+          "where `coupling` is read as the dipole matrix element and a photon "
+          "energy is required.\\n\\n"
+          "Numba is optional and only makes this faster; pymatgen prints a "
+          "notice when it is absent and computes the same numbers either way.",
+)
+def capture(md: AnnData, dQ, dE, omega_i, omega_f, coupling,
+            temperature: float = 300.0, kind: str = "srh",
+            degeneracy: int = 1, omega_photon=None, source: str = "input",
+            key_added: str | None = None) -> None:
+    """Carrier capture coefficient in cm^3/s. Deposits; returns ``None``."""
+    try:
+        from pymatgen.analysis.defects.recombination import (get_Rad_coef,
+                                                             get_SRH_coef)
+    except ImportError as exc:                             # pragma: no cover
+        raise ImportError(
+            f"mv.prop.capture needs pymatgen-analysis-defects. Install it "
+            f"with `pip install pymatgen-analysis-defects`. ({exc})") from exc
+
+    if kind not in ("srh", "radiative"):
+        raise ValueError(f"kind must be 'srh' or 'radiative', got {kind!r}")
+    if kind == "radiative" and omega_photon is None:
+        raise ValueError("kind='radiative' needs omega_photon, the emitted "
+                         "photon energy in eV")
+
+    def spread(value, name):
+        """One number for everyone, or one each — anything else is a mistake."""
+        array = np.atleast_1d(np.asarray(value, dtype=float))
+        if array.size == 1:
+            return np.full(md.n_obs, float(array[0]))
+        if array.size != md.n_obs:
+            raise ValueError(f"{name} has {array.size} values for "
+                             f"{md.n_obs} rows; pass one or one per row")
+        return array.astype(float)
+
+    fields = {n: spread(v, n) for n, v in
+              (("dQ", dQ), ("dE", dE), ("omega_i", omega_i),
+               ("omega_f", omega_f), ("coupling", coupling))}
+    photons = (spread(omega_photon, "omega_photon")
+               if omega_photon is not None else None)
+    if photons is not None:
+        # A photon cannot carry away more than the transition provides.
+        # get_Rad_coef returns NaN for that rather than raising, which would
+        # arrive here as a silent blank column.
+        impossible = np.where(photons > fields["dE"] + 1e-12)[0]
+        if len(impossible):
+            raise ValueError(
+                f"omega_photon exceeds dE on {len(impossible)} row(s) "
+                f"(first: row {int(impossible[0])}, photon "
+                f"{photons[impossible[0]]:.3f} eV from a "
+                f"{fields['dE'][impossible[0]]:.3f} eV transition). The "
+                f"emitted photon cannot be more energetic than the level "
+                f"separation; upstream returns NaN for this rather than "
+                f"saying so.")
+
+    coefficients = np.full(md.n_obs, np.nan)
+    failed: list[str] = []
+
+    for row, structure in enumerate(structures(md, source)):
+        volume = float(structure.lattice.volume)
+        try:
+            if kind == "srh":
+                value = get_SRH_coef(
+                    T=float(temperature), dQ=fields["dQ"][row],
+                    dE=fields["dE"][row], omega_i=fields["omega_i"][row],
+                    omega_f=fields["omega_f"][row],
+                    elph_me=fields["coupling"][row], volume=volume,
+                    g=int(degeneracy))
+            else:
+                value = get_Rad_coef(
+                    T=float(temperature), dQ=fields["dQ"][row],
+                    dE=fields["dE"][row], omega_i=fields["omega_i"][row],
+                    omega_f=fields["omega_f"][row],
+                    omega_photon=photons[row],
+                    dipole_me=fields["coupling"][row], volume=volume,
+                    g=int(degeneracy))
+            coefficients[row] = float(np.asarray(value).ravel()[0])
+        except Exception as exc:
+            failed.append(f"row {row}: {type(exc).__name__}: {exc}")
+
+    name = key_added or kind
+    md.obs[f"capture_coefficient_{name}"] = coefficients
+    md.uns.setdefault("capture", {})[name] = {
+        "kind": kind, "temperature": float(temperature),
+        "degeneracy": int(degeneracy), "unit": "cm^3/s",
+        "parameters": {k: v.tolist() for k, v in fields.items()},
+        "errors": failed,
+    }
+    record(md, "prop.capture", kind=kind, temperature=float(temperature),
+           key_added=name)

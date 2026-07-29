@@ -59,15 +59,16 @@ creates::
 
 from __future__ import annotations
 
-from . import (calc, data, datasets, dft, elements, exp, feat,  # noqa: F401
-               gen, mag, md, model, multi, neb, opt, pl, pp, prop,
-               screen, struct, surf, thermo, tl, utils)
+from . import (calc, data, datasets, dft, disorder, elec,  # noqa: F401
+               elements, env, exp, feat, gen, iface, mag, md, mol, model, multi,
+               neb, opt, pl, pp, prop, screen, struct, surf, thermo, tl,
+               transform, utils)
 from ._core import (check_commercial_use, compare_levels, grid_of,  # noqa: F401
-                    level_info, levels_used, new, provenance, set_level,
-                    structures, variants)
+                    level_info, levels_used, new, provenance, records,
+                    set_level, structures, variants)
 from ._registry import get_registry
 
-__version__ = "0.1.14"
+__version__ = "0.1.55"
 
 #: The process-global function registry.
 registry = get_registry()
@@ -92,9 +93,11 @@ __all__ = [
     "data", "pp", "feat", "tl", "calc", "prop", "thermo", "screen", "exp",
     "multi", "gen", "pl", "model", "opt", "utils", "dft",
     "md", "neb", "surf", "mag", "datasets",
-    "elements", "struct",
+    "disorder", "elec", "elements", "env", "iface", "struct",
+    "mol", "transform",
     "new", "structures", "variants", "provenance", "compare_levels",
-    "levels_used", "level_info", "set_level", "check_commercial_use",
+    "levels_used", "level_info", "set_level", "records",
+    "check_commercial_use",
     "grid_of",
     "registry", "describe", "find", "__version__",
 ]

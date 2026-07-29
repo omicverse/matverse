@@ -20,7 +20,7 @@ energy against Fermi level.
 
 The migration barrier at the end comes out at **0.754 eV** against a literature
 value of about 0.70 eV for vacancy migration in fcc copper, and the formation
-energy at **1.25 eV** against roughly 1.3 eV measured by positron annihilation.
+energy at **1.314 eV** against roughly 1.3 eV measured by positron annihilation.
 Both from a potential that took no download and no training set."""),
 
     ("code", """\
@@ -91,9 +91,66 @@ it unchanged.
 
     ("code", """\
 mv.calc.relax(copper, level="emt", fmax=0.02)
-mv.calc.relax(defects, level="emt", fmax=0.05, steps=200)
+mv.calc.relax(defects, level="emt", fmax=0.05, steps=200, cell=False)
 
 defects.obs[["defect", "energy_emt", "relax_converged_emt"]].round(4)"""),
+
+    ("markdown", """\
+```{note}
+`cell=False` on the defective supercell, and it is not a detail. A 32-atom cell
+with one vacancy is a stand-in for a *dilute* defect in an infinite crystal.
+Letting its lattice relax lets the whole crystal contract around a vacancy
+concentration of 1 in 32, which is not the quantity anyone wants; the host
+lattice is what holds the defect open. So the host relaxes its cell and the
+defect relaxes only its ions inside that cell.
+
+Before v0.1.17 this line needed no argument, because `mv.calc.relax` never
+moved a cell at all. It was right here for the wrong reason and wrong
+everywhere else for the same one.
+```"""),
+
+    ("markdown", """\
+### Two kinds that are not a site you already have
+
+A vacancy or a substitution is a site you can point at. An **interstitial** has
+to be *found* — it is a hole in the structure, and the Voronoi construction
+locates them. An **antisite** is the cross product of the species present, which
+for a quaternary is more combinations than anyone enumerates by hand.
+
+Both go through `pymatgen-analysis-defects`, which also picks the supercell
+itself — targeting a minimum image distance rather than a fixed multiple, so the
+`supercell=` argument does not apply to these two."""),
+
+    ("code", """\
+cathode = mv.datasets.load("battery_cathodes")[:1].copy()
+mv.pp.describe(cathode)
+
+antisites = mv.pp.defects(cathode, kinds=("antisite",))
+mv.pp.describe(antisites)
+antisites.obs[["defect", "removed", "added", "nsites"]].head(6)"""),
+
+    ("markdown", """\
+Twenty-four antisites from a four-species cathode, each an ordered swap — Fe on
+the Li site is a different defect from Li on the Fe site, and in LiFePO₄ the
+Li/Fe antisite is *the* defect that blocks the one-dimensional lithium channel.
+
+Interstitials need to know what to insert:"""),
+
+    ("code", """\
+interstitials = mv.pp.defects(cathode, kinds=("interstitial",),
+                              interstitial_species=["Li"])
+mv.pp.describe(interstitials)
+interstitials.obs[["defect", "added", "nsites"]].head(4)"""),
+
+    ("markdown", """\
+One more atom than the host supercell, which is what an interstitial is.
+
+```{note}
+Ask for a supercell window nothing can satisfy and it says so — the generator
+targets a minimum image distance as well as an atom count, so a small
+`max_atoms` can leave no legal cell. It used to report "no defect was
+generated", which blames the chemistry for an argument problem.
+```"""),
 
     ("markdown", """\
 The raw energy of a cell with one atom missing is not a formation energy. A
@@ -115,11 +172,16 @@ formation = e_defect - e_host + mu_cu
 round(formation, 3)"""),
 
     ("markdown", """\
-**1.25 eV**, against roughly 1.3 eV measured for copper by positron
+**1.314 eV**, against roughly 1.3 eV measured for copper by positron
 annihilation. That is the number that sets the equilibrium vacancy concentration
-through `exp(-E_f / kT)`, and getting it within 5% from effective-medium theory
-is better than this calculation deserves — EMT was fitted to exactly this kind
-of metallic environment.
+through `exp(-E_f / kT)`, and landing within a couple of percent of it from
+effective-medium theory is better than this calculation deserves — EMT was
+fitted to exactly this kind of metallic environment.
+
+It was 1.25 eV until v0.1.17, when `mv.calc.relax` began relaxing the host's
+lattice. The host now sits at EMT's own equilibrium volume instead of copper's
+measured room-temperature one, and the defect is held in that lattice — which is
+the combination the formula assumes.
 
 ## Formation energy against Fermi level
 
@@ -155,8 +217,8 @@ Each straight segment is one charge state, and its slope is the charge; the
 kinks are the transition levels where the stable charge changes. `stable_charge`
 records which state wins where.
 
-The reported 1.11 eV is *not* the 1.25 eV computed by hand above, and the
-difference is the point: 1.25 eV is the neutral vacancy, while this is the lower
+The reported 1.117 eV is *not* the 1.314 eV computed by hand above, and the
+difference is the point: 1.314 eV is the neutral vacancy, while this is the lower
 envelope over all five charge states evaluated at the Fermi level. They coincide
 only where the neutral state is the stable one.
 
@@ -168,8 +230,61 @@ run. Use it on the oxides and halides where a Fermi level means something.
 `mv.thermo.defect_formation` **warns and returns NaN** when no chemical
 potential is given, rather than assuming one. A defect creates or destroys
 atoms, and what they cost is not derivable from the defective cell.
-```
+```"""),
 
+    ("markdown", """\
+### The charged states are lying, and by how much
+
+Everything above ignores that a charged defect in a periodic cell interacts with
+its own images. That interaction stabilises it spuriously, and in a small
+supercell the error is tenths of an eV — enough to move a transition level and
+change which charge state looks stable.
+
+Pass a dielectric constant and the electrostatic half of the Freysoldt
+correction is applied. It needs only the cell, the charge and epsilon — no
+LOCPOT, no extra run:"""),
+
+    ("code", """\
+import numpy as np
+
+uncorrected = defects.copy()
+mv.thermo.defect_formation(uncorrected, host=copper, level="emt",
+                           chempot={"Cu": -3.5}, band_gap=1.5)
+
+corrected = defects.copy()
+mv.thermo.defect_formation(corrected, host=copper, level="emt",
+                           chempot={"Cu": -3.5}, band_gap=1.5, dielectric=10.0)
+
+grid = mv.grid_of(corrected, "formation_vs_fermi")
+a = uncorrected.obsm["formation_vs_fermi_emt"][0]
+b = corrected.obsm["formation_vs_fermi_emt"][0]
+
+for target in (0.0, 0.75, 1.5):
+    i = int(np.argmin(abs(grid - target)))
+    print(f"E_F = {grid[i]:.2f} eV   uncorrected {a[i]:8.4f}   "
+          f"corrected {b[i]:8.4f}   shift {b[i] - a[i]:+.4f}")"""),
+
+    ("markdown", """\
+Zero shift at the valence band maximum and a growing one across the gap, which
+is exactly right: at the VBM every charge state costs the same, so the neutral
+one wins and has no image charge to correct. Further up, charged states take
+over and each is corrected by its own $q^2$ term.
+
+The correction scales as $q^2/(\\epsilon L)$ — three things you can check rather
+than trust. Double epsilon and it halves; go from a 2×2×2 to a 3×3×3 supercell
+and it falls by 3/2; set $q=0$ and it vanishes. All three are asserted in the
+test suite.
+
+```{warning}
+This is **half** of the Freysoldt correction. The other half is a
+potential-alignment term computed from the planar-averaged electrostatic
+potential of both the defective and the pristine cell — a LOCPOT — and matverse
+does not have one. `uns['defect_thermodynamics']['correction_terms']` says so on
+every run rather than leaving you to infer it. For the complete correction, hand
+your LOCPOTs to doped or pydefect.
+```"""),
+
+    ("markdown", """\
 ## What it costs to move
 
 Formation says how many vacancies there are. Migration says how fast they move,
@@ -203,15 +318,19 @@ two distinct minima."""),
 
     ("code", """\
 mv.calc.relax(copper, level="emt", source="hop_initial", key_added="start",
-              fmax=0.05, steps=80)
+              fmax=0.05, steps=80, cell=False)
 mv.calc.relax(copper, level="emt", source="hop_final", key_added="end",
-              fmax=0.05, steps=80)
+              fmax=0.05, steps=80, cell=False)
 
 mv.variants(copper)"""),
 
     ("markdown", """\
 `key_added` matters here. Without it the second relaxation would overwrite the
 first and the band would run from a structure to itself.
+
+`cell=False` again, and for a second reason on top of the dilute-defect one: a
+band is interpolated between two endpoints, and endpoints with different
+lattices are not two points on one path.
 
 ## The nudged elastic band"""),
 
@@ -294,8 +413,231 @@ exponentiating small errors does to you.
 
 At room temperature it is 10⁻⁴⁰ m²/s: twenty-six orders of magnitude slower, and
 the reason a copper wire does not visibly age. The vacancy fraction alone falls
-from 10⁻⁵ to 10⁻²¹ over that range.
+from 10⁻⁵ to 10⁻²¹ over that range."""),
 
+    ("markdown", """\
+## Which barriers are actually worth computing?
+
+The NEB above was one hop, chosen for us by `mv.neb.hop_endpoints`. A real cell
+has many pairs of mobile sites and far fewer *kinds* of jump between them —
+running a band for each pair spends almost the whole budget re-deriving barriers
+that symmetry already fixed.
+
+`mv.neb.hops` enumerates the distinct ones:"""),
+
+    ("code", """\
+from pymatgen.core import Lattice, Structure
+
+lattices = mv.data.from_structures([
+    Structure(Lattice.cubic(3.51), ["Li"] * 4,
+              [[0, 0, 0], [0, .5, .5], [.5, 0, .5], [.5, .5, 0]]),
+    Structure.from_spacegroup("Fd-3m", Lattice.cubic(8.24), ["Li", "Mn", "O"],
+                              [[0, 0, 0], [0.625] * 3, [0.3875] * 3])])
+lattices.obs_names = ["Li fcc", "LiMn2O4 spinel"]
+
+distinct = mv.neb.hops(lattices, species="Li")
+distinct.obs[["parent", "hop_distance", "multiplicity"]].round(4)"""),
+
+    ("markdown", """\
+One hop each. Close-packed lithium has twelve neighbours and they are all the
+same neighbour as far as symmetry is concerned, so **one** band gives you all
+twelve — 2.482 Å is $a/\\sqrt{2}$, and the multiplicity 24 is four sites times
+twelve neighbours counted from both ends. Spinel's 8a sublattice is diamond-like:
+3.568 Å is $a\\sqrt{3}/4$ and each of the eight sites has four neighbours.
+
+Break the symmetry and the hop splits, which is the behaviour that makes the
+count worth trusting:"""),
+
+    ("code", """\
+squashed = mv.data.from_structures([Structure(
+    Lattice.tetragonal(3.51, 3.90), ["Li"] * 4,
+    [[0, 0, 0], [0, .5, .5], [.5, 0, .5], [.5, .5, 0]])])
+
+split = mv.neb.hops(squashed, species="Li", cutoff=3.2)
+split.obs[["hop_distance", "multiplicity"]].round(4)"""),
+
+    ("markdown", """\
+Stretching *c* separates the twelve neighbours into four in the basal plane at
+$a/\\sqrt{2}$ and eight out of it at $\\sqrt{a^2+c^2}/2$. Two kinds of jump now,
+two barriers to compute, and the multiplicities still sum to 24 — nothing was
+lost, it was reclassified.
+
+```{note}
+Distinctness here means "same pair of symmetry-equivalent sites, same distance
+to within `tol`". That is exact when the site pair and the length determine the
+path, which covers ordinary crystals. In a low-symmetry cell it can merge two
+genuinely different routes between the same pair of sites — it never splits what
+should be merged, so the count is a lower bound on the work, never an inflated
+one.
+
+Written from the definition rather than wrapped from
+`pymatgen.analysis.diffusion.neb.full_path_mapper`, whose `MigrationGraph` calls
+a `StructureGraph` method that was renamed upstream and raises `AttributeError`
+against current pymatgen.
+```"""),
+
+    ("markdown", """\
+## Before the barrier: can the ion get out at all?
+
+A barrier is the cost of **one** hop. It is silent on whether that hop repeated
+ever carries an ion across the crystal. A material can have a beautifully low
+barrier between two sites that form a closed pair and conduct precisely nothing,
+and no amount of NEB will tell you so — the calculation you ran was about those
+two sites.
+
+`mv.neb.percolation` asks the other question, and asks it from geometry alone,
+so it costs nothing and can run first. Starting from one mobile site, which
+periodic *images of that same site* can be reached by hops no longer than the
+cutoff? Reaching a different site one cell over only says two sites are
+connected. Reaching your own site in the next cell says the network repeats —
+the ion can keep going.
+
+The two canonical lithium cathodes make the point:"""),
+
+    ("code", """\
+from pymatgen.core import Lattice, Structure
+
+# Fd-3m in pymatgen is origin choice 1, so the tetrahedral 8a site is at the
+# origin, not at (1/8, 1/8, 1/8). Put Li at (1/8, 1/8, 1/8) here and you
+# silently build Li2MnO4 on a 16-fold site instead of spinel.
+spinel = Structure.from_spacegroup(
+    "Fd-3m", Lattice.cubic(8.24), ["Li", "Mn", "O"],
+    [[0, 0, 0], [0.625] * 3, [0.3875] * 3])
+layered = Structure.from_spacegroup(
+    "R-3m", Lattice.hexagonal(2.82, 14.05), ["Li", "Co", "O"],
+    [[0, 0, 0], [0, 0, 0.5], [0, 0, 0.2395]])
+
+cathodes = mv.data.from_structures([spinel, layered])
+cathodes.obs_names = ["LiMn2O4", "LiCoO2"]
+cathodes.obs["formula"] = [s.composition.reduced_formula
+                           for s in mv.structures(cathodes, "input")]
+
+mv.neb.percolation(cathodes, species="Li", cutoff=3.6)
+cathodes.obs[["formula", "percolation_sites_Li",
+              "percolation_dimensionality_Li",
+              "percolation_threshold_Li"]].round(3)"""),
+
+    ("markdown", """\
+**3 against 2**, which is the textbook difference between the two: spinel
+conducts lithium in three dimensions through a network of corner-sharing
+tetrahedral sites, and a layered oxide conducts it only within the planes
+between the CoO₂ slabs. Both percolate; only one of them percolates everywhere.
+
+The thresholds are exact geometry — 3.568 Å is a·√3/4, the nearest-neighbour
+distance on spinel's diamond-like 8a sublattice, and 2.820 Å is simply the
+hexagonal *a* of the layered cell. That is the bottleneck hop: the shortest
+length at which anything percolates at all, and the one the ion cannot avoid.
+
+Now the part worth being careful about. Dimensionality is a property of the
+network **at a hop length**, not a property of the material:"""),
+
+    ("code", """\
+for cutoff in (2.5, 3.0, 3.6, 5.0):
+    mv.neb.percolation(cathodes, species="Li", cutoff=cutoff,
+                       key_added=f"at_{cutoff}")
+
+cathodes.obs[["formula"] + [f"percolation_dimensionality_at_{c}"
+                            for c in (2.5, 3.0, 3.6, 5.0)]]"""),
+
+    ("markdown", """\
+Allow a 5 Å hop and the layered oxide becomes three-dimensional too, because
+that is long enough to jump the slab. The answer did not change; the question
+did. Quoting a dimensionality without the hop length it was measured at is
+quoting half a result — which is why the cutoff is recorded in
+`uns['percolation']` alongside it.
+
+Read this as a filter, not a verdict. A percolating network is a **necessary**
+condition for conduction and never a sufficient one: it says the geometry does
+not forbid transport, and says nothing about what it costs. That is what the
+barrier above is for. Run percolation on a thousand candidates in seconds, then
+spend the NEB budget on the ones that survive."""),
+
+    ("markdown", """\
+## Handing the hop to DFT
+
+EMT gave a barrier worth having for copper. When it is not enough — a transition
+metal, an oxide, anything where a universal potential softens the surface — the
+endpoints above are already the two structures a DFT NEB needs, and
+`mv.dft.write_inputs` has a preset for exactly that job:"""),
+
+    ("code", """\
+paths = mv.dft.write_inputs(copper, "runs/neb", preset="neb-endpoint",
+                            source="hop_initial")
+
+from pathlib import Path
+incar = (Path(paths[0]) / "INCAR").read_text()
+print("\\n".join(line for line in incar.splitlines()
+                 if line.split("=")[0].strip() in
+                 ("ISIF", "ISYM", "IBRION", "EDIFFG", "NSW")))"""),
+
+    ("markdown", """\
+Two of those settings are the reason to use a preset rather than write the file
+by hand. **ISIF = 2** holds the cell fixed: relax the cell at each end
+independently and the two endpoints are no longer the same system, so the
+energy difference between them stops meaning anything. **ISYM = 0** turns
+symmetry off, without which VASP will happily symmetrise the displaced atom back
+where it started and hand you a barrier for a hop that did not happen.
+
+These come from `MVLCINEBEndPointSet`, the VTST-tested settings in
+`pymatgen-analysis-diffusion`. Write the inputs, run them wherever you run VASP,
+and `mv.dft.read_outputs` brings the energies back onto the same rows."""),
+
+    ("markdown", """\
+## Is it a killer?
+
+A defect level in the gap is not automatically a problem. What decides whether
+it ruins a solar cell is how fast it captures carriers, and that turns on how
+far the lattice relaxes when the charge state changes — a deep level with little
+relaxation is harmless, and a shallow one with a lot is not.
+
+`mv.prop.capture` gives the Shockley–Read–Hall coefficient in the
+one-dimensional configuration-coordinate approximation:"""),
+
+    ("code", """\
+traps = mv.data.from_structures(mv.structures(copper, "input") * 2)
+traps.obs_names = ["weakly coupled", "strongly coupled"]
+
+mv.prop.capture(traps, dQ=1.0, dE=1.0, omega_i=0.02, omega_f=0.02,
+                coupling=[1e-3, 2e-3], temperature=300.0)
+
+traps.obs[["capture_coefficient_srh"]]"""),
+
+    ("markdown", """\
+Doubling the electron–phonon matrix element multiplies the capture rate by
+**four** — it enters squared — so a factor of two in a quantity nobody computes
+very precisely is a factor of four in the answer. Worth knowing before ranking
+defects on it.
+
+It is also thermally activated, steeply:"""),
+
+    ("code", """\
+for T in (200.0, 300.0, 600.0):
+    mv.prop.capture(traps, dQ=1.0, dE=1.0, omega_i=0.02, omega_f=0.02,
+                    coupling=1e-3, temperature=T, key_added=f"T{int(T)}")
+
+traps.obs[[f"capture_coefficient_T{int(T)}"
+           for T in (200, 300, 600)]].iloc[[0]]"""),
+
+    ("markdown", """\
+Orders of magnitude across a few hundred kelvin, which is why a capture
+coefficient quoted without its temperature is not a quantity. The temperature
+is stored in `uns['capture']` beside every column.
+
+```{note}
+**The configuration-coordinate parameters are arguments.** dQ is the
+mass-weighted displacement between the two relaxed charge states, dE their
+separation, omega_i and omega_f the two harmonic frequencies, and `coupling` the
+electron–phonon matrix element — all from a calculation matverse does not do.
+Only the cell volume is taken from the structure, because that is the one thing
+already here.
+
+`kind='radiative'` switches to the radiative channel, where `coupling` is read
+as a dipole matrix element. Ask for a photon more energetic than the transition
+and matverse refuses: pymatgen returns NaN for that case without comment, which
+would arrive as a silently blank column.
+```"""),
+
+    ("markdown", """\
 ## What the object remembers"""),
 
     ("code", """\

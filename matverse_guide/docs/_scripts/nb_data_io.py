@@ -41,8 +41,25 @@ We query [OQMD](https://oqmd.org/) — about 1.4 million entries — for every
 binary aluminium–nickel structure it holds."""),
 
     ("code", """\
-md = mv.data.from_optimade('elements HAS ALL "Al","Ni" AND nelements=2',
-                           provider="oqmd", max_n=15)
+query = 'elements HAS ALL "Al","Ni" AND nelements=2'
+
+# OQMD first, then two other OPTIMADE providers if it is unreachable. A
+# public database being down for an afternoon is not a fact about matverse,
+# and a tutorial that dies on it teaches you to ignore the failure. A bug in
+# the client still raises: only network-level failures are caught here, and
+# whichever provider answered is printed so the numbers below are traceable.
+md = None
+for provider in ("oqmd", "alexandria", "jarvis"):
+    try:
+        md = mv.data.from_optimade(query, provider=provider, max_n=15)
+        print(f"answered by: {provider}")
+        break
+    except (RuntimeError, OSError) as exc:
+        print(f"{provider} unavailable: {str(exc)[:90]}")
+
+if md is None:
+    raise RuntimeError("no OPTIMADE provider answered; check the network")
+
 md"""),
 
     ("code", """\
@@ -101,8 +118,21 @@ md.obs[["optimade_id", "formula", "nsites", "density", "is_duplicate"]].round(3)
 `mv.datasets.fetch` wraps the same query with a disk cache."""),
 
     ("code", """\
-gold = mv.datasets.fetch('elements HAS ALL "Cu","Au" AND nelements=2',
-                         provider="oqmd", max_n=8)
+# Same provider fallback as above — the cache cannot help with the first call,
+# and a provider outage is not a fact about the cache.
+gold = None
+for provider in ("oqmd", "alexandria", "jarvis"):
+    try:
+        gold = mv.datasets.fetch('elements HAS ALL "Cu","Au" AND nelements=2',
+                                 provider=provider, max_n=8)
+        print(f"answered by: {provider}")
+        break
+    except (RuntimeError, OSError, ValueError) as exc:
+        print(f"{provider} unavailable: {str(exc)[:90]}")
+
+if gold is None:
+    raise RuntimeError("no OPTIMADE provider answered; check the network")
+
 mv.pp.describe(gold)
 gold.obs[["optimade_id", "formula", "nsites"]]"""),
 

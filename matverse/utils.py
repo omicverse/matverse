@@ -164,12 +164,15 @@ def _internal_unit(column: str) -> str | None:
     description="Report which materials an operation has not filled yet, so a "
                 "screen killed by a walltime limit continues rather than "
                 "restarts.",
-    requires={"obs": ["{column}"]},
     examples=["todo = mv.utils.resume(md, 'energy_mace-mpa')"],
     related=["mv.calc.energy", "mv.utils.checkpoint"],
     notes="Returns a boolean mask rather than mutating anything, because what "
           "to do about a half-finished column is the caller's decision — "
-          "recompute the failures, or skip them and record how many.",
+          "recompute the failures, or skip them and record how many.\n\n"
+          "Claims no requires. It used to claim obs['{column}'], and probing "
+          "deleted it: an absent column means every row is still to do, which "
+          "is the answer a resume should give on the first run rather than an "
+          "error.",
 )
 def resume(md: AnnData, column: str) -> np.ndarray:
     """Which rows still need computing: absent column, or NaN in it."""
@@ -343,8 +346,10 @@ def _empty_like(values: np.ndarray, n: int) -> np.ndarray:
 
 
 @register_function(
-    aliases=["submit", "slurm", "batch job", "run on cluster", "sbatch",
-             "hpc submission"],
+    # 'submit' and 'sbatch' used to be claimed here and should not have been:
+    # this writes a script and stops. mv.utils.submit owns them now.
+    aliases=["slurm script", "batch script", "write a job script",
+             "hpc submission", "write sbatch"],
     category="utils",
     description="Write a Slurm batch script that runs a matverse script over "
                 "this dataset, with resources sized for the level of theory "
@@ -473,6 +478,132 @@ def _noncommercial(md: AnnData) -> list[str]:
         return check_commercial_use(md)
     except Exception:                                     # pragma: no cover
         return []
+
+
+@register_function(
+    aliases=["submit", "sbatch", "queue the job", "send to the cluster",
+             "run on slurm", "submit job"],
+    category="utils",
+    description="Submit a Slurm script and record the job id, so the object "
+                "knows what is running on its behalf.",
+    produces={"uns": ["submissions"]},
+    prerequisites=["mv.utils.slurm_script"],
+    examples=["mv.utils.submit(md, 'screen.sbatch')",
+              "mv.utils.submit(md, path, dry_run=True)"],
+    related=["mv.utils.slurm_script", "mv.utils.job_status",
+             "mv.dft.write_inputs"],
+    notes="matverse generates the script and shells out to ``sbatch``; it is "
+          "not a workflow manager and does not retry, chain or monitor. "
+          "atomate2, quacc and AiiDA do that, and a fourth would be a "
+          "maintenance liability.\n\n"
+          "What it does add is the **link back**: the job id lands in "
+          "``uns['submissions']`` next to the script that produced it, so "
+          "'which job is computing this dataset' is answerable from the object "
+          "rather than from shell history.\n\n"
+          "``dry_run=True`` returns the command without running it, which is "
+          "what you want on a login node and in a test.",
+)
+def submit(md: AnnData, script_path, dry_run: bool = False,
+           extra_args=None) -> dict:
+    """Submit to Slurm. Returns the record it deposited."""
+    import shutil
+    import subprocess
+    from pathlib import Path
+
+    path = Path(script_path)
+    if not path.exists():
+        raise FileNotFoundError(
+            f"{path} does not exist; write one with mv.utils.slurm_script")
+
+    command = ["sbatch", *(extra_args or []), str(path)]
+    entry = {"script": str(path), "command": " ".join(command),
+             "job_id": None, "state": "not submitted"}
+
+    if dry_run:
+        entry["state"] = "dry run"
+    elif shutil.which("sbatch") is None:
+        raise RuntimeError(
+            "sbatch is not on PATH; this is a login or compute node without "
+            "Slurm, or you meant dry_run=True. The script is written and "
+            "ready either way.")
+    else:
+        result = subprocess.run(command, capture_output=True, text=True,
+                                check=False)
+        if result.returncode != 0:
+            entry["state"] = "rejected"
+            entry["error"] = result.stderr.strip()[:500]
+            raise RuntimeError(
+                f"sbatch rejected the job: {result.stderr.strip()[:300]}")
+        # "Submitted batch job 12345"
+        entry["job_id"] = result.stdout.strip().split()[-1]
+        entry["state"] = "submitted"
+
+    md.uns.setdefault("submissions", {})
+    from ._core import append_record
+    append_record(md.uns["submissions"], "jobs", entry)
+    record(md, "utils.submit", script=str(path), dry_run=bool(dry_run))
+    return entry
+
+
+@register_function(
+    aliases=["job status", "is it done", "squeue", "check the queue",
+             "what is running"],
+    category="utils",
+    description="Ask the scheduler what happened to the jobs this object "
+                "submitted.",
+    produces={"uns": ["submissions"]},
+    prerequisites=["mv.utils.submit"],
+    examples=["mv.utils.job_status(md)"],
+    related=["mv.utils.submit", "mv.dft.status"],
+    notes="Reads ``squeue`` for what is still queued or running and falls back "
+          "to ``sacct`` for what has finished, because squeue forgets a job "
+          "shortly after it ends — which is the usual reason a hand-rolled "
+          "poll reports a completed job as missing.\n\n"
+          "Claims no requires. It used to claim uns['submissions'], and probing "
+          "deleted it: asking about an object that submitted nothing returns a "
+          "count of zero, which is an answer rather than an error.",
+)
+def job_status(md: AnnData) -> dict:
+    """Scheduler state for every submitted job. Returns a summary."""
+    import shutil
+    import subprocess
+
+    from ._core import records
+
+    jobs = records(md.uns.get("submissions", {}), "jobs")
+    ids = [j.get("job_id") for j in jobs if j.get("job_id")]
+    if not ids:
+        return {"n_jobs": len(jobs), "states": {},
+                "note": "nothing was submitted for real; check for dry runs"}
+
+    states = {}
+    if shutil.which("squeue"):
+        result = subprocess.run(
+            ["squeue", "--noheader", "-o", "%i %T", "--jobs", ",".join(ids)],
+            capture_output=True, text=True, check=False)
+        for line in result.stdout.splitlines():
+            parts = line.split()
+            if len(parts) >= 2:
+                states[parts[0]] = parts[1]
+    missing = [i for i in ids if i not in states]
+    if missing and shutil.which("sacct"):
+        # squeue forgets a job shortly after it ends; sacct remembers.
+        result = subprocess.run(
+            ["sacct", "--noheader", "-P", "-o", "JobID,State",
+             "--jobs", ",".join(missing)],
+            capture_output=True, text=True, check=False)
+        for line in result.stdout.splitlines():
+            parts = line.split("|")
+            if len(parts) >= 2 and "." not in parts[0]:
+                states[parts[0].strip()] = parts[1].strip()
+
+    summary = {"n_jobs": len(ids), "states": states,
+               "n_running": sum(1 for v in states.values() if v == "RUNNING"),
+               "n_pending": sum(1 for v in states.values() if v == "PENDING"),
+               "n_done": sum(1 for v in states.values()
+                             if v.startswith("COMPLETED"))}
+    md.uns.setdefault("submissions", {})["last_status"] = summary
+    return summary
 
 
 __all__ = ["set_units", "convert", "check_units", "resume", "checkpoint",

@@ -364,7 +364,9 @@ def chempot_limits(md: AnnData, level: str = "emt", source: str = "input",
               "uns": ["grids", "defect_thermodynamics"]},
     prerequisites=["mv.pp.defects", "mv.calc.relax"],
     examples=["mv.thermo.defect_formation(defective, host=md, level='pbe', "
-              "chempot={'Al': -3.7}, band_gap=1.2)"],
+              "chempot={'Al': -3.7}, band_gap=1.2)",
+              "mv.thermo.defect_formation(defective, host=md, level='pbe', "
+              "chempot={'Al': -3.7}, band_gap=1.2, dielectric=9.1)"],
     related=["mv.pp.defects", "mv.dft.read_dos"],
     notes="Enumerating a defect and knowing whether it forms are different "
           "questions, and this is the second one. The formation energy depends "
@@ -372,16 +374,30 @@ def chempot_limits(md: AnnData, level: str = "emt", source: str = "input",
           "whatever was added or removed, so it is a line rather than a number "
           "— stored on the grid axis against the Fermi level, with the lowest "
           "charge state at each point giving the stable charge.\n\n"
-          "No finite-size correction is applied. A charged defect in a periodic "
-          "cell interacts with its own images, and the image charge shifts "
-          "formation energies by tenths of an eV for a small supercell. doped "
-          "and pydefect implement the Freysoldt and Kumagai corrections "
-          "properly; this is the uncorrected quantity and says so, so use it "
-          "to rank rather than to quote.",
+          "**Pass dielectric= to correct for the image charge.** A charged "
+          "defect in a periodic cell interacts with its own periodic images, "
+          "which lowers its energy spuriously by tenths of an eV in a small "
+          "supercell — enough to change which charge state looks stable. With "
+          "a dielectric constant this applies the electrostatic half of the "
+          "Freysoldt correction, which needs only the cell, the charge and "
+          "epsilon: it scales as q^2, as 1/epsilon, and as 1/L, so it matters "
+          "most exactly where supercells are smallest.\n\n"
+          "It is half of the correction, and the half that is left out is "
+          "named rather than glossed. Freysoldt is an image-charge term plus "
+          "a potential-alignment term, and the second one needs the planar-"
+          "averaged electrostatic potential — a LOCPOT — from both the "
+          "defective and the pristine run. Supply that and doped or pydefect "
+          "will do the whole thing; what is here is exact for the part it "
+          "covers and absent for the part it does not, which is recorded in "
+          "uns['defect_thermodynamics']['correction_terms'].\n\n"
+          "Without dielectric= nothing is corrected and the uns flag says so, "
+          "which is the older behaviour and still the right one for ranking "
+          "neutral defects.",
 )
 def defect_formation(defective: AnnData, host: AnnData, level: str = "emt",
                      chempot: dict | None = None, band_gap: float = 2.0,
-                     charges=(-2, -1, 0, 1, 2), n_points: int = 200) -> None:
+                     charges=(-2, -1, 0, 1, 2), n_points: int = 200,
+                     dielectric: float | None = None) -> None:
     """Defect formation energy against the Fermi level, per charge state."""
     from ._core import deposit_grid
 
@@ -411,6 +427,33 @@ def defect_formation(defective: AnnData, host: AnnData, level: str = "emt",
     neutral = np.full(defective.n_obs, np.nan)
     stable = [""] * defective.n_obs
     missing_chempot: set[str] = set()
+    cells = structures(defective, "input") if dielectric is not None else None
+    corrections = np.zeros((defective.n_obs, len(charges)))
+    correction_error = ""
+
+    if dielectric is not None:
+        try:
+            from pymatgen.analysis.defects.corrections.freysoldt import (
+                perform_es_corr)
+            from pymatgen.analysis.defects.utils import QModel
+        except ImportError as exc:                         # pragma: no cover
+            raise ImportError(
+                f"dielectric= needs pymatgen-analysis-defects for the "
+                f"Freysoldt image-charge term. Install it with `pip install "
+                f"pymatgen-analysis-defects`, or leave dielectric unset for "
+                f"the uncorrected energies. ({exc})") from exc
+        model = QModel()
+        for i, cell in enumerate(cells):
+            for j, q in enumerate(charges):
+                if int(q) == 0:
+                    continue
+                try:
+                    corrections[i, j] = float(perform_es_corr(
+                        cell.lattice, q=int(q), dielectric=float(dielectric),
+                        q_model=model))
+                except Exception as exc:                   # pragma: no cover
+                    correction_error = f"{type(exc).__name__}: {exc}"
+                    corrections[i, j] = np.nan
 
     for i in range(defective.n_obs):
         bulk = host_energy.get(parents[i], np.nan)
@@ -432,8 +475,12 @@ def defect_formation(defective: AnnData, host: AnnData, level: str = "emt",
 
         base = float(defect_energy[i]) - float(bulk) + exchange
         neutral[i] = base
-        # E_f(q, E_F) = base + q * E_F, the uncorrected charged formation energy.
-        per_charge = np.vstack([base + q * fermi for q in charges])
+        # E_f(q, E_F) = base + q * E_F + E_img(q), where E_img removes the
+        # spurious interaction of the charged defect with its own periodic
+        # images. It is positive, zero at q = 0, and zero throughout when no
+        # dielectric constant was given.
+        per_charge = np.vstack([base + q * fermi + corrections[i, j]
+                                for j, q in enumerate(charges)])
         curves[i] = per_charge.min(axis=0)
         stable[i] = str(charges[int(np.argmin(per_charge[:, 0]))])
 
@@ -447,7 +494,12 @@ def defect_formation(defective: AnnData, host: AnnData, level: str = "emt",
         "charges": [int(q) for q in charges],
         "chempot": chempot,
         "missing_chempot": sorted(missing_chempot),
-        "image_charge_correction": False,
+        "image_charge_correction": dielectric is not None,
+        "dielectric": None if dielectric is None else float(dielectric),
+        "correction_terms": ("Freysoldt electrostatic (image-charge) only; "
+                             "the potential-alignment term needs a LOCPOT"
+                             if dielectric is not None else None),
+        "correction_error": correction_error or None,
         "note": "uncorrected for periodic image interaction; doped and "
                 "pydefect implement Freysoldt and Kumagai properly",
     }
@@ -565,4 +617,292 @@ def references_from_mp(elements, api_key: str | None = None):
 __all__ = ["hull", "reaction", "chempot_limits", "pourbaix",
            "defect_formation",
            "references_from_mp",
+           "corrections", "CORRECTION_SCHEMES", "chempot_diagram",
            "LevelMismatch"]
+
+
+#: The correction schemes pymatgen ships, by the name matverse dispatches on.
+CORRECTION_SCHEMES = {
+    "mp2020": ("pymatgen.entries.compatibility",
+               "MaterialsProject2020Compatibility",
+               "Materials Project 2020 corrections"),
+    "mp2020_aqueous": ("pymatgen.entries.compatibility",
+                       "MaterialsProjectAqueousCompatibility",
+                       "MP 2020 corrections with the aqueous reference"),
+    "mp_legacy": ("pymatgen.entries.compatibility",
+                  "MaterialsProjectCompatibility",
+                  "the pre-2020 Materials Project corrections"),
+    "mit": ("pymatgen.entries.compatibility", "MITCompatibility",
+            "the MIT parameter set"),
+}
+
+
+@register_function(
+    aliases=["corrections", "energy corrections", "mp2020", "anion correction",
+             "hubbard correction", "compatibility", "correct energies",
+             "mixing scheme"],
+    category="thermo",
+    description="Apply the Materials Project energy corrections to a computed "
+                "energy and deposit the result as its own level of theory, so "
+                "a corrected and an uncorrected energy are never the same "
+                "column.",
+    requires={"obs": ["energy_{level}"], "structures": ["{source}"]},
+    produces={"obs": ["energy_{level}-{scheme}",
+                      "energy_per_atom_{level}-{scheme}",
+                      "correction_{level}-{scheme}",
+                      "correction_per_atom_{level}-{scheme}",
+                      "run_type_{level}-{scheme}"],
+              "levels": ["{level}-{scheme}"], "uns": ["corrections"]},
+    prerequisites=["mv.calc.energy"],
+    dispatch="scheme= selects the correction set; see mv.thermo."
+             "CORRECTION_SCHEMES",
+    examples=["mv.thermo.corrections(md, level='pbe')",
+              "mv.thermo.corrections(md, level='pbe', run_type='GGA+U')",
+              "mv.thermo.corrections(md, level='pbe', scheme='mp_legacy')"],
+    related=["mv.thermo.hull", "mv.pp.harmonize", "mv.calc.energy"],
+    notes="A raw GGA energy and a corrected one are different quantities, so "
+          "the corrected energy becomes a new **level** — 'pbe' in, "
+          "'pbe-mp2020' out — rather than overwriting the column it came from. "
+          "That is the same rule that keeps emt and pbe apart, applied one step "
+          "further along, and it means a hull built on the wrong one is a "
+          "visible mistake rather than a silent one.\n\n"
+          "The corrections are large enough that ignoring them is not a small "
+          "error: Fe2O3 moves by 6.6 eV per formula unit, of which 2.1 eV is "
+          "the oxide anion correction and 4.5 eV the +U correction on iron. "
+          "Energies fetched through mv.data.from_mp arrive **already "
+          "corrected**; energies you computed yourself and read back through "
+          "mv.dft.read_outputs do not. Mixing the two on one hull is the error "
+          "this function exists to make impossible to make quietly.\n\n"
+          "run_type decides whether the +U corrections apply at all. Left "
+          "unset it is inferred as GGA+U when the structure contains an "
+          "element MP applies a U to together with oxygen or fluorine, which "
+          "is MP's own rule, and the inference is recorded next to the result."
+          "\n\n"
+          "The produces slots interpolate level and scheme rather than "
+          "key_added, because those are the two parameters the default output "
+          "name is built from and a template naming key_added resolves to "
+          "nothing on the call everybody makes. Passing key_added overrides "
+          "the name and the claim with it.",
+)
+def corrections(md: AnnData, level: str = "pbe", scheme: str = "mp2020",
+                source: str = "input", run_type: str | None = None,
+                hubbards: dict | None = None,
+                key_added: str | None = None) -> None:
+    """Corrected energies as a new level of theory. Deposits; returns ``None``."""
+    import importlib
+
+    from ._core import set_level
+    from pymatgen.entries.computed_entries import ComputedEntry
+
+    key = str(scheme).strip().lower()
+    if key not in CORRECTION_SCHEMES:
+        raise ValueError(
+            f"unknown scheme {scheme!r}; known: {sorted(CORRECTION_SCHEMES)}. "
+            f"Each is described in mv.thermo.CORRECTION_SCHEMES.")
+    module_name, class_name, description = CORRECTION_SCHEMES[key]
+    energy_key = f"energy_{level}"
+    if energy_key not in md.obs:
+        raise ValueError(
+            f"obs[{energy_key!r}] absent; there is nothing to correct. Run "
+            f"mv.calc.energy or mv.dft.read_outputs at level={level!r} first.")
+
+    target = key_added or f"{level}-{key}"
+    compatibility = getattr(importlib.import_module(module_name), class_name)(
+        check_potcar=False)
+
+    raw = md.obs[energy_key].to_numpy(dtype=float)
+    corrected = np.full(md.n_obs, np.nan)
+    delta = np.full(md.n_obs, np.nan)
+    per_atom = np.full(md.n_obs, np.nan)
+    delta_per_atom = np.full(md.n_obs, np.nan)
+    inferred = np.empty(md.n_obs, dtype=object)
+    failed = []
+
+    for i, structure in enumerate(structures(md, source)):
+        if not np.isfinite(raw[i]):
+            inferred[i] = ""
+            continue
+        kind = run_type or _infer_run_type(structure)
+        u_values = (dict(hubbards) if hubbards is not None
+                    else _default_hubbards(structure))
+        inferred[i] = kind
+        entry = ComputedEntry(
+            structure.composition, float(raw[i]),
+            parameters={"run_type": kind,
+                        "is_hubbard": kind.endswith("+U"),
+                        "hubbards": u_values if kind.endswith("+U") else {},
+                        "potcar_symbols": []})
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                processed = compatibility.process_entries(
+                    [entry], clean=True, on_error="raise")
+        except Exception as exc:
+            failed.append(f"{structure.composition.reduced_formula}: {exc}")
+            continue
+        if not processed:
+            failed.append(f"{structure.composition.reduced_formula}: the "
+                          f"scheme rejected this entry")
+            continue
+        n = len(structure)
+        corrected[i] = float(processed[0].energy)
+        delta[i] = float(processed[0].correction)
+        per_atom[i] = corrected[i] / n
+        delta_per_atom[i] = delta[i] / n
+
+    md.obs[f"energy_{target}"] = corrected
+    md.obs[f"energy_per_atom_{target}"] = per_atom
+    md.obs[f"correction_{target}"] = delta
+    md.obs[f"correction_per_atom_{target}"] = delta_per_atom
+    md.obs[f"run_type_{target}"] = inferred.astype(str)
+    md.uns.setdefault("corrections", {})[target] = {
+        "scheme": key, "from_level": level, "source": source,
+        "n_corrected": int(np.isfinite(delta).sum()),
+        "n_failed": len(failed),
+        "failures": failed[:20],
+    }
+    set_level(md, target, kind="corrected", method=description,
+              reference=level, surrogate=False, license=None,
+              uncertainty=None, scheme=key, corrected_from=level)
+    record(md, "thermo.corrections", level=level, scheme=key,
+           key_added=target)
+
+
+#: Elements the Materials Project applies a Hubbard U to, and with what value,
+#: read from MP's own VASP input set rather than copied.
+def _mp_hubbards() -> dict:
+    from pymatgen.io.vasp.sets import MPRelaxSet
+    return MPRelaxSet.CONFIG.get("INCAR", {}).get("LDAUU", {})
+
+
+def _default_hubbards(structure) -> dict:
+    """MP's U values for the elements in this structure, by its own rule.
+
+    MP applies +U only when an oxide or fluoride anion is present, and only to
+    the transition metals in its table. Guessing differently from MP means the
+    corrections are applied to a calculation MP would not have run.
+    """
+    table = _mp_hubbards()
+    symbols = {site.specie.symbol for site in structure
+               if hasattr(site, "specie")}
+    for anion in ("O", "F"):
+        if anion in symbols and anion in table:
+            return {s: table[anion][s] for s in symbols if s in table[anion]}
+    return {}
+
+
+def _infer_run_type(structure) -> str:
+    return "GGA+U" if _default_hubbards(structure) else "GGA"
+
+
+@register_function(
+    aliases=["chemical potential diagram", "chempot diagram",
+             "chemical potential domains", "phase stability region",
+             "where is each phase stable", "synthesis window per phase"],
+    category="thermo",
+    description="The region of chemical potential space in which each phase is "
+                "stable, and how wide that region is — which is how hard the "
+                "phase is to make.",
+    requires={"obs": ["energy_{level}"], "structures": ["{source}"]},
+    produces={"obs": ["chempot_stable_{level}", "chempot_window_{level}"],
+              "uns": ["chempot_diagram"]},
+    prerequisites=["mv.calc.energy"],
+    examples=["mv.thermo.chempot_diagram(md, level='emt')",
+              "mv.thermo.chempot_diagram(md, level='pbe-mp2020')"],
+    related=["mv.thermo.chempot_limits", "mv.thermo.hull",
+             "mv.thermo.defect_formation"],
+    notes="mv.thermo.hull says whether a phase is stable. This says **under "
+          "what conditions**, which is the question that decides whether it "
+          "can be synthesised: a phase stable only in a sliver of chemical "
+          "potential space needs the growth atmosphere controlled to match, "
+          "and one with a wide domain will form over a range of "
+          "conditions.\\n\\n"
+          "obs['chempot_window'] is the extent of that domain, summed over the "
+          "elements. It is a comparative number rather than an absolute one — "
+          "use it to rank candidates in one chemical system, not across "
+          "systems, because the axes are different chemical potentials.\\n\\n"
+          "The domains are exactly consistent with the formation energies they "
+          "came from, which is what makes them checkable: on an Al-Ni system "
+          "where Al3Ni forms at -1.8 eV, its domain reaches mu_Ni = -1.8 at "
+          "mu_Al = 0, and its boundary with AlNi sits where "
+          "mu_Al + mu_Ni = -1.4.\\n\\n"
+          "A phase that is not on the hull has no domain at all and gets a "
+          "window of zero rather than NaN, because 'never stable' is an "
+          "answer. An elemental reference gets zero for the opposite reason: "
+          "its domain is **open**, running to the artificial floor along the "
+          "other axes, so a width there would be a plotting choice rather than "
+          "a physical one. uns records which domains are open.\n\n"
+          "The bare alias 'stability window' belongs to "
+          "mv.thermo.chempot_limits, which computes exactly that for one "
+          "target phase. This computes every phase's region at once, so it is "
+          "reached as 'chemical potential diagram'.",
+)
+def chempot_diagram(md: AnnData, level: str = "emt", source: str = "input",
+                    default_min_limit: float = -50.0) -> None:
+    """Chemical potential domains per phase. Deposits; returns ``None``."""
+    from pymatgen.analysis.chempot_diagram import ChemicalPotentialDiagram
+    from pymatgen.entries.computed_entries import ComputedEntry
+
+    energy_key = f"energy_{level}"
+    if energy_key not in md.obs:
+        raise ValueError(
+            f"obs[{energy_key!r}] absent; a chemical potential diagram is built "
+            f"from energies. Run mv.calc.energy(md, level={level!r}) first.")
+
+    energies = md.obs[energy_key].to_numpy(dtype=float)
+    S = structures(md, source)
+    entries, rows = [], []
+    for i, (structure, energy) in enumerate(zip(S, energies)):
+        if not np.isfinite(energy):
+            continue
+        entries.append(ComputedEntry(structure.composition, float(energy)))
+        rows.append(i)
+    if len(entries) < 2:
+        raise ValueError(
+            f"need at least two finite energies to build a diagram; got "
+            f"{len(entries)}")
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        diagram = ChemicalPotentialDiagram(
+            entries, default_min_limit=default_min_limit)
+
+    stable = np.zeros(md.n_obs, dtype=bool)
+    window = np.zeros(md.n_obs, dtype=float)
+    domains = {}
+    for formula, vertices in diagram.domains.items():
+        array = np.asarray(vertices, dtype=float)
+        # Ignore the artificial floor: a domain that runs to the default limit
+        # is open, and its extent along that axis is a plotting choice.
+        touches_floor = bool(array.size
+                             and np.any(array <= default_min_limit + 1e-9))
+        finite = array[np.all(array > default_min_limit + 1e-9, axis=1)] \
+            if array.size else array
+        extent = float(np.sum(finite.max(axis=0) - finite.min(axis=0))) \
+            if finite.size else 0.0
+        domains[str(formula)] = {
+            "vertices": array.tolist(),
+            # Open along at least one axis: the domain runs to the artificial
+            # floor, so its extent there is a plotting choice rather than a
+            # physical width. The elemental references are always open.
+            "extent": extent,
+            "open": touches_floor,
+        }
+
+    for i, structure in enumerate(S):
+        name = structure.composition.reduced_formula
+        if name in domains:
+            stable[i] = True
+            window[i] = domains[name]["extent"]
+
+    md.obs[f"chempot_stable_{level}"] = stable
+    md.obs[f"chempot_window_{level}"] = window
+    md.uns["chempot_diagram"] = {
+        "level": level, "source": source,
+        "elements": [str(e) for e in diagram.elements],
+        "domains": domains,
+        "n_entries": len(entries),
+        "note": "a phase absent from the diagram is never stable and gets a "
+                "window of zero, which is an answer rather than a gap",
+    }
+    record(md, "thermo.chempot_diagram", level=level, source=source)
