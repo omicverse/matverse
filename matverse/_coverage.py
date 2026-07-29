@@ -205,6 +205,22 @@ IO_NOT_A_GOAL = {
 #: protocol directly rather than through pymatgen's client.
 IO_NATIVE = {"optimade"}
 
+#: Individual ``io`` modules matverse hands back even though it uses a sibling.
+#: mv.elec.cohp reads ICOHPLIST through io.lobster.outputs and mv.dft writes
+#: inputs through io.vasp.sets; the rest of those two families are more file
+#: formats, input writers and a parallel "future" API, which is the same
+#: parsing surface the other thirty-three io families are exempted for. Listing
+#: a family as covered because one module in it is used would be the mistake
+#: this file exists to prevent, and so would leaving the other fifteen in the
+#: gap list as though matverse intended to wrap them.
+IO_MODULE_NOT_A_GOAL_PREFIXES = ("io.lobster.", "io.vasp.inputs",
+                                 "io.vasp.optics")
+
+#: pymatgen's own plotting. ``vis`` is already exempt for 3D visualisation and
+#: these are its 2D counterpart; mv.pl is matverse's answer to both.
+PLOTTING_NOT_A_GOAL = {"electronic_structure.plotter", "phonon.plotter",
+                       "analysis.chemenv.utils.chemenv_config"}
+
 #: Path fragments that mark a module as plumbing rather than API.
 INTERNAL_MARKERS = (
     ".utils.", ".utils", ".plotting.", ".plotting", ".constants",
@@ -392,6 +408,13 @@ def classify(module: str, alias_map: Dict[str, str] | None = None) -> str:
             return bucket
         if any(canonical(k, alias_map) == module for k in name):
             return bucket
+    if module in PLOTTING_NOT_A_GOAL or module.endswith(".plotter"):
+        return "NOT_A_GOAL"
+    if module == "transformations.transformation_abc":
+        return "INTERNAL"
+    if any(module == p or module.startswith(p)
+           for p in IO_MODULE_NOT_A_GOAL_PREFIXES):
+        return "NOT_A_GOAL"
     if top == "io":
         family = module.split(".")[1] if "." in module else ""
         if family in IO_NATIVE:

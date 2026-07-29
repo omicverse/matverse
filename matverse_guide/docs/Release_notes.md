@@ -2,7 +2,28 @@
 
 ## v0.1.23
 
-**64 of 162 in-scope pymatgen modules, 39.5%.**
+**64 of 142 in-scope pymatgen modules, 45.1%** — of which 39.5% was new
+capability and the rest a correction to the map, flagged below rather than
+quietly banked.
+
+### A classification the map had inconsistent
+
+Two families sat in the gap list only because matverse uses *one* module from
+each: `mv.elec.cohp` reads ICOHPLIST through `io.lobster.outputs`, and `mv.dft`
+writes inputs through `io.vasp.sets`. The other fifteen lobster modules and two
+vasp ones are more file formats, input writers and a parallel "future" API —
+which is exactly the parsing surface the other thirty-three `io` families are
+already exempted for, on a policy the README and the migration guide both state.
+
+Leaving them in TODO implied matverse intended to wrap them. It does not, and
+saying so is the honest classification; the alternative mistake — marking a
+whole family covered because one module in it is used — is the one this file was
+written to prevent. pymatgen's own 2D plotters joined `vis` in the same bucket,
+and `transformations.transformation_abc` is an abstract base class.
+
+**78 real gaps remain**, the largest clusters being `analysis.defects` (9),
+`analysis.diffusion` (7), `analysis.chemenv` (6) and `analysis.compatibility`
+(4).
 
 ### `mv.mag.jahn_teller`
 
