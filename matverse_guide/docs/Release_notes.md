@@ -1,5 +1,34 @@
 # Release notes
 
+## v0.1.42
+
+**106 of 136 in-scope pymatgen modules, 77.9%.** 10 open gaps, 20 blocked.
+
+### Two more not wrapped, and a sixth kind of reason
+
+`symmetry.maggroups` is a **lookup table with no derivation**. The database
+holds all 1651 magnetic space groups and `MagneticSpaceGroup` takes a BNS or OG
+label — but pymatgen ships no analyser that determines a structure's magnetic
+space group from its moments. There is no `MagneticSpaceGroupAnalyzer` beside
+`SpacegroupAnalyzer`. A function that turns a label into symmetry operations
+touches no object and deposits nothing, which is not what this substrate is for,
+and the gap is upstream's rather than matverse's.
+
+`analysis.defects.thermo` was the more tempting one, because cross-checking
+`mv.thermo.defect_formation` against pymatgen's `FormationEnergyDiagram` is
+exactly the technique that found the relaxation bug and the quasi-harmonic one.
+It does not work here: built from what matverse can compute offline, the
+diagram's formation energies reduce to E_defect − E_bulk + chempot, which is
+precisely what `mv.thermo.defect_formation` already does. The half that would
+differ is the image-charge correction, and that needs the electrostatic
+potential from a real DFT run.
+
+A cross-check that can only agree is not a cross-check. Saying so is more useful
+than a wrapper that appears to validate something.
+
+**Ten open gaps remain**: two chemenv internals, three `compatibility` modules,
+three diffusion modules, `surface_analysis`, and `io.vasp`.
+
 ## v0.1.41
 
 **104 of 136 in-scope pymatgen modules, 76.5%.** 12 open gaps, 20 blocked.

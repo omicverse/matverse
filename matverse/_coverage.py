@@ -274,6 +274,22 @@ NATIVE: Dict[str, str] = {
         "the comparison table correctly from a set of entries that "
         "process_entries then reports as zero GGA and zero r2SCAN",
     "entries.mixing_scheme": "see analysis.compatibility.mixing_scheme",
+    "symmetry.maggroups":
+        "not wrapped: a lookup table with no derivation. The database holds "
+        "all 1651 magnetic space groups and MagneticSpaceGroup takes a BNS or "
+        "OG label, but pymatgen ships no analyser that determines a "
+        "structure's magnetic space group from its moments - there is no "
+        "MagneticSpaceGroupAnalyzer beside SpacegroupAnalyzer. A function that "
+        "turns a label into symmetry operations touches no object and deposits "
+        "nothing, which is not what this substrate is for",
+    "analysis.defects.thermo":
+        "not wrapped: FormationEnergyDiagram needs DefectEntry objects with "
+        "supercell and bulk ComputedStructureEntries, phase-diagram entries, a "
+        "VBM and a gap. Built from what matverse can compute offline, its "
+        "formation energies reduce to E_defect - E_bulk + chempot, which is "
+        "exactly what mv.thermo.defect_formation already does; the half that "
+        "would differ is the image-charge correction, and that needs the "
+        "electrostatic potential from a real DFT run",
     "analysis.diffusion.aimd.van_hove":
         "not wrapped: VanHoveAnalysis exposes get_1d_plot and get_3d_plot and "
         "no data accessor, so storing the correlation functions would mean "
