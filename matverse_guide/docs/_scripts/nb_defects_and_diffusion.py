@@ -439,6 +439,36 @@ barrier above is for. Run percolation on a thousand candidates in seconds, then
 spend the NEB budget on the ones that survive."""),
 
     ("markdown", """\
+## Handing the hop to DFT
+
+EMT gave a barrier worth having for copper. When it is not enough — a transition
+metal, an oxide, anything where a universal potential softens the surface — the
+endpoints above are already the two structures a DFT NEB needs, and
+`mv.dft.write_inputs` has a preset for exactly that job:"""),
+
+    ("code", """\
+paths = mv.dft.write_inputs(copper, "runs/neb", preset="neb-endpoint",
+                            source="hop_initial")
+
+from pathlib import Path
+incar = (Path(paths[0]) / "INCAR").read_text()
+print("\\n".join(line for line in incar.splitlines()
+                 if line.split("=")[0].strip() in
+                 ("ISIF", "ISYM", "IBRION", "EDIFFG", "NSW")))"""),
+
+    ("markdown", """\
+Two of those settings are the reason to use a preset rather than write the file
+by hand. **ISIF = 2** holds the cell fixed: relax the cell at each end
+independently and the two endpoints are no longer the same system, so the
+energy difference between them stops meaning anything. **ISYM = 0** turns
+symmetry off, without which VASP will happily symmetrise the displaced atom back
+where it started and hand you a barrier for a hop that did not happen.
+
+These come from `MVLCINEBEndPointSet`, the VTST-tested settings in
+`pymatgen-analysis-diffusion`. Write the inputs, run them wherever you run VASP,
+and `mv.dft.read_outputs` brings the energies back onto the same rows."""),
+
+    ("markdown", """\
 ## What the object remembers"""),
 
     ("code", """\

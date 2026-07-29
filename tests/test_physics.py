@@ -63,6 +63,30 @@ class TestDftInputs:
         with pytest.raises(ValueError, match="unknown preset"):
             mv.dft.write_inputs(md, tmp_path / "runs", preset="magic")
 
+    def test_the_neb_endpoint_preset_fixes_the_cell_and_drops_symmetry(
+            self, md, tmp_path):
+        """Two endpoints of a hop are only comparable if neither cell moved,
+        and a vacancy hop is only *there* if symmetry is off — VASP with
+        ISYM on will symmetrise the displaced atom back. Both are settings a
+        user gets wrong by hand, which is the reason to have a preset."""
+        pytest.importorskip("pymatgen.analysis.diffusion.neb.io")
+        from pathlib import Path
+        mv.neb.hop_endpoints(md, species="Cu", supercell=(2, 2, 2))
+        written = mv.dft.write_inputs(md, tmp_path / "neb",
+                                      preset="neb-endpoint",
+                                      source="hop_initial")
+        incar = (Path(written[0]) / "INCAR").read_text()
+        settings = dict(
+            line.split("=", 1) for line in incar.splitlines() if "=" in line)
+        settings = {k.strip(): v.strip() for k, v in settings.items()}
+        assert settings["ISIF"] == "2"
+        assert settings["ISYM"] == "0"
+        assert md.uns["dft"]["reference"] == "PBE+U"
+
+    def test_the_neb_preset_is_offered_alongside_the_others(self):
+        assert "neb-endpoint" in mv.dft.presets()
+        assert "diffusion" in mv.dft.presets()["neb-endpoint"]["description"]
+
     def test_an_unknown_code_is_refused(self, md, tmp_path):
         with pytest.raises(ValueError, match="'vasp' or 'espresso'"):
             mv.dft.write_inputs(md, tmp_path / "runs", code="castep")
