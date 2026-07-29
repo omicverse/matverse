@@ -139,6 +139,7 @@ WRAPPED: Dict[str, List[str]] = {
     "analysis.pourbaix_diagram": ["mv.thermo.pourbaix"],
     "analysis.reaction_calculator": ["mv.thermo.reaction"],
     "analysis.solar.slme": ["mv.prop.slme"],
+    "analysis.diffusion.neb.periodic_dijkstra": ["mv.neb.percolation"],
     "analysis.structure_matcher": ["mv.pp.dedup", "mv.gen.validate"],
     "analysis.surface_analysis": ["mv.surf.surface_energy_chempot"],
     "analysis.wulff": ["mv.surf.wulff"],

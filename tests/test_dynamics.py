@@ -11,7 +11,6 @@ which.
 from __future__ import annotations
 
 import numpy as np
-import pandas as pd
 import pytest
 
 import matverse as mv
@@ -357,6 +356,144 @@ class TestSurfaces:
         with pytest.raises(ValueError, match="mv.calc.energy"):
             mv.surf.surface_energy(facets, bulk=bare, level="emt")
 
+def _has_diffusion_addon() -> bool:
+    try:
+        import pymatgen.analysis.diffusion.aimd.rdf  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+@pytest.mark.skipif(not _has_diffusion_addon(),
+                    reason="pymatgen-analysis-diffusion is an optional extra")
+class TestPercolation:
+    """Checked against three structures whose answers are textbook.
+
+    Spinel LiMn2O4 is the archetypal three-dimensional lithium conductor and
+    layered LiCoO2 the archetypal two-dimensional one, and the difference is
+    connectivity rather than barrier height. If this function cannot separate
+    those two it is measuring nothing.
+    """
+
+    A_SPINEL = 8.24
+    A_LAYERED = 2.82
+    A_BCC = 3.51
+
+    @pytest.fixture
+    def conductors(self):
+        from pymatgen.core import Lattice, Structure
+        # Fd-3m in pymatgen is origin choice 1, where the tetrahedral 8a site
+        # is at the origin rather than at (1/8, 1/8, 1/8). Putting Li at
+        # (1/8, 1/8, 1/8) here silently lands it on a 16-fold site and builds
+        # Li2MnO4, which is not spinel and not what this test claims to check.
+        spinel = Structure.from_spacegroup(
+            "Fd-3m", Lattice.cubic(self.A_SPINEL), ["Li", "Mn", "O"],
+            [[0, 0, 0], [0.625] * 3, [0.3875] * 3])
+        layered = Structure.from_spacegroup(
+            "R-3m", Lattice.hexagonal(self.A_LAYERED, 14.05),
+            ["Li", "Co", "O"], [[0, 0, 0], [0, 0, 0.5], [0, 0, 0.2395]])
+        bcc = Structure(Lattice.cubic(self.A_BCC), ["Li", "Li"],
+                        [[0, 0, 0], [.5, .5, .5]])
+        md = mv.data.from_structures([spinel, layered, bcc])
+        md.obs_names = ["spinel", "layered", "bcc"]
+        return md
+
+    def test_the_fixture_really_is_spinel(self, conductors):
+        """The premise. Li tetrahedral, Mn octahedral, LiMn2O4."""
+        spinel = mv.structures(conductors, "input")[0]
+        assert spinel.composition.reduced_formula == "LiMn2O4"
+        li = next(s for s in spinel if s.specie.symbol == "Li")
+        mn = next(s for s in spinel if s.specie.symbol == "Mn")
+        assert sum(1 for n in spinel.get_neighbors(li, 2.2)
+                   if n.specie.symbol == "O") == 4
+        assert sum(1 for n in spinel.get_neighbors(mn, 2.2)
+                   if n.specie.symbol == "O") == 6
+
+    def test_spinel_is_three_dimensional_and_layered_is_not(self, conductors):
+        """The result the module exists to produce. Both have a percolating
+        lithium network at this cutoff; only one of them percolates in three
+        directions."""
+        mv.neb.percolation(conductors, species="Li", cutoff=3.6)
+        dim = conductors.obs["percolation_dimensionality_Li"]
+        assert dim["spinel"] == 3
+        assert dim["layered"] == 2
+        assert dim["bcc"] == 3
+
+    def test_the_threshold_is_the_nearest_neighbour_distance(self, conductors):
+        """Each of these networks connects as soon as nearest neighbours do, so
+        the bottleneck is a distance that can be written down in closed form:
+        a*sqrt(3)/4 for the diamond-like 8a sublattice of spinel, the hexagonal
+        a for in-plane lithium in a layered oxide, a*sqrt(3)/2 for bcc."""
+        mv.neb.percolation(conductors, species="Li", cutoff=3.6)
+        threshold = conductors.obs["percolation_threshold_Li"]
+        assert threshold["spinel"] == pytest.approx(
+            self.A_SPINEL * np.sqrt(3) / 4, rel=1e-4)
+        assert threshold["layered"] == pytest.approx(self.A_LAYERED, rel=1e-4)
+        assert threshold["bcc"] == pytest.approx(
+            self.A_BCC * np.sqrt(3) / 2, rel=1e-4)
+
+    def test_the_threshold_does_not_depend_on_the_cutoff(self, conductors):
+        """It is a property of the structure. The cutoff is a question asked of
+        it, and must not leak into the answer."""
+        mv.neb.percolation(conductors, species="Li", cutoff=3.0,
+                           key_added="tight")
+        mv.neb.percolation(conductors, species="Li", cutoff=6.0,
+                           key_added="loose")
+        assert np.allclose(conductors.obs["percolation_threshold_tight"],
+                           conductors.obs["percolation_threshold_loose"],
+                           rtol=1e-9)
+
+    def test_nothing_percolates_below_its_threshold(self, conductors):
+        mv.neb.percolation(conductors, species="Li", cutoff=2.5)
+        dim = conductors.obs["percolation_dimensionality_Li"].to_numpy()
+        threshold = conductors.obs["percolation_threshold_Li"].to_numpy()
+        assert (threshold > 2.5).all(), "fixture no longer tests what it says"
+        assert (dim == 0).all()
+
+    def test_dimensionality_never_falls_as_the_cutoff_grows(self, conductors):
+        """Adding longer hops adds edges, and an edge cannot disconnect a
+        graph. A non-monotonic answer would mean the search is missing paths."""
+        previous = None
+        for cutoff in (2.5, 3.0, 3.6, 4.5, 6.0):
+            mv.neb.percolation(conductors, species="Li", cutoff=cutoff,
+                               key_added=f"c{cutoff}")
+            current = conductors.obs[
+                f"percolation_dimensionality_c{cutoff}"].to_numpy()
+            if previous is not None:
+                assert (current >= previous).all(), f"fell at cutoff {cutoff}"
+            previous = current
+
+    def test_a_long_enough_hop_bridges_the_layers(self, conductors):
+        """The two-dimensionality of a layered oxide is a statement about hop
+        length, not a fact about the material, and the function must not
+        pretend otherwise."""
+        mv.neb.percolation(conductors, species="Li", cutoff=5.0)
+        assert conductors.obs["percolation_dimensionality_Li"]["layered"] == 3
+
+    def test_a_material_without_the_mobile_species_is_not_a_conductor(self):
+        from pymatgen.core import Lattice, Structure
+        nacl = Structure.from_spacegroup("Fm-3m", Lattice.cubic(5.64),
+                                         ["Na", "Cl"], [[0, 0, 0], [.5, .5, .5]])
+        md = mv.data.from_structures([nacl])
+        mv.neb.percolation(md, species="Li", cutoff=4.0)
+        assert int(md.obs["percolation_sites_Li"].iloc[0]) == 0
+        assert int(md.obs["percolation_dimensionality_Li"].iloc[0]) == 0
+        assert np.isnan(float(md.obs["percolation_threshold_Li"].iloc[0]))
+
+    def test_isolated_ions_do_not_percolate(self):
+        """One lithium in a large cell has neighbours only in other cells, and
+        at a short cutoff it reaches none of them. This separates 'connected to
+        something' from 'gets out of the cell', which is the distinction the
+        whole function rests on."""
+        from pymatgen.core import Lattice, Structure
+        lonely = Structure(Lattice.cubic(12.0), ["Li"], [[0, 0, 0]])
+        md = mv.data.from_structures([lonely])
+        mv.neb.percolation(md, species="Li", cutoff=4.0)
+        assert int(md.obs["percolation_dimensionality_Li"].iloc[0]) == 0
+        assert float(md.obs["percolation_threshold_Li"].iloc[0]) == \
+            pytest.approx(12.0, rel=1e-6)
+
+
 class TestOffStoichiometricSurfaces:
     """A symmetrized slab of an ordered alloy is usually not the bulk formula.
 
@@ -372,8 +509,8 @@ class TestOffStoichiometricSurfaces:
         bulk = Structure.from_spacegroup(
             "Pm-3m", Lattice.cubic(3.75), ["Au", "Cu"],
             [[0, 0, 0], [0.5, 0.5, 0]])
-        md = mv.data.from_structures(
-            [bulk], pd.DataFrame(index=["Cu3Au"]))
+        md = mv.data.from_structures([bulk])
+        md.obs_names = ["Cu3Au"]
         mv.calc.energy(md, level="emt")
         return md
 
@@ -383,8 +520,8 @@ class TestOffStoichiometricSurfaces:
         fcc = [[0, 0, 0], [0, .5, .5], [.5, 0, .5], [.5, .5, 0]]
         refs = mv.data.from_structures(
             [Structure(Lattice.cubic(a), [e] * 4, fcc)
-             for e, a in (("Cu", 3.61), ("Au", 4.08))],
-            pd.DataFrame(index=["Cu", "Au"]))
+             for e, a in (("Cu", 3.61), ("Au", 4.08))])
+        refs.obs_names = ["Cu", "Au"]
         mv.calc.energy(refs, level="emt")
         return refs
 
@@ -571,14 +708,6 @@ class TestRelaxNaming:
         assert {"a", "b"} <= set(mv.variants(copper))
         assert len(mv.structures(copper, "a")[0]) != \
             len(mv.structures(copper, "b")[0])
-
-
-def _has_diffusion_addon() -> bool:
-    try:
-        import pymatgen.analysis.diffusion.aimd.rdf  # noqa: F401
-    except ImportError:
-        return False
-    return True
 
 
 @pytest.mark.skipif(not _has_diffusion_addon(),

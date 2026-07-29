@@ -289,3 +289,152 @@ def _shift(index: int, removed: int) -> int:
 
 
 __all__ = ["barrier", "hop_endpoints"]
+
+
+@register_function(
+    aliases=["percolation", "percolating network", "migration network",
+             "diffusion dimensionality", "percolation threshold",
+             "does it percolate", "connected pathway", "bottleneck"],
+    category="neb",
+    description="Ask whether the mobile ions form a network that crosses the "
+                "crystal rather than a set of isolated pockets, and in how "
+                "many independent directions.",
+    requires={"structures": ["{source}"]},
+    produces={"obs": ["percolation_dimensionality_{species}",
+                      "percolation_threshold_{species}",
+                      "percolation_sites_{species}"]},
+    prerequisites=[],
+    examples=["mv.neb.percolation(md, species='Li')",
+              "mv.neb.percolation(md, species='Li', cutoff=3.5)"],
+    related=["mv.neb.hop_endpoints", "mv.neb.barrier", "mv.md.conductivity"],
+    notes="A barrier is the cost of one hop. It says nothing about whether "
+          "that hop repeated ever gets an ion out of the cell — a material can "
+          "have a low barrier between two sites that form a closed pair, and "
+          "conduct nothing. This asks the connectivity question instead: "
+          "starting from one mobile site, which periodic images of it can be "
+          "reached by hops no longer than the cutoff, and what is the rank of "
+          "the lattice translations those images span.\n\n"
+          "Rank 0 means isolated pockets, 1 a chain, 2 a plane, 3 a fully "
+          "three-dimensional network. Layered LiCoO2 gives 2 at a cutoff that "
+          "spans the in-plane Li-Li distance and 3 only at a cutoff large "
+          "enough to jump the CoO2 slab, which is the honest answer: "
+          "dimensionality is a property of the network *at a hop length*, not "
+          "of the material, so the cutoff is part of the result.\n\n"
+          "obs['percolation_threshold_{species}'] is the smallest cutoff at "
+          "which anything percolates at all — the bottleneck hop the ion "
+          "cannot avoid. It is computed exactly, by testing the distinct "
+          "pair distances in order rather than scanning a grid, and it does "
+          "not depend on the cutoff argument.\n\n"
+          "This is geometry. It uses no energies and no level of theory, so it "
+          "is cheap enough to run before deciding which candidates deserve a "
+          "barrier — but a percolating network is a necessary condition for "
+          "conduction, never a sufficient one.",
+)
+def percolation(md: AnnData, species: str, source: str = "input",
+                cutoff: float = 4.0, max_image: int = 1,
+                key_added: str | None = None) -> None:
+    """Dimensionality and bottleneck of the mobile-ion network."""
+    from pymatgen.core import Structure
+
+    name = key_added or species
+    dimensionality, threshold, counts = [], [], []
+
+    for structure in structures(md, source):
+        mobile = [s for s in structure if s.specie.symbol == species]
+        counts.append(len(mobile))
+        if len(mobile) < 1:
+            dimensionality.append(0)
+            threshold.append(np.nan)
+            continue
+        sub = Structure.from_sites(mobile)
+        dimensionality.append(_percolation_rank(sub, cutoff, max_image))
+        threshold.append(_percolation_threshold(sub, max_image))
+
+    md.obs[f"percolation_dimensionality_{name}"] = np.array(dimensionality,
+                                                            dtype=int)
+    md.obs[f"percolation_threshold_{name}"] = np.array(threshold, dtype=float)
+    md.obs[f"percolation_sites_{name}"] = np.array(counts, dtype=int)
+    md.uns.setdefault("percolation", {})[name] = {
+        "species": species, "cutoff": float(cutoff), "max_image": int(max_image),
+        "threshold_unit": "angstrom",
+        "meaning": "rank of the lattice translations reachable by hops "
+                   "shorter than the cutoff: 0 isolated, 1 chain, 2 plane, "
+                   "3 three-dimensional",
+    }
+    record(md, "neb.percolation", species=species, source=source,
+           cutoff=float(cutoff), key_added=name)
+
+
+def _mobile_graph(sub, cutoff: float):
+    """The mobile sublattice as a periodic graph, edges weighted by distance."""
+    from pymatgen.analysis.graphs import StructureGraph
+
+    graph = StructureGraph.from_empty_graph(sub)
+    for index, site in enumerate(sub):
+        for neighbour in sub.get_neighbors(site, cutoff):
+            image = tuple(int(v) for v in neighbour.image)
+            if (neighbour.index, image) == (index, (0, 0, 0)):
+                continue
+            try:
+                graph.add_edge(index, neighbour.index, from_jimage=(0, 0, 0),
+                               to_jimage=image,
+                               weight=float(neighbour.nn_distance),
+                               warn_duplicates=False)
+            except Exception:
+                # add_edge refuses a duplicate it has already stored; the
+                # neighbour list gives each pair from both ends, so this is the
+                # ordinary case rather than a failure.
+                continue
+    return graph
+
+
+def _percolation_rank(sub, cutoff: float, max_image: int) -> int:
+    """How many independent lattice directions the network reaches."""
+    try:
+        from pymatgen.analysis.diffusion.neb.periodic_dijkstra import (
+            periodic_dijkstra_on_sgraph)
+    except ImportError as exc:                             # pragma: no cover
+        raise ImportError(
+            f"mv.neb.percolation needs pymatgen-analysis-diffusion, one of "
+            f"pymatgen's own add-on packages. Install it with `pip install "
+            f"pymatgen-analysis-diffusion`. ({exc})") from exc
+
+    graph = _mobile_graph(sub, cutoff)
+    if graph.graph.number_of_edges() == 0:
+        return 0
+
+    best = 0
+    for start in range(len(sub)):
+        reached, _ = periodic_dijkstra_on_sgraph(
+            graph, sources={start}, weight="weight", max_image=max_image)
+        # Only an image of the *starting* site counts. Reaching a different
+        # site one cell over says the two are connected, not that the ion got
+        # anywhere: it is the same site in another cell that means the network
+        # repeats, and the ion can keep going.
+        images = np.array([[int(v) for v in key[1]] for key in reached
+                           if key[0] == start and any(key[1])], dtype=int)
+        if len(images):
+            best = max(best, int(np.linalg.matrix_rank(images)))
+        if best == 3:
+            break
+    return best
+
+
+def _percolation_threshold(sub, max_image: int) -> float:
+    """The shortest hop length at which the network first crosses the cell.
+
+    Percolation is monotonic in the cutoff — adding edges never disconnects
+    anything — so the threshold is one of the pair distances, and testing them
+    in order finds it exactly. A bisection would be fewer steps and would land
+    between two distances, which is a number no hop has.
+    """
+    distances = set()
+    span = float(max(sub.lattice.abc)) * 1.5
+    for index, site in enumerate(sub):
+        for neighbour in sub.get_neighbors(site, span):
+            if neighbour.nn_distance > 1e-8:
+                distances.add(round(float(neighbour.nn_distance), 6))
+    for distance in sorted(distances):
+        if _percolation_rank(sub, distance + 1e-6, max_image) >= 1:
+            return distance
+    return float("nan")

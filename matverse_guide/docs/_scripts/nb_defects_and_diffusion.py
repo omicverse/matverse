@@ -360,8 +360,85 @@ exponentiating small errors does to you.
 
 At room temperature it is 10⁻⁴⁰ m²/s: twenty-six orders of magnitude slower, and
 the reason a copper wire does not visibly age. The vacancy fraction alone falls
-from 10⁻⁵ to 10⁻²¹ over that range.
+from 10⁻⁵ to 10⁻²¹ over that range."""),
 
+    ("markdown", """\
+## Before the barrier: can the ion get out at all?
+
+A barrier is the cost of **one** hop. It is silent on whether that hop repeated
+ever carries an ion across the crystal. A material can have a beautifully low
+barrier between two sites that form a closed pair and conduct precisely nothing,
+and no amount of NEB will tell you so — the calculation you ran was about those
+two sites.
+
+`mv.neb.percolation` asks the other question, and asks it from geometry alone,
+so it costs nothing and can run first. Starting from one mobile site, which
+periodic *images of that same site* can be reached by hops no longer than the
+cutoff? Reaching a different site one cell over only says two sites are
+connected. Reaching your own site in the next cell says the network repeats —
+the ion can keep going.
+
+The two canonical lithium cathodes make the point:"""),
+
+    ("code", """\
+from pymatgen.core import Lattice, Structure
+
+# Fd-3m in pymatgen is origin choice 1, so the tetrahedral 8a site is at the
+# origin, not at (1/8, 1/8, 1/8). Put Li at (1/8, 1/8, 1/8) here and you
+# silently build Li2MnO4 on a 16-fold site instead of spinel.
+spinel = Structure.from_spacegroup(
+    "Fd-3m", Lattice.cubic(8.24), ["Li", "Mn", "O"],
+    [[0, 0, 0], [0.625] * 3, [0.3875] * 3])
+layered = Structure.from_spacegroup(
+    "R-3m", Lattice.hexagonal(2.82, 14.05), ["Li", "Co", "O"],
+    [[0, 0, 0], [0, 0, 0.5], [0, 0, 0.2395]])
+
+cathodes = mv.data.from_structures([spinel, layered])
+cathodes.obs_names = ["LiMn2O4", "LiCoO2"]
+cathodes.obs["formula"] = [s.composition.reduced_formula
+                           for s in mv.structures(cathodes, "input")]
+
+mv.neb.percolation(cathodes, species="Li", cutoff=3.6)
+cathodes.obs[["formula", "percolation_sites_Li",
+              "percolation_dimensionality_Li",
+              "percolation_threshold_Li"]].round(3)"""),
+
+    ("markdown", """\
+**3 against 2**, which is the textbook difference between the two: spinel
+conducts lithium in three dimensions through a network of corner-sharing
+tetrahedral sites, and a layered oxide conducts it only within the planes
+between the CoO₂ slabs. Both percolate; only one of them percolates everywhere.
+
+The thresholds are exact geometry — 3.568 Å is a·√3/4, the nearest-neighbour
+distance on spinel's diamond-like 8a sublattice, and 2.820 Å is simply the
+hexagonal *a* of the layered cell. That is the bottleneck hop: the shortest
+length at which anything percolates at all, and the one the ion cannot avoid.
+
+Now the part worth being careful about. Dimensionality is a property of the
+network **at a hop length**, not a property of the material:"""),
+
+    ("code", """\
+for cutoff in (2.5, 3.0, 3.6, 5.0):
+    mv.neb.percolation(cathodes, species="Li", cutoff=cutoff,
+                       key_added=f"at_{cutoff}")
+
+cathodes.obs[["formula"] + [f"percolation_dimensionality_at_{c}"
+                            for c in (2.5, 3.0, 3.6, 5.0)]]"""),
+
+    ("markdown", """\
+Allow a 5 Å hop and the layered oxide becomes three-dimensional too, because
+that is long enough to jump the slab. The answer did not change; the question
+did. Quoting a dimensionality without the hop length it was measured at is
+quoting half a result — which is why the cutoff is recorded in
+`uns['percolation']` alongside it.
+
+Read this as a filter, not a verdict. A percolating network is a **necessary**
+condition for conduction and never a sufficient one: it says the geometry does
+not forbid transport, and says nothing about what it costs. That is what the
+barrier above is for. Run percolation on a thousand candidates in seconds, then
+spend the NEB budget on the ones that survive."""),
+
+    ("markdown", """\
 ## What the object remembers"""),
 
     ("code", """\

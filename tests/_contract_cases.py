@@ -625,6 +625,8 @@ def cases(tmp):
          {"host": one_metal(), "level": "emt", "chempot": {"Cu": -3.7},
           "band_gap": 1.2}),
 
+        (mv.neb.percolation, one_metal, ("Cu",), {}),
+
         # mv.surf
         (mv.surf.slabs, one_metal, (), {"max_index": 1, "returns": "new"}),
         (mv.surf.surface_energy, facets.copy, (bulk,), {}),
