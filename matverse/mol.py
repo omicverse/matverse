@@ -531,4 +531,102 @@ def match(md: AnnData, source: str = "input", tolerance: float = 0.1) -> None:
 
 
 __all__ = ["BOND_STRATEGIES", "from_molecules", "point_group", "bonds",
+           "bond_lengths",
            "descriptors", "fragments", "match"]
+
+
+@register_function(
+    aliases=["bond lengths", "bond length check", "are the bonds sensible",
+             "unusual bonds", "geometry check", "bond deviation"],
+    category="mol",
+    description="Compare every covalent bond against its tabulated length and "
+                "report how far the geometry departs from it, which is the "
+                "cheapest check that a generated molecule is a molecule.",
+    requires={"structures": ["{source}"]},
+    produces={"obs": ["mean_bond_deviation", "max_bond_deviation",
+                      "n_unusual_bonds", "n_bonds_measured",
+                      "bond_lengths_ok"]},
+    examples=["mv.mol.bond_lengths(md)",
+              "mv.mol.bond_lengths(md, tolerance=0.1)"],
+    related=["mv.mol.bonds", "mv.gen.validate", "mv.pp.qc"],
+    notes="mv.pp.qc catches atoms on top of one another. This catches the "
+          "subtler failure: bonds that exist but are the wrong length. A "
+          "generated molecule with a 1.9 angstrom C-C bond is not a strained "
+          "conformer, it is not a molecule — and no minimum-distance check "
+          "will say so, because 1.9 angstrom is a perfectly ordinary distance "
+          "between two atoms that are not bonded.\\n\\n"
+          "Compared against the **single-bond** length throughout, so a double "
+          "or triple bond reads as short by design: C=C at 1.34 against a "
+          "tabulated 1.54 is a deviation of 0.2, and that is information "
+          "rather than an error. Read max_bond_deviation with that in mind, "
+          "and n_unusual_bonds as 'worth looking at' rather than 'wrong'.\\n\\n"
+          "A pair with no tabulated length is skipped rather than guessed. The "
+          "table covers the common organic pairs and little else, so this is a "
+          "check for molecules rather than for coordination compounds.\n\n"
+          "**Read n_bonds_measured first.** The bonds are found by covalent "
+          "radius, so a badly stretched geometry does not report long bonds — "
+          "it stops having bonds at all. Ethanol scaled by 1.25 leaves one "
+          "measurable bond out of eight, and that count is a louder signal "
+          "than any deviation computed from the one that survived.",
+)
+def bond_lengths(md: AnnData, source: str = "input",
+                 tolerance: float = 0.15) -> None:
+    """Bond lengths against their tabulated values. Deposits; returns ``None``."""
+    from pymatgen.analysis.local_env import CovalentBondNN
+    from pymatgen.core.bonds import get_bond_length
+
+    S, periodic = _molecules(md, source, "mv.mol.bond_lengths")
+    finder = CovalentBondNN()
+
+    mean_dev = np.full(md.n_obs, np.nan)
+    max_dev = np.full(md.n_obs, np.nan)
+    unusual = np.full(md.n_obs, np.nan)
+    measured_count = np.full(md.n_obs, np.nan)
+    ok = np.full(md.n_obs, False)
+    skipped = 0
+
+    for i, molecule in enumerate(S):
+        if i in periodic:
+            continue
+        deviations = []
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                for index in range(len(molecule)):
+                    for neighbour in finder.get_nn_info(molecule, index):
+                        other = neighbour["site_index"]
+                        if other <= index:
+                            continue        # each bond once
+                        a = molecule[index].specie.symbol
+                        b = molecule[other].specie.symbol
+                        try:
+                            expected = float(get_bond_length(a, b, 1))
+                        except Exception:
+                            skipped += 1
+                            continue
+                        measured = float(molecule[index].distance(
+                            molecule[other]))
+                        deviations.append(abs(measured - expected))
+        except Exception:
+            continue
+        measured_count[i] = len(deviations)
+        if not deviations:
+            continue
+        values = np.asarray(deviations, dtype=float)
+        mean_dev[i] = float(values.mean())
+        max_dev[i] = float(values.max())
+        unusual[i] = int((values > tolerance).sum())
+        ok[i] = bool(unusual[i] == 0)
+
+    md.obs["mean_bond_deviation"] = mean_dev
+    md.obs["max_bond_deviation"] = max_dev
+    md.obs["n_unusual_bonds"] = unusual
+    md.obs["n_bonds_measured"] = measured_count
+    md.obs["bond_lengths_ok"] = ok
+    md.uns["bond_lengths"] = {
+        "source": source, "tolerance": float(tolerance),
+        "n_pairs_without_a_table_entry": int(skipped),
+        "note": "measured against the tabulated single-bond length, so a "
+                "double or triple bond reads as short by design",
+    }
+    record(md, "mol.bond_lengths", source=source, tolerance=tolerance)

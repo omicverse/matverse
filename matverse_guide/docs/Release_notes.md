@@ -1,5 +1,30 @@
 # Release notes
 
+## v0.1.33
+
+**91 of 136 in-scope pymatgen modules, 66.9%.** 26 open gaps, 19 blocked.
+
+### `mv.mol.bond_lengths`
+
+`mv.pp.qc` catches atoms sitting on top of one another. It cannot catch the
+subtler thing a generated molecule does: bonds that exist and are the wrong
+length. A 1.9 Å C–C bond is not a strained conformer, it is not a molecule — and
+no minimum-distance check will say so, because 1.9 Å is a perfectly ordinary
+distance between two atoms that are *not* bonded.
+
+Water built at exactly the tabulated 0.96 Å O–H comes out at zero deviation.
+
+**The column that matters is `n_bonds_measured`, not the deviation**, and
+finding that out changed the function. Bonds are located by covalent radius, so
+a badly stretched geometry does not report long bonds — it stops having bonds.
+Ethanol scaled by 1.25 leaves one measurable bond out of eight, and a deviation
+computed from the single survivor is nearly meaningless while the count is
+unmistakable. So the count is reported and the note says to read it first.
+
+Lengths are compared against the single-bond value throughout, so a double or
+triple bond reads as short by design: C=C at 1.34 Å against a tabulated 1.54 is
+a deviation of 0.2. `n_unusual_bonds` means "worth looking at", not "wrong".
+
 ## v0.1.32
 
 **90 of 136 in-scope pymatgen modules, 66.2%.** 27 open gaps, 19 blocked.

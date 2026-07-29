@@ -498,6 +498,7 @@ def cases(tmp):
         (mv.mol.point_group, molecules, (), {}),
         (mv.mol.descriptors, molecules, (), {}),
         (mv.mol.match, molecules, (), {}),
+        (mv.mol.bond_lengths, molecules, (), {}),
         (mv.mol.fragments, ethanol, (), {"returns": "new"}),
         (mv.mol.bonds, molecules, (mv.multi.sites(molecules()),), {}),
 

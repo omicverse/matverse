@@ -280,4 +280,45 @@ except ValueError as exc:
 the same bonding question. [Coming from pymatgen](from_pymatgen.ipynb) lists
 what matverse still does not do.
 ```"""),
+
+    ("markdown", """\
+## Are the bonds the right length?
+
+`mv.pp.qc` catches atoms sitting on top of one another. It cannot catch the
+subtler failure a generated molecule makes: bonds that exist and are the wrong
+length. A 1.9 Å C–C bond is not a strained conformer — it is not a molecule —
+and no minimum-distance check will say so, because 1.9 Å is a perfectly
+ordinary distance between two atoms that are *not* bonded."""),
+
+    ("code", """\
+import numpy as np
+
+exact_water = Molecule(["O", "H", "H"],
+                       [[0, 0, 0], [0.96, 0, 0], [-0.24, 0.93, 0]])
+stretched = Molecule([site.specie for site in ethanol],
+                     np.asarray(ethanol.cart_coords) * 1.25)
+
+check = mv.mol.from_molecules([exact_water, ethanol, stretched])
+mv.pp.describe(check)
+mv.mol.bond_lengths(check)
+
+check.obs[["formula", "n_bonds_measured", "mean_bond_deviation",
+           "max_bond_deviation", "n_unusual_bonds", "bond_lengths_ok"]].round(3)"""),
+
+    ("markdown", """\
+Water comes out at **zero** deviation, because it was built at exactly the
+tabulated 0.96 Å O–H. Ethanol is within a few hundredths.
+
+The stretched copy is the row to read, and **`n_bonds_measured` is the column
+that matters** — not the deviation. Bonds are found by covalent radius, so a 25%
+stretch does not produce long bonds; it produces almost *no* bonds. Eight become
+one. A deviation computed from the single survivor is nearly meaningless, and
+the count is the loud signal.
+
+```{note}
+Lengths are compared against the **single-bond** value throughout, so a double
+or triple bond reads as short by design: C=C at 1.34 Å against a tabulated 1.54
+is a deviation of 0.2. Read `n_unusual_bonds` as "worth looking at" rather than
+"wrong".
+```"""),
 ]

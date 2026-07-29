@@ -68,6 +68,7 @@ WRAPPED: Dict[str, List[str]] = {
     "analysis.interfaces.zsl": ["mv.iface.match"],
     "symmetry.kpath": ["mv.elec.kpath"],
     "core.tensors": ["mv.prop.piezoelectric"],
+    "core.bonds": ["mv.mol.bond_lengths"],
     "core.interface": ["mv.iface.build"],
     "analysis.chemenv.connectivity.connectivity_finder":
         ["mv.env.connectivity"],

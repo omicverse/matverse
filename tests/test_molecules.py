@@ -355,3 +355,58 @@ class TestMatchingIsGeometric:
         mv.mol.match(md)
         assert md.uns["molecule_match"]["n_unique"] == 2
         assert list(md.obs["is_duplicate"]) == [False, False, True]
+
+
+class TestBondLengths:
+    """The check mv.pp.qc cannot make: bonds that exist and are wrong."""
+
+    @staticmethod
+    def _ethanol(scale=1.0):
+        import numpy as np
+        from pymatgen.core import Molecule
+        m = Molecule(
+            ["C", "C", "O", "H", "H", "H", "H", "H", "H"],
+            [[-1.2, 0.2, 0], [0.0, -0.6, 0], [1.1, 0.3, 0],
+             [-1.2, 0.9, 0.9], [-1.2, 0.9, -0.9], [-2.1, -0.4, 0],
+             [0.0, -1.2, 0.9], [0.0, -1.2, -0.9], [1.9, -0.2, 0]])
+        if scale != 1.0:
+            return Molecule([s.specie for s in m],
+                            np.asarray(m.cart_coords) * scale)
+        return m
+
+    def test_a_reasonable_molecule_passes(self):
+        md = mv.mol.from_molecules([self._ethanol()])
+        mv.pp.describe(md)
+        mv.mol.bond_lengths(md)
+        assert bool(md.obs["bond_lengths_ok"].iloc[0])
+        assert md.obs["mean_bond_deviation"].iloc[0] < 0.1
+
+    def test_an_exact_water_has_no_deviation(self):
+        """O-H is tabulated at 0.96 angstrom, so a molecule built at exactly
+        that length should come out at zero."""
+        from pymatgen.core import Molecule
+        water = Molecule(["O", "H", "H"],
+                         [[0, 0, 0], [0.96, 0, 0], [-0.24, 0.93, 0]])
+        md = mv.mol.from_molecules([water])
+        mv.pp.describe(md)
+        mv.mol.bond_lengths(md)
+        assert md.obs["mean_bond_deviation"].iloc[0] == pytest.approx(0.0,
+                                                                     abs=0.02)
+
+    def test_a_stretched_molecule_stops_having_bonds(self):
+        """The signal is the bond count, not the deviation. Bonds are found by
+        covalent radius, so a 25% stretch does not give long bonds — it gives
+        almost no bonds, and that is the louder warning."""
+        md = mv.mol.from_molecules([self._ethanol(), self._ethanol(1.25)])
+        mv.pp.describe(md)
+        mv.mol.bond_lengths(md)
+        counts = md.obs["n_bonds_measured"].to_numpy(dtype=float)
+        assert counts[0] >= 8
+        assert counts[1] < counts[0] / 2
+        assert not bool(md.obs["bond_lengths_ok"].iloc[1])
+
+    def test_what_had_no_table_entry_is_counted(self):
+        md = mv.mol.from_molecules([self._ethanol()])
+        mv.pp.describe(md)
+        mv.mol.bond_lengths(md)
+        assert "n_pairs_without_a_table_entry" in md.uns["bond_lengths"]
