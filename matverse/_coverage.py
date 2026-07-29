@@ -141,6 +141,7 @@ WRAPPED: Dict[str, List[str]] = {
     "analysis.solar.slme": ["mv.prop.slme"],
     "analysis.diffusion.neb.io": ["mv.dft.write_inputs"],
     "analysis.diffusion.neb.periodic_dijkstra": ["mv.neb.percolation"],
+    "analysis.diffusion.aimd.clustering": ["mv.md.sites"],
     "analysis.structure_matcher": ["mv.pp.dedup", "mv.gen.validate"],
     "analysis.surface_analysis": ["mv.surf.surface_energy_chempot"],
     "analysis.wulff": ["mv.surf.wulff"],
@@ -254,6 +255,12 @@ def equivalents(module: str) -> frozenset:
 # ---------------------------------------------------------------- NATIVE
 #: Capability present in matverse, implemented without pymatgen's module.
 NATIVE: Dict[str, str] = {
+    "analysis.compatibility.entry_tools":
+        "EntrySet's two useful answers are already matverse's. "
+        "get_subset_in_chemsys is a composition filter, which "
+        "mv.screen.filter does on obs; ground_states returns the entries on "
+        "the hull, which is exactly the rows where mv.thermo.hull has "
+        "deposited e_above_hull == 0.",
     "analysis.elasticity.elastic":
         "mv.prop.elastic computes the stiffness tensor by finite strain "
         "through an ASE calculator, so the deformations and the stresses are "
@@ -295,49 +302,16 @@ NATIVE: Dict[str, str] = {
         "the comparison table correctly from a set of entries that "
         "process_entries then reports as zero GGA and zero r2SCAN",
     "entries.mixing_scheme": "see analysis.compatibility.mixing_scheme",
-    "symmetry.maggroups":
-        "not wrapped: a lookup table with no derivation. The database holds "
-        "all 1651 magnetic space groups and MagneticSpaceGroup takes a BNS or "
-        "OG label, but pymatgen ships no analyser that determines a "
-        "structure's magnetic space group from its moments - there is no "
-        "MagneticSpaceGroupAnalyzer beside SpacegroupAnalyzer. A function that "
-        "turns a label into symmetry operations touches no object and deposits "
-        "nothing, which is not what this substrate is for",
     "analysis.defects.thermo":
-        "not wrapped: FormationEnergyDiagram needs DefectEntry objects with "
+        "mv.thermo.defect_formation computes the same quantity directly. "
+        "FormationEnergyDiagram needs DefectEntry objects with "
         "supercell and bulk ComputedStructureEntries, phase-diagram entries, a "
         "VBM and a gap. Built from what matverse can compute offline, its "
         "formation energies reduce to E_defect - E_bulk + chempot, which is "
         "exactly what mv.thermo.defect_formation already does; the half that "
         "would differ is the image-charge correction, and that needs the "
-        "electrostatic potential from a real DFT run",
-    "analysis.diffusion.aimd.van_hove":
-        "not wrapped: VanHoveAnalysis exposes get_1d_plot and get_3d_plot and "
-        "no data accessor, so storing the correlation functions would mean "
-        "reading private attributes. matverse deposits data rather than "
-        "figures, and a deposit that depends on an underscore name is a "
-        "deposit that breaks on the next release",
-    "analysis.diffusion.aimd.pathway":
-        "not wrapped: generate_stable_sites raises on a single stable site - "
-        "the condensed distance matrix is empty and scipy's linkage refuses "
-        "it - and one well-localised site is the commonest case there is. The "
-        "probability density itself is reachable; the sites it exists to find "
-        "are not",
-    "analysis.disorder":
-        "not wrapped: get_warren_cowley_parameters returns the same value for "
-        "every pair, and on B2 - where every nearest neighbour is unlike - it "
-        "gives -1 for the like pairs as well as the unlike ones, where the "
-        "definition requires +1 and -1. A wrapper around output that cannot "
-        "be reproduced from the definition is worse than the gap",
-    "analysis.diffusion.neb.full_path_mapper":
-        "not wrapped: pymatgen-analysis-diffusion 2025.11 calls "
-        "StructureGraph.with_local_env_strategy, renamed upstream to "
-        "from_local_env_strategy, so every migration-graph entry point raises "
-        "AttributeError against the pymatgen installed here",
-    "analysis.magnetism.heisenberg":
-        "not wrapped: fitting exchange couplings needs spin-polarised "
-        "energies, and no calculator matverse ships is spin-polarised, so "
-        "nothing here can verify the result",
+        "electrostatic potential from a real DFT run - which is recorded "
+        "separately under analysis.defects.corrections",
     "phonon.bandstructure":
         "mv.prop.phonon builds the dynamical matrix from ASE displacements and "
         "deposits frequencies on the grid convention, so pymatgen's phonon "
@@ -419,6 +393,55 @@ INTERNAL_MARKERS = (
 #: — but they are not "nobody got to it", and the distinction is the difference
 #: between a backlog and a wish.
 BLOCKED: Dict[str, str] = {
+    "analysis.diffusion.aimd.pathway":
+        "generate_stable_sites raises on a single stable site - the "
+        "condensed distance matrix is empty and scipy's linkage refuses it "
+        "- and one well-localised site is the commonest case there is. The "
+        "probability density itself is reachable; the sites it exists to "
+        "find are not.",
+    "analysis.diffusion.aimd.van_hove":
+        "VanHoveAnalysis exposes get_1d_plot and get_3d_plot and no data "
+        "accessor, so storing the correlation functions would mean reading "
+        "private attributes. matverse deposits data rather than pictures.",
+    "analysis.diffusion.neb.full_path_mapper":
+        "pymatgen-analysis-diffusion 2025.11 calls "
+        "StructureGraph.with_local_env_strategy, renamed upstream to "
+        "from_local_env_strategy, so every migration-graph entry point "
+        "raises AttributeError against the pymatgen installed here.",
+    "analysis.disorder":
+        "get_warren_cowley_parameters returns the same value for every "
+        "pair, and on B2 - where every nearest neighbour is unlike - it "
+        "gives -1 for the like pairs as well as the unlike ones, where the "
+        "definition requires +1 and -1. A wrapper around output that cannot "
+        "be reproduced from the definition is worse than the gap.",
+    "analysis.magnetism.heisenberg":
+        "fitting exchange couplings needs spin-polarised energies, and no "
+        "calculator matverse ships is spin-polarised, so nothing here can "
+        "verify the result.",
+    "symmetry.maggroups":
+        "a lookup table with no derivation. The database holds all 1651 "
+        "magnetic space groups and MagneticSpaceGroup takes a BNS or OG "
+        "label, but pymatgen ships no analyser that determines a "
+        "structure's magnetic space group from its moments - there is no "
+        "MagneticSpaceGroupAnalyzer beside SpacegroupAnalyzer, so there is "
+        "no route from a structure to a label.",
+    "analysis.compatibility.exp_entries":
+        "ExpEntry is unit-blind, and silently so. It passes "
+        "ThermoData.value straight to PDEntry as the entry energy; PDEntry "
+        "energies are eV everywhere else in pymatgen, while every "
+        "thermochemical table quotes formation enthalpies in kJ/mol, and "
+        "ThermoData has no unit field to consult. Feeding it NIST-JANAF "
+        "numbers builds a hull wrong by a factor of 96.485 that still "
+        "ranks, still plots and still returns an e_above_hull. It also "
+        "refuses phaseinfo 'gas' or 'liquid', so the O2 reference an oxide "
+        "hull needs cannot be added at all - building Fe-O raises 'List of "
+        "Thermodata does not contain enthalpy values'.",
+    "analysis.compatibility.correction_calculator":
+        "fits a correction scheme rather than applying one. "
+        "compute_corrections needs experimental formation enthalpies paired "
+        "with calculated entries for the same compounds, and pymatgen ships "
+        "no such data file - the module references none. Applying the "
+        "result is mv.thermo.corrections, wrapped.",
     "analysis.defects.corrections.freysoldt":
         "needs the electrostatic potential from a real DFT run",
     "analysis.defects.corrections.kumagai":

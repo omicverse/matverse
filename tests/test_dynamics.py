@@ -366,6 +366,102 @@ def _has_diffusion_addon() -> bool:
 
 @pytest.mark.skipif(not _has_diffusion_addon(),
                     reason="pymatgen-analysis-diffusion is an optional extra")
+class TestTrajectorySites:
+    """Separating a rattle from a hop.
+
+    Both raise the mean-squared displacement, and only one of them is
+    diffusion. These use synthetic trajectories rather than a real run so the
+    right answer is known exactly: the sites are put where they are found, and
+    the hops are counted before they are measured.
+    """
+
+    A = 5.0
+    SIGMA = 0.01          # fractional noise per component
+
+    @staticmethod
+    def _cell(a):
+        from pymatgen.core import Lattice, Structure
+        fcc = [[0, 0, 0], [0, .5, .5], [.5, 0, .5], [.5, .5, 0]]
+        return Structure(Lattice.cubic(a), ["Li"] * 4, fcc), np.array(fcc)
+
+    @pytest.fixture
+    def vibrating(self):
+        """Four ions, each rattling about its own site, none leaving."""
+        structure, base = self._cell(self.A)
+        rng = np.random.RandomState(0)
+        frames = (base[None] + rng.normal(0, self.SIGMA, (40, 4, 3))) % 1.0
+        md = mv.data.from_structures([structure])
+        return md, frames, base
+
+    def test_the_sites_are_recovered(self, vibrating):
+        md, frames, _ = vibrating
+        mv.md.sites(md, frames, species="Li")
+        assert int(md.obs["md_sites_Li_md"].iloc[0]) == 4
+
+    def test_a_vibrating_solid_visits_one_site_each(self, vibrating):
+        md, frames, _ = vibrating
+        mv.md.sites(md, frames, species="Li")
+        assert float(md.obs["md_site_visits_Li_md"].iloc[0]) == \
+            pytest.approx(1.0)
+
+    def test_the_spread_is_the_amplitude_that_was_put_in(self, vibrating):
+        """Gaussian noise of sigma per fractional component, in a cubic cell of
+        side a, has RMS distance a*sigma*sqrt(3) from the centre. Getting this
+        back in angstroms is what makes the number comparable to a real thermal
+        amplitude rather than a unitless cluster score."""
+        md, frames, _ = vibrating
+        mv.md.sites(md, frames, species="Li")
+        expected = self.A * self.SIGMA * np.sqrt(3)
+        assert float(md.obs["md_site_spread_Li_md"].iloc[0]) == \
+            pytest.approx(expected, rel=0.15)
+
+    def test_a_hop_is_counted_and_a_rattle_is_not(self, vibrating):
+        """One atom of four moves to a second site half way through, so the
+        mean number of sites visited per atom must be exactly (2+1+1+1)/4."""
+        md, frames, base = vibrating
+        rng = np.random.RandomState(1)
+        hopped = frames.copy()
+        hopped[20:, 0, :] = base[1] + rng.normal(0, self.SIGMA, (20, 3))
+        mv.md.sites(md, hopped % 1.0, species="Li", key_added="hop")
+        mv.md.sites(md, frames, species="Li", key_added="still")
+        assert float(md.obs["md_site_visits_hop"].iloc[0]) == \
+            pytest.approx(1.25)
+        assert float(md.obs["md_site_visits_still"].iloc[0]) == \
+            pytest.approx(1.0)
+
+    def test_the_spread_does_not_notice_the_hop(self, vibrating):
+        """The point of reporting both. A hop moves an ion a long way and
+        leaves the vibration amplitude alone, which is precisely what an MSD
+        cannot tell you."""
+        md, frames, base = vibrating
+        rng = np.random.RandomState(1)
+        hopped = frames.copy()
+        hopped[20:, 0, :] = base[1] + rng.normal(0, self.SIGMA, (20, 3))
+        mv.md.sites(md, hopped % 1.0, species="Li", key_added="hop")
+        mv.md.sites(md, frames, species="Li", key_added="still")
+        assert float(md.obs["md_site_spread_hop"].iloc[0]) == \
+            pytest.approx(float(md.obs["md_site_spread_still"].iloc[0]),
+                          rel=0.1)
+
+    def test_a_mismatched_trajectory_is_refused(self, vibrating):
+        md, frames, _ = vibrating
+        with pytest.raises(ValueError, match="must be the same"):
+            mv.md.sites(md, frames[:, :3, :], species="Li")
+
+    def test_a_trajectory_of_the_wrong_shape_is_refused(self, vibrating):
+        md, frames, _ = vibrating
+        with pytest.raises(ValueError, match="fractional coordinates"):
+            mv.md.sites(md, frames[0], species="Li")
+
+    def test_an_absent_species_is_recorded_not_guessed(self, vibrating):
+        md, frames, _ = vibrating
+        mv.md.sites(md, frames, species="Na")
+        assert int(md.obs["md_sites_Na_md"].iloc[0]) == 0
+        assert np.isnan(float(md.obs["md_site_visits_Na_md"].iloc[0]))
+
+
+@pytest.mark.skipif(not _has_diffusion_addon(),
+                    reason="pymatgen-analysis-diffusion is an optional extra")
 class TestPercolation:
     """Checked against three structures whose answers are textbook.
 

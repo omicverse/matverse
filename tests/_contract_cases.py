@@ -672,6 +672,7 @@ def cases(tmp):
         (mv.md.conductivity, dynamic, ("Cu",), {"level": "emt"}),
         (mv.md.rdf, one_licl, (licl_frames(), "Li"),
          {"r_max": 8.0}),
+        (mv.md.sites, one_licl, (licl_frames(), "Li"), {}),
         (mv.md.melt_quench, one_metal, (),
          {"level": "emt", "melt_steps": 20, "quench_steps": 20,
           "equilibrate_steps": 10, "supercell": (1, 1, 1)}),

@@ -311,4 +311,65 @@ cell — twelve neighbours spread over three reference sites — pymatgen return
 4.0. Four is not a coordination number for that cell, and a column called
 `first_shell_coordination` had better be one.
 ```"""),
+
+    ("markdown", """\
+## Rattling or hopping?
+
+Both raise the mean-squared displacement, and only one of them is diffusion. An
+MSD cannot separate an ion vibrating harder in the same well from an ion moving
+between wells — it reports the same larger number either way.
+
+`mv.md.sites` clusters the sampled positions instead, so the two come apart.
+`md_site_spread` is the RMS distance from a position to the centre of its own
+site, in ångströms, which is a thermal vibration amplitude.
+`md_site_visits` is the mean number of distinct sites one atom was found at:
+**1.0 means nothing hopped.**"""),
+
+    ("code", """\
+from pymatgen.core import Lattice, Structure
+
+# Four lithium on an fcc lattice, so there are four sites to be found and
+# four ions to find them. The LiCl cell above has a single Li, which cannot
+# show the difference between one ion hopping and none.
+sites_cell = Structure(Lattice.cubic(5.0), ["Li"] * 4,
+                       [[0, 0, 0], [0, .5, .5], [.5, 0, .5], [.5, .5, 0]])
+four = mv.data.from_structures([sites_cell])
+
+base = np.array(sites_cell.frac_coords)
+rng = np.random.default_rng(0)
+still = (base[None] + rng.normal(0, 0.01, (40, 4, 3))) % 1.0
+
+# Move one ion to a neighbouring site half way through the run, and change
+# nothing else — same cell, same vibration amplitude, one hop.
+hopped = still.copy()
+hopped[20:, 0, :] = base[1] + rng.normal(0, 0.01, (20, 3))
+
+try:
+    mv.md.sites(four, still, species="Li", key_added="still")
+    mv.md.sites(four, hopped % 1.0, species="Li", key_added="hopped")
+    result = four.obs[["md_sites_still", "md_site_spread_still",
+                       "md_site_visits_still", "md_sites_hopped",
+                       "md_site_spread_hopped",
+                       "md_site_visits_hopped"]].round(3)
+except ImportError as exc:
+    result = str(exc)          # pymatgen-analysis-diffusion is an extra
+result"""),
+
+    ("markdown", """\
+The vibration amplitude is unchanged between the two runs, because it *is*
+unchanged — the same noise was added to both. What moved is the visit count, and
+it moved by exactly the amount it should: one ion of four found two sites
+instead of one, so the mean over four ions is (2+1+1+1)/4 = **1.25**.
+
+That is the number an MSD cannot give you. Read the two together: a large spread
+with visits near 1.0 is a hot, soft, non-conducting solid, and a small spread
+with visits above 1.0 is a well-ordered ionic conductor doing its job.
+
+```{note}
+`n_sites` defaults to the number of atoms of that species in the cell, which is
+right when each ion has its own site and wrong for an interstitial mechanism
+where there are more wells than ions. k-means needs the count in advance and
+cannot discover it, so it is a parameter rather than a result — if you expect
+interstitials, say how many.
+```"""),
 ]

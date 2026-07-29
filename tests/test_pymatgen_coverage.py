@@ -35,7 +35,7 @@ warnings.filterwarnings("ignore")
 #: Modules covered on this branch. Raise it as batches land; a drop is a
 #: regression. A count rather than a fraction, because the denominator moves
 #: when pymatgen adds modules and a ratchet that slips on rounding is not one.
-COVERED_FLOOR = 111
+COVERED_FLOOR = 107
 
 #: The pymatgen the floor was recorded against. matverse supports two, and they
 #: ship different module trees — 162 modules in scope against 134 — so a count
@@ -61,6 +61,20 @@ def matverse_source() -> str:
 
 
 class TestTheMapIsHonest:
+    def test_native_is_coverage_and_not_a_place_to_put_verdicts(self):
+        """NATIVE means matverse computes the thing by another route, and it
+        counts toward the headline number. A module we decided *not* to wrap
+        is a gap with a reason, which is BLOCKED and does not count. The two
+        drifted together once — seven 'not wrapped:' verdicts had accumulated
+        in NATIVE and were being reported as covered — so the distinction is
+        enforced here rather than left to whoever edits the map next."""
+        from matverse._coverage import NATIVE
+        verdicts = sorted(k for k, v in NATIVE.items()
+                          if v.strip().lower().startswith("not wrapped"))
+        assert not verdicts, (
+            f"these read as reasons for not wrapping, so they belong in "
+            f"BLOCKED where they do not inflate the covered count: {verdicts}")
+
     def test_every_module_is_classified(self, report):
         """TODO is a classification. Being absent from the file is not."""
         assert report["total"] == sum(report["buckets"].values())

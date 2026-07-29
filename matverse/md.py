@@ -663,7 +663,7 @@ def _quench(cell, adaptor, calculator, melt_t, final_t, melt_steps,
     return adaptor.get_structure(atoms)
 
 
-__all__ = ["run", "sweep", "rdf", "conductivity", "melt_quench",
+__all__ = ["run", "sweep", "rdf", "sites", "conductivity", "melt_quench",
            "register_batched", "batched_available"]
 
 
@@ -804,3 +804,122 @@ def _first_shell(grid, curve, coordination):
     turning = np.argmax(falling > 0) if (falling > 0).any() else tail.size - 1
     minimum = peak + int(turning)
     return float(grid[peak]), float(coordination[minimum])
+
+
+@register_function(
+    aliases=["md sites", "occupied sites", "cluster trajectory",
+             "where do the ions sit", "site occupation", "hopping sites",
+             "kmeans pbc", "trajectory clustering"],
+    category="md",
+    description="Cluster where one species actually spent its time during a "
+                "run, recovering the sites it occupied and how far it rattled "
+                "about them.",
+    requires={"structures": ["{source}"]},
+    produces={"obs": ["md_sites_{species}_{level}",
+                      "md_site_spread_{species}_{level}",
+                      "md_site_visits_{species}_{level}"]},
+    prerequisites=["mv.md.run"],
+    examples=["mv.md.sites(md, trajectories, species='Li')",
+              "mv.md.sites(md, trajectories, species='Li', n_sites=8)"],
+    related=["mv.md.run", "mv.md.rdf", "mv.neb.percolation",
+             "mv.md.conductivity"],
+    notes="A mean-squared displacement says how far the ions went. It cannot "
+          "say whether they went there by rattling harder in the same well or "
+          "by hopping between wells, and those are different materials. "
+          "Clustering the sampled positions separates them: a vibrating ion "
+          "gives tight clusters and each ion keeps to one of them, while a "
+          "hopping ion visits several.\n\n"
+          "obs['md_site_spread'] is the RMS distance from a position to its "
+          "own site centre, in angstroms — a thermal vibration amplitude, of "
+          "order 0.1 A for a solid well below melting. "
+          "obs['md_site_visits'] is the mean number of distinct sites one "
+          "atom of the species was found at over the run: 1.0 means nothing "
+          "hopped, and anything above it counts hops the MSD alone would have "
+          "reported as a larger number without saying why.\n\n"
+          "**The trajectory is an argument**, on the same reasoning as "
+          "mv.md.rdf: mv.md.run does not keep one. Pass fractional "
+          "coordinates shaped (frames, atoms, 3).\n\n"
+          "n_sites defaults to the number of atoms of that species in the "
+          "cell, which is the right guess when each ion has its own site and "
+          "the wrong one for an interstitial mechanism where there are more "
+          "wells than ions. k-means needs the count in advance and cannot "
+          "discover it, so this is a parameter rather than a result.",
+)
+def sites(md: AnnData, trajectories, species: str, source: str = "input",
+          level: str = "md", n_sites: int | None = None,
+          max_iterations: int = 200, key_added: str | None = None) -> None:
+    """Cluster a trajectory into occupied sites. Deposits; returns ``None``."""
+    try:
+        from pymatgen.analysis.diffusion.aimd.clustering import KmeansPBC
+    except ImportError as exc:                             # pragma: no cover
+        raise ImportError(
+            f"mv.md.sites needs pymatgen-analysis-diffusion, one of "
+            f"pymatgen's own add-on packages. Install it with `pip install "
+            f"pymatgen-analysis-diffusion`. ({exc})") from exc
+
+    frames = np.asarray(trajectories, dtype=float)
+    if frames.ndim != 3 or frames.shape[2] != 3:
+        raise ValueError(f"trajectories must be (frames, atoms, 3) fractional "
+                         f"coordinates, got shape {frames.shape}")
+
+    name = key_added or f"{species}_{level}"
+    counts, spreads, visits = [], [], []
+
+    for index, structure in enumerate(structures(md, source)):
+        mobile = [i for i, site in enumerate(structure)
+                  if site.specie.symbol == species]
+        if not mobile or index >= len(frames) and frames.shape[0] == md.n_obs:
+            counts.append(0)
+            spreads.append(np.nan)
+            visits.append(np.nan)
+            continue
+        if frames.shape[1] != len(structure):
+            raise ValueError(
+                f"row {index}: the trajectory has {frames.shape[1]} atoms and "
+                f"the structure has {len(structure)}; they must be the same "
+                f"cell")
+
+        # (frames, mobile, 3) -> one point per atom per frame, but remember
+        # which atom each point came from: the number of distinct sites *one
+        # atom* visited is the hop count, and pooling the atoms would lose it.
+        points = frames[:, mobile, :] % 1.0
+        flat = points.reshape(-1, 3)
+        k = int(n_sites) if n_sites else len(mobile)
+        k = max(1, min(k, len(flat)))
+
+        try:
+            centroids, labels, _ = KmeansPBC(
+                structure.lattice, max_iterations=max_iterations
+            ).cluster(flat, k)
+        except Exception:
+            counts.append(0)
+            spreads.append(np.nan)
+            visits.append(np.nan)
+            continue
+
+        labels = np.asarray(labels).reshape(points.shape[0], len(mobile))
+        centroids = np.asarray(centroids, dtype=float) % 1.0
+
+        # Distance from each sampled position to the centre of its own site,
+        # through the lattice rather than in fractional coordinates, so the
+        # number is an angstrom a person can compare to a thermal amplitude.
+        assigned = centroids[labels.reshape(-1)]
+        deltas = flat - assigned
+        deltas -= np.round(deltas)
+        cartesian = deltas @ np.asarray(structure.lattice.matrix, dtype=float)
+        spreads.append(float(np.sqrt((cartesian ** 2).sum(axis=1).mean())))
+        counts.append(int(len(np.unique(labels))))
+        visits.append(float(np.mean([len(np.unique(labels[:, atom]))
+                                     for atom in range(len(mobile))])))
+
+    md.obs[f"md_sites_{name}"] = np.array(counts, dtype=int)
+    md.obs[f"md_site_spread_{name}"] = np.array(spreads, dtype=float)
+    md.obs[f"md_site_visits_{name}"] = np.array(visits, dtype=float)
+    md.uns.setdefault("md_sites", {})[name] = {
+        "species": species, "n_sites": n_sites, "n_frames": int(frames.shape[0]),
+        "spread_unit": "angstrom",
+        "visits_meaning": "mean distinct sites visited by one atom; 1.0 means "
+                          "no hopping",
+    }
+    record(md, "md.sites", species=species, source=source, level=level,
+           n_sites=n_sites, key_added=name)
