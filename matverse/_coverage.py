@@ -142,6 +142,8 @@ WRAPPED: Dict[str, List[str]] = {
     "analysis.diffusion.neb.io": ["mv.dft.write_inputs"],
     "analysis.diffusion.neb.periodic_dijkstra": ["mv.neb.percolation"],
     "analysis.alloys.core": ["mv.gen.alloy_pairs"],
+    "analysis.defects.corrections.freysoldt":
+        ["mv.thermo.defect_formation"],
     "analysis.diffusion.aimd.clustering": ["mv.md.sites"],
     "analysis.structure_matcher": ["mv.pp.dedup", "mv.gen.validate"],
     "analysis.surface_analysis": ["mv.surf.surface_energy_chempot"],
@@ -365,9 +367,9 @@ NATIVE: Dict[str, str] = {
         "VBM and a gap. Built from what matverse can compute offline, its "
         "formation energies reduce to E_defect - E_bulk + chempot, which is "
         "exactly what mv.thermo.defect_formation already does; the half that "
-        "would differ is the image-charge correction, and that needs the "
-        "electrostatic potential from a real DFT run - which is recorded "
-        "separately under analysis.defects.corrections",
+        "would differ is the image-charge correction, which mv.thermo.defect_formation "
+        "now applies from dielectric= alone. Only the potential-alignment "
+        "half still needs a LOCPOT",
     "phonon.bandstructure":
         "mv.prop.phonon builds the dynamical matrix from ASE displacements and "
         "deposits frequencies on the grid convention, so pymatgen's phonon "
@@ -493,13 +495,6 @@ BLOCKED: Dict[str, str] = {
         "SOCSpillage compares two WAVECARs, with and without spin-orbit "
         "coupling. Those are large binary files from two real runs and "
         "there are none here.",
-    "analysis.defects.corrections.freysoldt":
-        "matverse reads external first-principles output as a matter of "
-        "course - mv.dft.read_outputs, mv.dft.read_dos, mv.elec.read_bands "
-        "and mv.elec.cohp all take a directory of runs - so this is not "
-        "blocked by what matverse is. It is blocked by verification: the "
-        "correction is computed from the electrostatic potential (LOCPOT) "
-        "of the defective and pristine supercells. No LOCPOT here.",
     "analysis.defects.corrections.kumagai":
         "matverse reads external first-principles output as a matter of "
         "course - mv.dft.read_outputs, mv.dft.read_dos, mv.elec.read_bands "

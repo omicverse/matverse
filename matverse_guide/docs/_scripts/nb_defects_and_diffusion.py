@@ -230,8 +230,61 @@ run. Use it on the oxides and halides where a Fermi level means something.
 `mv.thermo.defect_formation` **warns and returns NaN** when no chemical
 potential is given, rather than assuming one. A defect creates or destroys
 atoms, and what they cost is not derivable from the defective cell.
-```
+```"""),
 
+    ("markdown", """\
+### The charged states are lying, and by how much
+
+Everything above ignores that a charged defect in a periodic cell interacts with
+its own images. That interaction stabilises it spuriously, and in a small
+supercell the error is tenths of an eV — enough to move a transition level and
+change which charge state looks stable.
+
+Pass a dielectric constant and the electrostatic half of the Freysoldt
+correction is applied. It needs only the cell, the charge and epsilon — no
+LOCPOT, no extra run:"""),
+
+    ("code", """\
+import numpy as np
+
+uncorrected = defects.copy()
+mv.thermo.defect_formation(uncorrected, host=copper, level="emt",
+                           chempot={"Cu": -3.5}, band_gap=1.5)
+
+corrected = defects.copy()
+mv.thermo.defect_formation(corrected, host=copper, level="emt",
+                           chempot={"Cu": -3.5}, band_gap=1.5, dielectric=10.0)
+
+grid = mv.grid_of(corrected, "formation_vs_fermi")
+a = uncorrected.obsm["formation_vs_fermi_emt"][0]
+b = corrected.obsm["formation_vs_fermi_emt"][0]
+
+for target in (0.0, 0.75, 1.5):
+    i = int(np.argmin(abs(grid - target)))
+    print(f"E_F = {grid[i]:.2f} eV   uncorrected {a[i]:8.4f}   "
+          f"corrected {b[i]:8.4f}   shift {b[i] - a[i]:+.4f}")"""),
+
+    ("markdown", """\
+Zero shift at the valence band maximum and a growing one across the gap, which
+is exactly right: at the VBM every charge state costs the same, so the neutral
+one wins and has no image charge to correct. Further up, charged states take
+over and each is corrected by its own $q^2$ term.
+
+The correction scales as $q^2/(\\epsilon L)$ — three things you can check rather
+than trust. Double epsilon and it halves; go from a 2×2×2 to a 3×3×3 supercell
+and it falls by 3/2; set $q=0$ and it vanishes. All three are asserted in the
+test suite.
+
+```{warning}
+This is **half** of the Freysoldt correction. The other half is a
+potential-alignment term computed from the planar-averaged electrostatic
+potential of both the defective and the pristine cell — a LOCPOT — and matverse
+does not have one. `uns['defect_thermodynamics']['correction_terms']` says so on
+every run rather than leaving you to infer it. For the complete correction, hand
+your LOCPOTs to doped or pydefect.
+```"""),
+
+    ("markdown", """\
 ## What it costs to move
 
 Formation says how many vacancies there are. Migration says how fast they move,

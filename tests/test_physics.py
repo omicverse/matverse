@@ -557,3 +557,110 @@ class TestVibrationalThermodynamics:
     def test_the_temperature_is_recorded(self, vibrating):
         mv.prop.free_energy(vibrating, level="emt", temperature=456.0)
         assert vibrating.uns["thermal"]["emt"]["temperature"] == 456.0
+
+
+def _has_defects_addon() -> bool:
+    try:
+        import pymatgen.analysis.defects.corrections.freysoldt  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+@pytest.mark.skipif(not _has_defects_addon(),
+                    reason="pymatgen-analysis-defects is an optional extra")
+class TestImageChargeCorrection:
+    """The electrostatic half of the Freysoldt correction.
+
+    It needs only the cell, the charge and the dielectric constant — no LOCPOT
+    — so its three scalings are exact and can be asserted rather than eyeballed:
+    q squared, one over epsilon, one over the cell length. The half that does
+    need a LOCPOT is the potential alignment, and it is absent by design.
+    """
+
+    @staticmethod
+    def _system(repeat):
+        from pymatgen.core import Lattice, Structure
+        fcc = Structure(Lattice.cubic(3.61), ["Cu"] * 4,
+                        [[0, 0, 0], [0, .5, .5], [.5, 0, .5], [.5, .5, 0]])
+        fcc.make_supercell(list(repeat))
+        host = mv.data.from_structures([fcc])
+        mv.calc.energy(host, level="emt")
+        defects = mv.pp.defects(host, kinds=("vacancy",))
+        mv.calc.energy(defects, level="emt")
+        return defects, host
+
+    @staticmethod
+    def _curve(defects, host, dielectric, gap=2.0):
+        out = defects.copy()
+        mv.thermo.defect_formation(out, host=host, level="emt",
+                                   chempot={"Cu": -3.5}, band_gap=gap,
+                                   dielectric=dielectric)
+        return out, out.obsm["formation_vs_fermi_emt"][0]
+
+    def test_without_a_dielectric_nothing_changes(self):
+        """The default has to stay exactly what it was, or every existing
+        number silently moves."""
+        defects, host = self._system((2, 2, 2))
+        plain, before = self._curve(defects, host, None)
+        assert plain.uns["defect_thermodynamics"]["image_charge_correction"] \
+            is False
+        assert plain.uns["defect_thermodynamics"]["dielectric"] is None
+        assert np.isfinite(before).all()
+
+    def test_the_correction_halves_when_epsilon_doubles(self):
+        """1/epsilon, asserted at the top of the gap where the most charged
+        state is the stable one and the envelope is that state's line."""
+        defects, host = self._system((2, 2, 2))
+        _, plain = self._curve(defects, host, None)
+        _, ten = self._curve(defects, host, 10.0)
+        _, twenty = self._curve(defects, host, 20.0)
+        # rel=1e-4, not tighter: perform_es_corr converges the Madelung sum
+        # numerically with mad_tol=1e-4, so the scaling is exact in the
+        # algebra and carries about a part in a million in the arithmetic.
+        assert (ten[-1] - plain[-1]) == \
+            pytest.approx(2.0 * (twenty[-1] - plain[-1]), rel=1e-4)
+
+    def test_the_correction_is_positive(self):
+        """It removes a spurious stabilisation, so it can only raise the
+        formation energy."""
+        defects, host = self._system((2, 2, 2))
+        _, plain = self._curve(defects, host, None)
+        _, corrected = self._curve(defects, host, 10.0)
+        assert (corrected >= plain - 1e-9).all()
+        assert corrected[-1] > plain[-1]
+
+    def test_a_bigger_cell_needs_less_correcting(self):
+        """1/L. The image interaction is the reason small supercells lie, and
+        the correction has to shrink as the cell grows or it is not that."""
+        small, host_s = self._system((2, 2, 2))
+        big, host_b = self._system((3, 3, 3))
+        _, s_plain = self._curve(small, host_s, None)
+        _, s_corr = self._curve(small, host_s, 10.0)
+        _, b_plain = self._curve(big, host_b, None)
+        _, b_corr = self._curve(big, host_b, 10.0)
+        shift_small = s_corr[-1] - s_plain[-1]
+        shift_big = b_corr[-1] - b_plain[-1]
+        assert shift_big < shift_small
+        # cells are 2a and 3a, so the ratio of the shifts is 3/2
+        assert shift_small / shift_big == pytest.approx(1.5, rel=0.02)
+
+    def test_the_neutral_state_is_never_corrected(self):
+        """q = 0 has no image charge, so at the valence band maximum — where
+        every charge state costs the same and the neutral one therefore wins —
+        the corrected and uncorrected envelopes must coincide."""
+        defects, host = self._system((2, 2, 2))
+        _, plain = self._curve(defects, host, None)
+        _, corrected = self._curve(defects, host, 10.0)
+        assert corrected[0] == pytest.approx(plain[0], abs=1e-9)
+
+    def test_it_says_which_half_it_did(self):
+        """The potential-alignment term is missing and must be named, not
+        left for the reader to discover."""
+        defects, host = self._system((2, 2, 2))
+        out, _ = self._curve(defects, host, 10.0)
+        record = out.uns["defect_thermodynamics"]
+        assert record["image_charge_correction"] is True
+        assert record["dielectric"] == 10.0
+        assert "LOCPOT" in record["correction_terms"]
+        assert record["correction_error"] is None

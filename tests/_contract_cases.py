@@ -646,6 +646,9 @@ def cases(tmp):
         (mv.thermo.defect_formation, defective, (),
          {"host": one_metal(), "level": "emt", "chempot": {"Cu": -3.7},
           "band_gap": 1.2}),
+        (mv.thermo.defect_formation, defective, (),
+         {"host": one_metal(), "level": "emt", "chempot": {"Cu": -3.7},
+          "band_gap": 1.2, "dielectric": 10.0}),
 
         (mv.neb.percolation, one_metal, ("Cu",), {}),
         (mv.neb.hops, one_metal, ("Cu",), {"returns": "new"}),

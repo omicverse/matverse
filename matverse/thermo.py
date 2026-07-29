@@ -364,7 +364,9 @@ def chempot_limits(md: AnnData, level: str = "emt", source: str = "input",
               "uns": ["grids", "defect_thermodynamics"]},
     prerequisites=["mv.pp.defects", "mv.calc.relax"],
     examples=["mv.thermo.defect_formation(defective, host=md, level='pbe', "
-              "chempot={'Al': -3.7}, band_gap=1.2)"],
+              "chempot={'Al': -3.7}, band_gap=1.2)",
+              "mv.thermo.defect_formation(defective, host=md, level='pbe', "
+              "chempot={'Al': -3.7}, band_gap=1.2, dielectric=9.1)"],
     related=["mv.pp.defects", "mv.dft.read_dos"],
     notes="Enumerating a defect and knowing whether it forms are different "
           "questions, and this is the second one. The formation energy depends "
@@ -372,16 +374,30 @@ def chempot_limits(md: AnnData, level: str = "emt", source: str = "input",
           "whatever was added or removed, so it is a line rather than a number "
           "— stored on the grid axis against the Fermi level, with the lowest "
           "charge state at each point giving the stable charge.\n\n"
-          "No finite-size correction is applied. A charged defect in a periodic "
-          "cell interacts with its own images, and the image charge shifts "
-          "formation energies by tenths of an eV for a small supercell. doped "
-          "and pydefect implement the Freysoldt and Kumagai corrections "
-          "properly; this is the uncorrected quantity and says so, so use it "
-          "to rank rather than to quote.",
+          "**Pass dielectric= to correct for the image charge.** A charged "
+          "defect in a periodic cell interacts with its own periodic images, "
+          "which lowers its energy spuriously by tenths of an eV in a small "
+          "supercell — enough to change which charge state looks stable. With "
+          "a dielectric constant this applies the electrostatic half of the "
+          "Freysoldt correction, which needs only the cell, the charge and "
+          "epsilon: it scales as q^2, as 1/epsilon, and as 1/L, so it matters "
+          "most exactly where supercells are smallest.\n\n"
+          "It is half of the correction, and the half that is left out is "
+          "named rather than glossed. Freysoldt is an image-charge term plus "
+          "a potential-alignment term, and the second one needs the planar-"
+          "averaged electrostatic potential — a LOCPOT — from both the "
+          "defective and the pristine run. Supply that and doped or pydefect "
+          "will do the whole thing; what is here is exact for the part it "
+          "covers and absent for the part it does not, which is recorded in "
+          "uns['defect_thermodynamics']['correction_terms'].\n\n"
+          "Without dielectric= nothing is corrected and the uns flag says so, "
+          "which is the older behaviour and still the right one for ranking "
+          "neutral defects.",
 )
 def defect_formation(defective: AnnData, host: AnnData, level: str = "emt",
                      chempot: dict | None = None, band_gap: float = 2.0,
-                     charges=(-2, -1, 0, 1, 2), n_points: int = 200) -> None:
+                     charges=(-2, -1, 0, 1, 2), n_points: int = 200,
+                     dielectric: float | None = None) -> None:
     """Defect formation energy against the Fermi level, per charge state."""
     from ._core import deposit_grid
 
@@ -411,6 +427,33 @@ def defect_formation(defective: AnnData, host: AnnData, level: str = "emt",
     neutral = np.full(defective.n_obs, np.nan)
     stable = [""] * defective.n_obs
     missing_chempot: set[str] = set()
+    cells = structures(defective, "input") if dielectric is not None else None
+    corrections = np.zeros((defective.n_obs, len(charges)))
+    correction_error = ""
+
+    if dielectric is not None:
+        try:
+            from pymatgen.analysis.defects.corrections.freysoldt import (
+                perform_es_corr)
+            from pymatgen.analysis.defects.utils import QModel
+        except ImportError as exc:                         # pragma: no cover
+            raise ImportError(
+                f"dielectric= needs pymatgen-analysis-defects for the "
+                f"Freysoldt image-charge term. Install it with `pip install "
+                f"pymatgen-analysis-defects`, or leave dielectric unset for "
+                f"the uncorrected energies. ({exc})") from exc
+        model = QModel()
+        for i, cell in enumerate(cells):
+            for j, q in enumerate(charges):
+                if int(q) == 0:
+                    continue
+                try:
+                    corrections[i, j] = float(perform_es_corr(
+                        cell.lattice, q=int(q), dielectric=float(dielectric),
+                        q_model=model))
+                except Exception as exc:                   # pragma: no cover
+                    correction_error = f"{type(exc).__name__}: {exc}"
+                    corrections[i, j] = np.nan
 
     for i in range(defective.n_obs):
         bulk = host_energy.get(parents[i], np.nan)
@@ -432,8 +475,12 @@ def defect_formation(defective: AnnData, host: AnnData, level: str = "emt",
 
         base = float(defect_energy[i]) - float(bulk) + exchange
         neutral[i] = base
-        # E_f(q, E_F) = base + q * E_F, the uncorrected charged formation energy.
-        per_charge = np.vstack([base + q * fermi for q in charges])
+        # E_f(q, E_F) = base + q * E_F + E_img(q), where E_img removes the
+        # spurious interaction of the charged defect with its own periodic
+        # images. It is positive, zero at q = 0, and zero throughout when no
+        # dielectric constant was given.
+        per_charge = np.vstack([base + q * fermi + corrections[i, j]
+                                for j, q in enumerate(charges)])
         curves[i] = per_charge.min(axis=0)
         stable[i] = str(charges[int(np.argmin(per_charge[:, 0]))])
 
@@ -447,7 +494,12 @@ def defect_formation(defective: AnnData, host: AnnData, level: str = "emt",
         "charges": [int(q) for q in charges],
         "chempot": chempot,
         "missing_chempot": sorted(missing_chempot),
-        "image_charge_correction": False,
+        "image_charge_correction": dielectric is not None,
+        "dielectric": None if dielectric is None else float(dielectric),
+        "correction_terms": ("Freysoldt electrostatic (image-charge) only; "
+                             "the potential-alignment term needs a LOCPOT"
+                             if dielectric is not None else None),
+        "correction_error": correction_error or None,
         "note": "uncorrected for periodic image interaction; doped and "
                 "pydefect implement Freysoldt and Kumagai properly",
     }
