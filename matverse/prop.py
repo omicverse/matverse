@@ -14,6 +14,8 @@ export.
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 from anndata import AnnData
 
@@ -1264,7 +1266,7 @@ def compare_grids(md: AnnData, quantity: str, a: str, b: str) -> None:
     record(md, "prop.compare_grids", quantity=quantity, a=a, b=b)
 
 
-__all__ = ["xrd", "rdf", "neutron", "elastic", "eos", "dimensionality",
+__all__ = ["xrd", "rdf", "neutron", "tem", "elastic", "eos", "dimensionality",
            "phonon", "free_energy", "quasiharmonic",
            "nmr", "efg", "piezoelectric", "dielectric", "slme",
            "cost", "supply_risk",
@@ -1595,3 +1597,91 @@ def _debye_heat_capacity(temperatures: np.ndarray, theta: float,
         out[i] = 9.0 * n_atoms * _K_B * (float(temperature) / theta) ** 3 \
             * integral
     return out
+
+
+@register_function(
+    aliases=["tem", "electron diffraction", "saed", "selected area diffraction",
+             "tem pattern", "zone axis"],
+    category="prop",
+    description="Simulate selected-area electron diffraction: the reflections "
+                "excited along a zone axis, reduced to a ring profile on the "
+                "shared grid convention.",
+    requires={"structures": ["{source}"]},
+    produces={"obsm": ["tem_{level}"], "uns": ["grids"],
+              "obs": ["tem_n_reflections_{level}", "tem_strongest_{level}",
+                      "tem_zone_axis"],
+              "levels": ["{level}"]},
+    examples=["mv.prop.tem(md)",
+              "mv.prop.tem(md, beam_direction=(1, 1, 1), voltage=300)"],
+    related=["mv.prop.xrd", "mv.prop.neutron", "mv.prop.compare_grids"],
+    notes="A TEM pattern is spots on a plane, not a curve, and a plane of "
+          "spots is not a shape that compares across materials — two crystals "
+          "on the same zone axis have different spots in different places. "
+          "What is stored is the **ring profile**: intensity against the "
+          "magnitude of the scattering vector, which is what a "
+          "polycrystalline selected-area pattern actually looks like and what "
+          "can be put on one axis with an X-ray or neutron pattern.\\n\\n"
+          "obs keeps the two facts the reduction loses: how many reflections "
+          "were excited, and the strongest one's Miller indices. The zone axis "
+          "is recorded because the pattern is meaningless without it — the "
+          "same crystal down [001] and [111] gives different patterns, and "
+          "that is the point of choosing an axis.\\n\\n"
+          "Electron scattering factors are much larger than X-ray ones and "
+          "multiple scattering is the rule rather than the exception, so a "
+          "kinematic intensity like this one orders reflections correctly and "
+          "should not be fitted against.",
+)
+def tem(md: AnnData, source: str = "input", level: str = "calc",
+        beam_direction: tuple = (0, 0, 1), voltage: float = 200.0,
+        r_max: float = 2.0, step: float = 0.01, sigma: float = 0.02) -> None:
+    """Electron diffraction ring profiles on a shared grid. Deposits."""
+    from pymatgen.analysis.diffraction.tem import TEMCalculator
+
+    grid = np.arange(step, r_max + step / 2, step)
+    calculator = TEMCalculator(voltage=voltage,
+                               beam_direction=tuple(beam_direction))
+    axis = ",".join(str(int(x)) for x in beam_direction)
+
+    rows = []
+    counts = np.full(md.n_obs, np.nan)
+    strongest = np.empty(md.n_obs, dtype=object)
+    reasons: list[str] = []
+    failed = 0
+
+    for i, structure in enumerate(structures(md, source)):
+        strongest[i] = ""
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                pattern = calculator.get_pattern(structure)
+            intensity = np.asarray(
+                pattern["Intensity (norm)"], dtype=float)
+            spacing = np.asarray(
+                pattern["Interplanar Spacing"], dtype=float)
+            keep = np.isfinite(intensity) & np.isfinite(spacing) & \
+                (spacing > 0) & (intensity > 1e-6 * max(intensity.max(), 1e-30))
+            g = 1.0 / spacing[keep]
+            weight = intensity[keep]
+            counts[i] = int(keep.sum())
+            if keep.any():
+                best = np.argmax(weight)
+                strongest[i] = str(pattern["(hkl)"].to_numpy()[keep][best])
+            rows.append(_broaden(g, weight, grid, sigma, True))
+        except Exception as exc:
+            reasons.append(f"{structure.composition.reduced_formula}: "
+                           f"{type(exc).__name__}: {exc}".split("\n")[0])
+            rows.append(np.full(len(grid), np.nan))
+            failed += 1
+
+    deposit_grid(md, "tem", level, np.vstack(rows), grid,
+                 unit="1/angstrom", beam_direction=axis, voltage=voltage,
+                 normalized=True)
+    md.obs[f"tem_n_reflections_{level}"] = counts
+    md.obs[f"tem_strongest_{level}"] = strongest.astype(str)
+    md.obs["tem_zone_axis"] = axis
+    set_level(md, level, kind="model", method=f"electron diffraction ({voltage} kV)",
+              reference=None, surrogate=False, license=None, uncertainty=None,
+              source=source, beam_direction=axis, n_failed=failed,
+              failures=reasons[:5])
+    record(md, "prop.tem", source=source, level=level,
+           beam_direction=axis, voltage=voltage)

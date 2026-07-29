@@ -214,6 +214,30 @@ mdata = mv.multi.to_mudata(md, sites)     # needs matverse[multi]
 Optional throughout. matverse's operations take `AnnData`, and the sites object
 is useful without ever being assembled."""),
 
+    ("code", """\
+mv.prop.tem(md, r_max=1.2, step=0.02)
+md.obs[["formula", "tem_n_reflections_calc", "tem_strongest_calc",
+        "tem_zone_axis"]]"""),
+
+    ("markdown", """\
+A TEM pattern is spots on a plane, and a plane of spots does not compare across
+materials — two crystals on the same zone axis put different spots in different
+places. What goes into `obsm` is the **ring profile**: intensity against the
+magnitude of the scattering vector, which is what a polycrystalline
+selected-area pattern looks like and what can share an axis with an X-ray or
+neutron pattern.
+
+`obs` keeps the two facts the reduction loses — how many reflections were
+excited, and the strongest one's Miller indices — and the **zone axis**, without
+which the pattern means nothing.
+
+```{note}
+Those columns show the F-centring rule rather than assert it. A face-centred
+lattice allows only all-even or all-odd `hkl`, one reflection in four, so an fcc
+metal keeps a quarter of what a simple cubic cell does — and (010), extinct in
+fcc, is the brightest spot in simple cubic.
+```"""),
+
     ("markdown", """\
 ## A result computed somewhere else
 

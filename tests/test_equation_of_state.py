@@ -348,3 +348,56 @@ class TestNeutronDiffraction:
                 assert np.min(np.abs(xrd_peaks - angle)) < 0.5, (
                     f"neutron peak at {angle} has no X-ray counterpart in "
                     f"{xrd_peaks}")
+
+
+class TestElectronDiffraction:
+    """The F-centring extinction rule, from the intensities."""
+
+    @staticmethod
+    def _crystals():
+        from pymatgen.core import Lattice, Structure
+        return [
+            Structure(Lattice.cubic(3.61), ["Cu"] * 4,
+                      [[0, 0, 0], [0, .5, .5], [.5, 0, .5], [.5, .5, 0]]),
+            Structure(Lattice.cubic(3.0), ["Po"], [[0, 0, 0]]),
+        ]
+
+    @pytest.fixture(scope="class")
+    def patterns(self):
+        md = mv.data.from_structures(self._crystals())
+        mv.pp.describe(md)
+        mv.prop.tem(md, r_max=1.2, step=0.02)
+        return md
+
+    def test_face_centring_extinguishes_three_quarters_of_them(self, patterns):
+        """A face-centred lattice allows only all-even or all-odd hkl, which is
+        one reflection in four. Simple cubic extinguishes none."""
+        counts = patterns.obs["tem_n_reflections_calc"].to_numpy(dtype=float)
+        assert counts[0] / counts[1] == pytest.approx(0.25, abs=0.02)
+
+    def test_the_strongest_reflection_obeys_the_rule(self, patterns):
+        """(010) is extinct in fcc and allowed in simple cubic, so the two
+        crystals disagree about their brightest spot."""
+        strongest = list(patterns.obs["tem_strongest_calc"])
+        assert strongest[0] == "(0, -2, 0)"
+        assert strongest[1] == "(0, -1, 0)"
+
+    def test_the_zone_axis_is_recorded(self, patterns):
+        """The same crystal down [001] and [111] gives different patterns, so
+        a pattern without its axis is not a result."""
+        assert set(patterns.obs["tem_zone_axis"]) == {"0,0,1"}
+        assert patterns.uns["grids"]["tem"]["beam_direction"] == "0,0,1"
+
+    def test_a_different_zone_axis_gives_a_different_pattern(self):
+        md = mv.data.from_structures(self._crystals()[:1])
+        mv.pp.describe(md)
+        mv.prop.tem(md, r_max=1.2, step=0.02, beam_direction=(1, 1, 1),
+                    level="along111")
+        assert md.obs["tem_zone_axis"].iloc[0] == "1,1,1"
+        assert md.obs["tem_strongest_along111"].iloc[0] != "(0, -2, 0)"
+
+    def test_nothing_failed_silently(self, patterns):
+        """The first version of this function raised NameError on every
+        structure because `warnings` was not imported, and a bare except
+        turned that into NaN. The count is now reported."""
+        assert mv.level_info(patterns, "calc")["n_failed"] == 0

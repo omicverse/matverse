@@ -85,6 +85,7 @@ WRAPPED: Dict[str, List[str]] = {
     "analysis.hhi": ["mv.prop.supply_risk"],
     "analysis.quasiharmonic": ["mv.prop.quasiharmonic"],
     "analysis.diffraction.neutron": ["mv.prop.neutron"],
+    "analysis.diffraction.tem": ["mv.prop.tem"],
     "analysis.graphs": ["mv.prop.dimensionality", "mv.env.bonds"],
     "analysis.interface_reactions": ["mv.iface.reactivity"],
     "analysis.interfaces.coherent_interfaces": ["mv.iface.build"],
@@ -326,6 +327,13 @@ BLOCKED: Dict[str, str] = {
     "analysis.defects.corrections.kumagai":
         "needs site potentials from a real DFT run",
     "analysis.defects.ccd": "needs DFT potential energy surfaces",
+    "analysis.defects.finder":
+        "DefectSiteFinder needs dscribe, which resolves to numba 0.53 here - a "
+        "2021 release predating both numpy 2 and Python 3.12, so installing it "
+        "would break the environment for one module",
+    "analysis.chemenv.coordination_environments.voronoi":
+        "the Voronoi construction ChemEnv uses internally; reached only "
+        "through compute_structure_environments, never as an entry point",
     "analysis.defects.recombination": "needs DFT electron-phonon coupling",
     "analysis.xps": "needs a projected density of states, not a total one",
     "analysis.excitation": "needs a DFT excited-state calculation",

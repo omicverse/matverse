@@ -1,5 +1,45 @@
 # Release notes
 
+## v0.1.32
+
+**90 of 136 in-scope pymatgen modules, 66.2%.** 27 open gaps, 19 blocked.
+
+### `mv.prop.tem`
+
+A TEM pattern is spots on a plane, and a plane of spots does not compare across
+materials — two crystals on the same zone axis put different spots in different
+places. What is stored is the ring profile: intensity against the magnitude of
+the scattering vector, which is what a polycrystalline selected-area pattern
+looks like and what can share an axis with an X-ray or neutron pattern.
+
+`obs` keeps what the reduction loses — how many reflections were excited, the
+strongest one's Miller indices, and the zone axis, without which the pattern
+means nothing.
+
+The tests show the F-centring rule rather than assert it. A face-centred lattice
+allows only all-even or all-odd `hkl`, one reflection in four: fcc copper keeps
+**120 of the 483** a simple cubic cell keeps, and (010) — extinct in fcc — is
+the brightest spot in simple cubic.
+
+### The failure mode this project already documents, again
+
+The first version returned NaN for every structure. `prop.py` does not import
+`warnings`, so `warnings.catch_warnings()` raised `NameError`, and a bare
+`except Exception` turned that into a silent NaN.
+
+That is the same bug the defects tutorial has documented since v0.1.11, where
+`SpacegroupAnalyzer` was imported in the caller rather than the helper. The
+function now records why each structure failed, and a test asserts the count is
+zero.
+
+### dscribe, priced
+
+`analysis.defects.finder` needs `DefectSiteFinder`, which needs dscribe. `uv`
+resolves dscribe in this environment to **numba 0.53.1** — a 2021 release
+predating both numpy 2 and Python 3.12. Installing it to gain one module would
+break the environment, so it is recorded as blocked with the resolution rather
+than left as "not installed".
+
 ## v0.1.31
 
 **89 of 136 in-scope pymatgen modules, 65.4%.** 29 open gaps, 18 blocked.
