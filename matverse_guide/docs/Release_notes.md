@@ -1,5 +1,37 @@
 # Release notes
 
+## v0.1.27
+
+**73 of 142 in-scope pymatgen modules, 51.4%.**
+
+### `mv.mol.match` compared a fingerprint, not the molecules
+
+It grouped molecules by the sorted list of pairwise distances between their
+**heavy atoms**. That is invariant to rotation, translation and relabelling —
+and it is not a proof of congruence. Two different geometries can share a
+distance spectrum, and hydrogens were ignored entirely, so every CH₄ had the
+same one-atom fingerprint no matter where its hydrogens sat.
+
+It now superposes: Kabsch for the rotation, Hungarian assignment over the atom
+labels, and a match when the best RMSD is within tolerance. `obs['match_rmsd']`
+carries that RMSD in angstrom, so a tolerance can be chosen by looking rather
+than guessed.
+
+A rotated ethanol matches at RMSD 0. The same ethanol with 0.5 Å of noise per
+atom does not, at a tolerance of 0.1. A stretched methane no longer reads as
+tetrahedral methane.
+
+pymatgen's default `MoleculeMatcher` needs openbabel, a C++ library rather than
+a wheel. The ordering matchers used here need nothing beyond numpy and scipy.
+
+### A layout split that reached the library code
+
+`molecule_matcher` moved from `pymatgen.analysis` to `pymatgen.core` in 2026.5,
+and matverse supports both sides of that move — so the import tries one and
+falls back to the other. The coverage map already had `EQUIVALENT` for exactly
+this; this is the first time the split reached a function rather than the
+bookkeeping, and running the suite on both interpreters is what caught it.
+
 ## v0.1.26
 
 **72 of 142 in-scope pymatgen modules, 50.7%.**

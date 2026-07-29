@@ -50,6 +50,20 @@ BOND_STRATEGIES = {
 }
 
 
+def _order_matcher():
+    """pymatgen's Hungarian order matcher, wherever this pymatgen keeps it.
+
+    It moved from ``pymatgen.analysis.molecule_matcher`` to
+    ``pymatgen.core.molecule_matcher`` in 2026.5, and matverse supports both
+    sides of that move.
+    """
+    try:
+        from pymatgen.core.molecule_matcher import HungarianOrderMatcher
+    except ImportError:
+        from pymatgen.analysis.molecule_matcher import HungarianOrderMatcher
+    return HungarianOrderMatcher
+
+
 def _molecules(md: AnnData, source: str, what: str):
     """The rows that are molecules, or a refusal naming the periodic ones."""
     S = structures(md, source)
@@ -443,56 +457,75 @@ def fragments(md: AnnData, source: str = "input", depth: int = 1,
     description="Decide which molecules are the same one, up to rotation, "
                 "translation and atom relabelling.",
     requires={"structures": ["{source}"]},
-    produces={"obs": ["molecule_group", "is_duplicate"]},
+    produces={"obs": ["molecule_group", "is_duplicate", "match_rmsd"]},
     examples=["mv.mol.match(md)", "mv.mol.match(md, tolerance=0.2)"],
     related=["mv.pp.dedup", "mv.mol.descriptors"],
     notes="The molecular counterpart of mv.pp.dedup, and it exists for the "
-          "same reason: a database query returns the same species many times "
-          "and relaxing each one costs the same as relaxing something new.\n\n"
-          "Matching is on the heavy-atom skeleton and interatomic distances, "
-          "so two conformers of one molecule may or may not group together "
-          "depending on the tolerance. That is a choice about what 'the same' "
-          "means, which is why it is a parameter rather than a constant.",
-)
+          "same reason: two rows that are the same molecule waste a calculator "
+          "twice and count twice in any statistic.\n\n"
+          "Two molecules match when the best rigid-body superposition over "
+          "**all atom assignments** leaves an RMSD within tolerance — Kabsch "
+          "for the rotation, Hungarian for the labelling. That makes the "
+          "answer invariant to rotation, translation and the order the atoms "
+          "happen to be listed in, which is what identity means for a "
+          "molecule.\n\n"
+          "Until v0.1.27 this compared a sorted heavy-atom distance spectrum "
+          "instead. That is invariant to the same three things and is not a "
+          "proof of congruence: two different molecules can share a distance "
+          "spectrum, and hydrogens were ignored entirely.\n\n"
+          "obs['match_rmsd'] carries the RMSD to the group representative, in "
+          "angstrom, so tolerance can be chosen by looking rather than "
+          "guessed. It is 0 for the representative itself.\n\n"
+          "pymatgen's default MoleculeMatcher needs openbabel, which is a C++ "
+          "library rather than a wheel; the ordering matchers used here need "
+          "nothing beyond numpy and scipy.")
 def match(md: AnnData, source: str = "input", tolerance: float = 0.1) -> None:
     """Group identical molecules. Deposits; returns ``None``."""
+    HungarianOrderMatcher = _order_matcher()
+
     S, periodic = _molecules(md, source, "mv.mol.match")
 
     groups = np.full(md.n_obs, -1, dtype=int)
     duplicate = np.full(md.n_obs, False)
-    signatures: dict[tuple, int] = {}
+    rmsd_to_group = np.full(md.n_obs, np.nan)
+    representatives: dict[str, list[int]] = {}
 
     for i, molecule in enumerate(S):
         if i in periodic:
             continue
-        heavy = [s for s in molecule if s.specie.symbol != "H"]
-        coords = np.asarray([s.coords for s in heavy], dtype=float) \
-            if heavy else np.asarray(molecule.cart_coords, dtype=float)
-        if len(coords) > 1:
-            pairwise = np.linalg.norm(
-                coords[:, None, :] - coords[None, :, :], axis=-1)
-            spectrum = np.round(
-                np.sort(pairwise[np.triu_indices(len(coords), 1)])
-                / max(tolerance, 1e-6)).astype(int)
-        else:
-            spectrum = np.array([], dtype=int)
-        key = (molecule.composition.reduced_formula, tuple(spectrum.tolist()))
-        if key in signatures:
-            groups[i] = signatures[key]
-            duplicate[i] = True
-        else:
-            signatures[key] = i
+        formula = molecule.composition.reduced_formula
+        for candidate in representatives.get(formula, []):
+            reference = S[candidate]
+            if len(reference) != len(molecule):
+                continue
+            try:
+                # Kabsch superposition with a Hungarian assignment over the
+                # atom labels: invariant to rotation, translation and the
+                # order the atoms happen to be listed in.
+                _, rmsd = HungarianOrderMatcher(reference).fit(molecule)
+            except Exception:
+                continue
+            if float(rmsd) <= tolerance:
+                groups[i] = candidate
+                duplicate[i] = True
+                rmsd_to_group[i] = float(rmsd)
+                break
+        if groups[i] < 0:
+            representatives.setdefault(formula, []).append(i)
             groups[i] = i
+            rmsd_to_group[i] = 0.0
 
     md.obs["molecule_group"] = groups
     md.obs["is_duplicate"] = duplicate
+    md.obs["match_rmsd"] = rmsd_to_group
     md.uns["molecule_match"] = {
         "tolerance": float(tolerance), "source": source,
-        "n_unique": int(len(signatures)),
+        "n_unique": int(sum(len(v) for v in representatives.values())),
         "n_duplicates": int(duplicate.sum()),
-        "note": "matched on reduced formula and the heavy-atom distance "
-                "spectrum, which is invariant to rotation, translation and "
-                "relabelling",
+        "matcher": "Kabsch superposition with Hungarian atom assignment",
+        "note": "two molecules match when the best rigid-body superposition "
+                "over all atom assignments leaves an RMSD within tolerance, "
+                "in angstrom",
     }
     record(md, "mol.match", source=source, tolerance=tolerance)
 

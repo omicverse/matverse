@@ -260,3 +260,98 @@ class TestMatch:
         mv.mol.match(molecules)
         assert not molecules.obs["is_duplicate"].any()
         assert molecules.uns["molecule_match"]["n_unique"] == molecules.n_obs
+
+
+class TestMatchingIsGeometric:
+    """Identity for a molecule means congruence, not a shared fingerprint.
+
+    Until v0.1.27 this compared a sorted heavy-atom distance spectrum, which is
+    invariant to rotation, translation and relabelling — and is not a proof of
+    congruence. It also ignored hydrogens entirely.
+    """
+
+    @staticmethod
+    def _ethanol(theta=0.0):
+        from pymatgen.core import Molecule
+        m = Molecule(
+            ["C", "C", "O", "H", "H", "H", "H", "H", "H"],
+            [[-1.2, 0.2, 0], [0.0, -0.6, 0], [1.1, 0.3, 0],
+             [-1.2, 0.9, 0.9], [-1.2, 0.9, -0.9], [-2.1, -0.4, 0],
+             [0.0, -1.2, 0.9], [0.0, -1.2, -0.9], [1.9, -0.2, 0]])
+        if theta:
+            m.rotate_sites(theta=theta, axis=[0, 0, 1])
+        return m
+
+    def test_a_rotated_copy_is_the_same_molecule(self):
+        md = mv.mol.from_molecules([self._ethanol(), self._ethanol(0.9)])
+        mv.pp.describe(md)
+        mv.mol.match(md)
+        assert list(md.obs["is_duplicate"]) == [False, True]
+        assert md.obs["match_rmsd"].to_numpy(dtype=float) == \
+            pytest.approx(0.0, abs=1e-6)
+
+    def test_a_distorted_copy_is_not(self):
+        """0.5 angstrom of displacement per atom is a different geometry, and
+        a tolerance of 0.1 should say so."""
+        import numpy as np
+        distorted = self._ethanol()
+        rng = np.random.default_rng(0)
+        for index in range(len(distorted)):
+            distorted.translate_sites([index], rng.normal(0, 0.5, 3))
+        md = mv.mol.from_molecules([self._ethanol(), distorted])
+        mv.pp.describe(md)
+        mv.mol.match(md, tolerance=0.1)
+        assert list(md.obs["is_duplicate"]) == [False, False]
+
+    def test_hydrogens_count(self):
+        """The old comparison used heavy atoms only. Methane has one heavy
+        atom, so *every* CH4 geometry had the same one-atom fingerprint and
+        read as identical no matter where the hydrogens sat.
+
+        These two are both CH4 and are not the same molecule: one is
+        tetrahedral, the other has a C-H stretched to 1.6 angstrom."""
+        from pymatgen.core import Molecule
+        tetrahedral = Molecule(
+            ["C", "H", "H", "H", "H"],
+            [[0, 0, 0], [0.63, 0.63, 0.63], [-0.63, -0.63, 0.63],
+             [-0.63, 0.63, -0.63], [0.63, -0.63, -0.63]])
+        stretched = Molecule(
+            ["C", "H", "H", "H", "H"],
+            [[0, 0, 0], [0.92, 0.92, 0.92], [-0.63, -0.63, 0.63],
+             [-0.63, 0.63, -0.63], [0.63, -0.63, -0.63]])
+        md = mv.mol.from_molecules([tetrahedral, stretched])
+        mv.pp.describe(md)
+        mv.mol.match(md, tolerance=0.05)
+        assert list(md.obs["is_duplicate"]) == [False, False]
+
+    def test_two_orientations_of_the_same_molecule_do_match(self):
+        """The counterpart: a regular tetrahedral methane written two ways is
+        one molecule, and the matcher has to see through the labelling."""
+        from pymatgen.core import Molecule
+        a = Molecule(["C", "H", "H", "H", "H"],
+                     [[0, 0, 0], [0.63, 0.63, 0.63], [-0.63, -0.63, 0.63],
+                      [-0.63, 0.63, -0.63], [0.63, -0.63, -0.63]])
+        b = Molecule(["C", "H", "H", "H", "H"],
+                     [[0, 0, 0], [1.091, 0, 0], [-0.364, 1.029, 0],
+                      [-0.364, -0.514, 0.891], [-0.364, -0.514, -0.891]])
+        md = mv.mol.from_molecules([a, b])
+        mv.pp.describe(md)
+        mv.mol.match(md, tolerance=0.05)
+        assert list(md.obs["is_duplicate"]) == [False, True]
+
+    def test_the_rmsd_is_reported(self):
+        md = mv.mol.from_molecules([self._ethanol(), self._ethanol(0.4)])
+        mv.pp.describe(md)
+        mv.mol.match(md)
+        assert "match_rmsd" in md.obs
+        assert md.uns["molecule_match"]["matcher"].startswith("Kabsch")
+
+    def test_different_molecules_stay_apart(self):
+        from pymatgen.core import Molecule
+        water = Molecule(["O", "H", "H"],
+                         [[0, 0, 0], [0.76, 0.59, 0], [-0.76, 0.59, 0]])
+        md = mv.mol.from_molecules([self._ethanol(), water, water])
+        mv.pp.describe(md)
+        mv.mol.match(md)
+        assert md.uns["molecule_match"]["n_unique"] == 2
+        assert list(md.obs["is_duplicate"]) == [False, False, True]

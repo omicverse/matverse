@@ -60,6 +60,8 @@ WRAPPED: Dict[str, List[str]] = {
     "analysis.eos": ["mv.prop.eos", "mv.prop.quasiharmonic"],
     "analysis.cost": ["mv.prop.cost"],
     "analysis.prototypes": ["mv.pp.prototype"],
+    "core.molecule_matcher": ["mv.mol.match"],
+    "analysis.molecule_matcher": ["mv.mol.match"],
     "analysis.chemenv.connectivity.connectivity_finder":
         ["mv.env.connectivity"],
     "analysis.chemenv.connectivity.structure_connectivity":
@@ -143,6 +145,7 @@ EQUIVALENT = [
                "analysis.compatibility.computed_entries"}),
     frozenset({"entries.compatibility", "analysis.compatibility"}),
     frozenset({"entries.entry_tools", "analysis.compatibility.entry_tools"}),
+    frozenset({"analysis.molecule_matcher", "core.molecule_matcher"}),
 ]
 
 
