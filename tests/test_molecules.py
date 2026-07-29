@@ -474,3 +474,93 @@ class TestMatchDispatch:
         mv.pp.describe(md)
         with pytest.raises(ValueError, match="unknown method"):
             mv.mol.match(md, method="vibes")
+
+
+class TestQuasiRRHO:
+    """The point of quasi-RRHO is what it does to a soft mode, so that is what
+    these check — against the harmonic result computed on the same frequencies,
+    which makes the comparison internal and exact rather than tabulated."""
+
+    STIFF = [1595.0, 3657.0, 3756.0]        # water, cm-1
+
+    @staticmethod
+    def _water(n=1):
+        from pymatgen.core import Molecule
+        w = Molecule(["O", "H", "H"],
+                     [[0, 0, 0.117], [0, 0.757, -0.469], [0, -0.757, -0.469]])
+        md = mv.mol.from_molecules([w] * n)
+        md.obs["e"] = [-76.4] * n
+        return md
+
+    def test_a_rigid_molecule_needs_no_correcting(self):
+        """Every mode well above the 100 cm-1 cutoff, so the free-rotor
+        interpolation has nothing to act on and the two entropies coincide."""
+        md = self._water()
+        mv.mol.quasirrho(md, [self.STIFF], energy="e")
+        assert float(md.obs["entropy_quasirrho"].iloc[0]) == \
+            pytest.approx(float(md.obs["entropy_harmonic"].iloc[0]), abs=1e-3)
+
+    def test_a_soft_mode_is_where_they_diverge(self):
+        """A 12 cm-1 mode contributes enormous harmonic entropy — the 1/omega
+        divergence — and quasi-RRHO damps it. Harmonic must overshoot."""
+        md = self._water()
+        mv.mol.quasirrho(md, [[12.0] + self.STIFF[:2]], energy="e")
+        harmonic = float(md.obs["entropy_harmonic"].iloc[0])
+        quasi = float(md.obs["entropy_quasirrho"].iloc[0])
+        assert harmonic > quasi + 1.0, (harmonic, quasi)
+
+    def test_the_softer_the_mode_the_bigger_the_gap(self):
+        md = self._water(3)
+        mv.mol.quasirrho(md, [[f] + self.STIFF[:2] for f in (5.0, 25.0, 150.0)],
+                         energy="e")
+        gap = (md.obs["entropy_harmonic"] - md.obs["entropy_quasirrho"]).to_numpy()
+        assert gap[0] > gap[1] > gap[2]
+        assert gap[2] == pytest.approx(0.0, abs=0.5), \
+            "a mode above the cutoff should barely be touched"
+
+    def test_dropping_the_cutoff_recovers_the_harmonic_answer(self):
+        """v0 = 0 turns the interpolation off, so quasi-RRHO must reduce to
+        RRHO exactly. This is the one that would catch the damping being
+        applied in the wrong direction."""
+        md = self._water()
+        mv.mol.quasirrho(md, [[12.0] + self.STIFF[:2]], energy="e", cutoff=0.0)
+        assert float(md.obs["entropy_quasirrho"].iloc[0]) == \
+            pytest.approx(float(md.obs["entropy_harmonic"].iloc[0]), rel=1e-6)
+
+    def test_entropy_grows_with_temperature(self):
+        md = self._water()
+        mv.mol.quasirrho(md, [self.STIFF], energy="e", temperature=298.15,
+                         key_added="cold")
+        mv.mol.quasirrho(md, [self.STIFF], energy="e", temperature=500.0,
+                         key_added="hot")
+        assert float(md.obs["entropy_quasirrho_hot"].iloc[0]) > \
+            float(md.obs["entropy_quasirrho_cold"].iloc[0])
+
+    def test_imaginary_modes_are_dropped_and_counted(self):
+        """A negative frequency means the geometry is a saddle, so a
+        thermochemical correction for it corrects nothing. Silently keeping it
+        would be worse than either dropping or refusing."""
+        md = self._water()
+        mv.mol.quasirrho(md, [[-250.0] + self.STIFF], energy="e")
+        assert md.uns["quasirrho"]["default"]["n_imaginary"] == [1]
+        assert np.isfinite(float(md.obs["entropy_quasirrho"].iloc[0]))
+
+    def test_a_missing_energy_is_refused(self):
+        md = self._water()
+        with pytest.raises(ValueError, match="cannot invent one"):
+            mv.mol.quasirrho(md, [self.STIFF], energy="not_a_column")
+
+    def test_one_frequency_sequence_per_row_is_required(self):
+        md = self._water(2)
+        with pytest.raises(ValueError, match="one per row"):
+            mv.mol.quasirrho(md, [self.STIFF], energy="e")
+
+    def test_the_columns_are_numeric_not_complex(self):
+        """QuasiRRHO returns complex numbers with a zero imaginary part;
+        carrying those into obs makes the column object-dtype and breaks every
+        comparison downstream."""
+        md = self._water()
+        mv.mol.quasirrho(md, [self.STIFF], energy="e")
+        for column in ("entropy_quasirrho", "entropy_harmonic",
+                       "free_energy_quasirrho", "enthalpy_correction"):
+            assert md.obs[column].dtype.kind == "f", column

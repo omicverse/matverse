@@ -467,6 +467,15 @@ def cases(tmp):
     # so it is what the probe has to use for that claim to be exercised at all.
     from pymatgen.core import Lattice, Structure
     _fcc = [[0, 0, 0], [0, .5, .5], [.5, 0, .5], [.5, .5, 0]]
+    def water_with_energy():
+        """One molecule with a total energy, for mv.mol.quasirrho."""
+        from pymatgen.core import Molecule
+        out = mv.mol.from_molecules([Molecule(
+            ["O", "H", "H"],
+            [[0, 0, 0.117], [0, 0.757, -0.469], [0, -0.757, -0.469]])])
+        out.obs["e"] = [-76.4]
+        return out
+
     def arsenides():
         """Two III-Vs that really do alloy, for mv.gen.alloy_pairs."""
         def zb(a, cation):
@@ -654,6 +663,8 @@ def cases(tmp):
         (mv.neb.hops, one_metal, ("Cu",), {"returns": "new"}),
 
         (mv.disorder.sro, one_metal, (), {}),
+        (mv.mol.quasirrho, water_with_energy,
+         ([[1595.0, 3657.0, 3756.0]],), {"energy": "e"}),
         (mv.gen.alloy_pairs, arsenides, (), {"returns": "new"}),
         (mv.exp.formation_hull, measured_alloy, ("dHf_lab",),
          {"unit": "kJ/mol"}),

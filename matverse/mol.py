@@ -567,6 +567,7 @@ def match(md: AnnData, source: str = "input", tolerance: float = 0.1,
 
 
 __all__ = ["BOND_STRATEGIES", "from_molecules", "point_group", "bonds",
+           "quasirrho",
            "bond_lengths",
            "descriptors", "fragments", "match"]
 
@@ -666,3 +667,109 @@ def bond_lengths(md: AnnData, source: str = "input",
                 "double or triple bond reads as short by design",
     }
     record(md, "mol.bond_lengths", source=source, tolerance=tolerance)
+
+
+@register_function(
+    aliases=["quasirrho", "quasi-rrho", "rrho", "free energy correction",
+             "vibrational entropy", "thermochemistry", "gibbs correction",
+             "low frequency modes"],
+    category="mol",
+    description="Thermochemical corrections for a molecule from its "
+                "vibrational frequencies, by the quasi-RRHO treatment that "
+                "stops low-frequency modes from dominating the entropy.",
+    requires={"obs": ["{energy}"], "structures": ["{source}"]},
+    produces={"obs": ["entropy_quasirrho", "entropy_harmonic",
+                      "free_energy_quasirrho", "enthalpy_correction"]},
+    prerequisites=[],
+    examples=["mv.mol.quasirrho(md, frequencies, energy='energy_dft')",
+              "mv.mol.quasirrho(md, frequencies, energy='energy_dft', "
+              "temperature=373.15)"],
+    related=["mv.mol.point_group", "mv.prop.phonon", "mv.thermo.reaction"],
+    notes="A rigid-rotor harmonic-oscillator entropy diverges as 1/omega, so a "
+          "mode at 10 cm-1 — a hindered rotation, a floppy side chain, the "
+          "kind of thing every real molecule has — contributes more entropy "
+          "than all the stiff modes together, and it is the mode whose "
+          "frequency you trust least. Grimme's quasi-RRHO interpolates those "
+          "modes onto a free-rotor entropy below a cutoff v0, defaulting to "
+          "100 cm-1. Both numbers are deposited so the difference is "
+          "visible: for a rigid molecule they agree to three decimals, and "
+          "where they do not, the harmonic one is the one to distrust.\\n\\n"
+          "**Frequencies are an argument, in cm-1**, one sequence per row, "
+          "on the same reasoning as mv.md.rdf taking a trajectory: matverse's "
+          "own calculators are metals potentials and would give molecular "
+          "frequencies not worth correcting. Bring them from the "
+          "quantum-chemistry run that produced the energy, and bring the "
+          "energy in Hartree, which is what QuasiRRHO's free energies are "
+          "returned in.\\n\\n"
+          "Imaginary modes are dropped and counted rather than passed on. A "
+          "negative frequency means the geometry is a saddle rather than a "
+          "minimum, and a thermochemical correction for a structure that is "
+          "not a minimum is not a correction to anything — "
+          "uns['quasirrho']['n_imaginary'] records how many were discarded so "
+          "an unconverged optimisation does not pass silently.",
+)
+def quasirrho(md: AnnData, frequencies, energy: str, source: str = "input",
+              temperature: float = 298.15, pressure: float = 101325.0,
+              cutoff: float = 100.0, multiplicity: int = 1,
+              key_added: str | None = None) -> None:
+    """Quasi-RRHO thermochemistry from frequencies. Deposits; returns ``None``."""
+    from pymatgen.analysis.quasirrho import QuasiRRHO
+    from pymatgen.core import Molecule
+
+    if energy not in md.obs:
+        raise ValueError(f"obs[{energy!r}] absent; quasi-RRHO corrects a "
+                         f"total energy and cannot invent one")
+    if len(frequencies) != md.n_obs:
+        raise ValueError(f"got {len(frequencies)} frequency sequences for "
+                         f"{md.n_obs} rows; one per row is needed")
+
+    name = key_added or ""
+    suffix = f"_{name}" if name else ""
+    energies = md.obs[energy].to_numpy(dtype=float)
+
+    s_quasi = np.full(md.n_obs, np.nan)
+    s_harmonic = np.full(md.n_obs, np.nan)
+    g_quasi = np.full(md.n_obs, np.nan)
+    h_correction = np.full(md.n_obs, np.nan)
+    imaginary, failed = [], []
+
+    for row, structure in enumerate(structures(md, source)):
+        modes = np.asarray(list(frequencies[row]), dtype=float)
+        real = modes[modes > 0.0]
+        imaginary.append(int((modes <= 0.0).sum()))
+        if not len(real) or not np.isfinite(energies[row]):
+            failed.append(f"row {row}: no real mode or no energy")
+            continue
+
+        molecule = Molecule([site.specie.symbol for site in structure],
+                            [site.coords for site in structure])
+        try:
+            result = QuasiRRHO(mol=molecule, frequencies=list(real),
+                               energy=float(energies[row]),
+                               mult=int(multiplicity), temp=float(temperature),
+                               press=float(pressure), v0=float(cutoff))
+        except Exception as exc:
+            failed.append(f"row {row}: {type(exc).__name__}: {exc}")
+            continue
+
+        # QuasiRRHO returns complex numbers whose imaginary part is zero;
+        # carrying that into a dataframe would make the column object-dtype
+        # and break every downstream comparison.
+        s_quasi[row] = float(np.real(result.entropy_quasiRRHO))
+        s_harmonic[row] = float(np.real(result.entropy_ho))
+        g_quasi[row] = float(np.real(result.free_energy_quasiRRHO))
+        h_correction[row] = float(np.real(result.h_corrected))
+
+    md.obs[f"entropy_quasirrho{suffix}"] = s_quasi
+    md.obs[f"entropy_harmonic{suffix}"] = s_harmonic
+    md.obs[f"free_energy_quasirrho{suffix}"] = g_quasi
+    md.obs[f"enthalpy_correction{suffix}"] = h_correction
+    md.uns.setdefault("quasirrho", {})[name or "default"] = {
+        "temperature": float(temperature), "pressure": float(pressure),
+        "cutoff_cm1": float(cutoff), "multiplicity": int(multiplicity),
+        "energy_column": energy,
+        "entropy_unit": "cal/(mol K)", "free_energy_unit": "Hartree",
+        "n_imaginary": imaginary, "errors": failed,
+    }
+    record(md, "mol.quasirrho", energy=energy, temperature=float(temperature),
+           cutoff=float(cutoff), key_added=name or None)

@@ -357,4 +357,58 @@ Which you want depends on whether conformers are the thing you are
 deduplicating or the thing you are studying. That is why it is a `dispatch`
 rather than a default: the registry entry names both routes, so an agent
 choosing between them can see that the choice exists."""),
+
+    ("markdown", """\
+## Free energies, and the mode you trust least
+
+A rigid-rotor harmonic-oscillator entropy diverges as $1/\\omega$. That is fine
+for a stiff molecule and a disaster for a floppy one: a hindered rotation at
+10 cm⁻¹ contributes more entropy than every stiff mode put together, and it is
+precisely the mode whose frequency the calculation got least right.
+
+Grimme's quasi-RRHO interpolates those modes onto a free-rotor entropy below a
+cutoff. `mv.mol.quasirrho` deposits **both** numbers, so the size of the
+correction is visible rather than buried:"""),
+
+    ("code", """\
+from pymatgen.core import Molecule
+
+water = Molecule(["O", "H", "H"],
+                 [[0, 0, 0.117], [0, 0.757, -0.469], [0, -0.757, -0.469]])
+thermo = mv.mol.from_molecules([water, water])
+thermo.obs_names = ["stiff", "one soft mode"]
+thermo.obs["e_dft"] = [-76.4, -76.4]
+
+# identical molecule and energy; the second has one 12 cm-1 mode
+mv.mol.quasirrho(thermo,
+                 [[1595.0, 3657.0, 3756.0],
+                  [12.0, 1595.0, 3657.0]],
+                 energy="e_dft")
+
+thermo.obs[["entropy_harmonic", "entropy_quasirrho",
+            "free_energy_quasirrho"]].round(4)"""),
+
+    ("markdown", """\
+Same molecule, same energy, one mode moved. The stiff case agrees to four
+decimals — nothing below the cutoff, nothing to correct. The soft case has the
+harmonic entropy **overshooting by 3.6 cal/(mol·K)**, which is about 1 kcal/mol
+in $-T\\Delta S$ at room temperature, from a single mode at a frequency no
+method pins down well.
+
+That is the whole argument for quasi-RRHO: the error it removes is largest
+exactly where the input is weakest.
+
+```{note}
+**Frequencies are an argument, in cm⁻¹**, one sequence per row — the same
+arrangement as `mv.md.rdf` taking a trajectory. matverse's own calculators are
+metals potentials and would give molecular frequencies not worth correcting, so
+bring them from the quantum-chemistry run that produced the energy, and bring
+the energy in Hartree.
+
+Imaginary modes are dropped and counted in
+`uns['quasirrho'][...]['n_imaginary']`. A negative frequency means the geometry
+is a saddle rather than a minimum, and a thermochemical correction to a
+structure that is not a minimum corrects nothing — better to see the count than
+to have it folded in silently.
+```"""),
 ]

@@ -142,6 +142,7 @@ WRAPPED: Dict[str, List[str]] = {
     "analysis.diffusion.neb.io": ["mv.dft.write_inputs"],
     "analysis.diffusion.neb.periodic_dijkstra": ["mv.neb.percolation"],
     "analysis.alloys.core": ["mv.gen.alloy_pairs"],
+    "analysis.quasirrho": ["mv.mol.quasirrho"],
     "analysis.defects.corrections.freysoldt":
         ["mv.thermo.defect_formation"],
     "analysis.diffusion.aimd.clustering": ["mv.md.sites"],
@@ -523,16 +524,6 @@ BLOCKED: Dict[str, str] = {
         "blocked by what matverse is. It is blocked by verification: an "
         "excitation spectrum comes from a TD-DFT or BSE run; the parser is "
         "the easy half and the run is the missing one.",
-    "analysis.quasirrho":
-        "matverse reads external first-principles output as a matter of "
-        "course - mv.dft.read_outputs, mv.dft.read_dos, mv.elec.read_bands "
-        "and mv.elec.cohp all take a directory of runs - so this is not "
-        "blocked by what matverse is. It is blocked by verification: the "
-        "quasi-RRHO free energy needs vibrational frequencies from a "
-        "quantum-chemistry output. matverse can compute frequencies for a "
-        "molecule through mv.calc, so this is the closest of these to "
-        "reachable - what stops it is that QuasiRRHO's constructors take "
-        "Gaussian or QChem output objects rather than a frequency list.",
     "analysis.bond_dissociation":
         "needs openbabel, and specifically its pybel bindings, which "
         "pymatgen imports as `from openbabel import openbabel, pybel`. "
