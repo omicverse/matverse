@@ -2083,3 +2083,100 @@ def polarization(md: AnnData, p_elec, p_ion, source: str = "input",
             f"reading. Add images along the path.", stacklevel=2)
     record(md, "prop.polarization", source=source, n_images=int(md.n_obs),
            key_added=key_added)
+
+
+@register_function(
+    aliases=["piezo from dfpt", "piezoelectric from born charges",
+             "compute piezoelectric", "born charges", "internal strain",
+             "force constants", "piezo tensor"],
+    category="prop",
+    description="Build the piezoelectric tensor from its parts — Born "
+                "effective charges, internal strain and force constants — "
+                "rather than taking a finished tensor.",
+    requires={"structures": ["{source}"]},
+    produces={"obs": ["piezo_max_{level}", "piezo_norm_{level}"],
+              "uns": ["piezo_from_dfpt"], "levels": ["{level}"]},
+    prerequisites=["mv.dft.read_outputs"],
+    examples=["mv.prop.piezo_from_dfpt(md, born, internal_strain, "
+              "force_constants, level='dfpt')"],
+    related=["mv.prop.piezoelectric", "mv.prop.dielectric",
+             "mv.prop.polarization", "mv.prop.elastic"],
+    notes="mv.prop.piezoelectric takes a piezoelectric tensor someone else "
+          "computed. This one computes it, from the three things a DFPT run "
+          "produces: e = Z* . K . L, where Z* are the Born effective charges, "
+          "L the internal strain tensor and K the pseudo-inverse of the force "
+          "constant matrix.\\n\\n"
+          "Reading the parts separately is what tells you *why* a material is "
+          "or is not piezoelectric, which the finished tensor cannot. The "
+          "response is exactly linear in the Born charges and in the internal "
+          "strain, and exactly inverse in the force constants — so a soft "
+          "material with ordinary Born charges out-performs a stiff one with "
+          "large charges, and that trade-off is visible here and invisible in "
+          "a single number.\\n\\n"
+          "obs['piezo_max'] is the largest single component in C/m^2, which "
+          "is the number a screen sorts on, and the full 3x3x3 tensor per row "
+          "goes to uns because it does not fit the obs axis.\\n\\n"
+          "**All three are arguments**, one set per row: Born charges shaped "
+          "(n_sites, 3, 3), internal strain (n_sites, 3, 3, 3) and force "
+          "constants (n_sites, n_sites, 3, 3). They come from density "
+          "functional perturbation theory, which matverse does not run.\\n\\n"
+          "The pseudo-inverse drops the three translational modes, whose "
+          "eigenvalues are zero and whose inverse is not. rcond sets where "
+          "that cut falls; the default follows pymatgen's.",
+)
+def piezo_from_dfpt(md: AnnData, born, internal_strain, force_constants,
+                    level: str = "dfpt", source: str = "input",
+                    rcond: float = 1e-4) -> None:
+    """Piezoelectric tensor from Born charges and force constants."""
+    try:
+        from pymatgen.analysis.piezo_sensitivity import get_piezo
+    except ImportError as exc:                             # pragma: no cover
+        raise ImportError(
+            f"mv.prop.piezo_from_dfpt needs pymatgen's piezo_sensitivity "
+            f"module. ({exc})") from exc
+
+    def per_row(value, label):
+        """One set for everyone, or one each."""
+        if isinstance(value, (list, tuple)) and len(value) == md.n_obs \
+                and not isinstance(value[0], (int, float)):
+            return [np.asarray(v, dtype=float) for v in value]
+        array = np.asarray(value, dtype=float)
+        return [array] * md.n_obs
+
+    becs = per_row(born, "born")
+    ists = per_row(internal_strain, "internal_strain")
+    fcms = per_row(force_constants, "force_constants")
+
+    tensors, largest, norms, failed = [], [], [], []
+    for row, structure in enumerate(structures(md, source)):
+        n_sites = len(structure)
+        try:
+            if becs[row].shape != (n_sites, 3, 3):
+                raise ValueError(
+                    f"born charges are {becs[row].shape}, expected "
+                    f"({n_sites}, 3, 3) for a cell with {n_sites} sites")
+            tensor = np.asarray(get_piezo(becs[row], ists[row], fcms[row],
+                                          rcond=float(rcond)), dtype=float)
+        except Exception as exc:
+            failed.append(f"row {row}: {type(exc).__name__}: {exc}")
+            tensors.append(None)
+            largest.append(np.nan)
+            norms.append(np.nan)
+            continue
+        tensors.append(tensor.tolist())
+        largest.append(float(np.abs(tensor).max()))
+        norms.append(float(np.linalg.norm(tensor)))
+
+    md.obs[f"piezo_max_{level}"] = np.array(largest, dtype=float)
+    md.obs[f"piezo_norm_{level}"] = np.array(norms, dtype=float)
+    set_level(md, level, kind="derived",
+              method="piezoelectric tensor from Born charges, internal strain "
+                     "and force constants",
+              note="the level of theory is whatever produced the DFPT tensors")
+    md.uns.setdefault("piezo_from_dfpt", {})[level] = {
+        "unit": "C/m^2", "rcond": float(rcond),
+        "tensors": tensors, "errors": failed,
+        "definition": "e = Z* . pinv(-Phi) . Lambda",
+    }
+    record(md, "prop.piezo_from_dfpt", level=level, source=source,
+           rcond=float(rcond))

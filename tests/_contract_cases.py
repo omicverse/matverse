@@ -478,6 +478,15 @@ def cases(tmp):
             cell, Dos(0.0, energies, {Spin.up: peak}),
             {site: {Orbital.dxy: {Spin.up: peak}} for site in cell})]
 
+    def dfpt_tensors():
+        """Born charges, internal strain and force constants for one_metal."""
+        n = len(mv.structures(one_metal(), "input")[0])
+        rng = np.random.RandomState(0)
+        force = rng.randn(n * 3, n * 3)
+        force = (force + force.T) / 2
+        return (rng.randn(n, 3, 3), rng.randn(n, 3, 3, 3),
+                np.reshape(force, (n, 3, n, 3)).swapaxes(1, 2))
+
     def water_with_energy():
         """One molecule with a total energy, for mv.mol.quasirrho."""
         from pymatgen.core import Molecule
@@ -674,6 +683,7 @@ def cases(tmp):
         (mv.neb.hops, one_metal, ("Cu",), {"returns": "new"}),
 
         (mv.disorder.sro, one_metal, (), {}),
+        (mv.prop.piezo_from_dfpt, one_metal, dfpt_tensors(), {}),
         (mv.prop.polarization, two_metals,
          (np.zeros((2, 3)), np.zeros((2, 3))), {}),
         (mv.prop.capture, one_metal, (), 

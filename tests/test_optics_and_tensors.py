@@ -504,3 +504,71 @@ class TestPolarization:
         record = md.uns["polarization"]["polarization"]
         assert record["quantum"][2] == pytest.approx(self.QUANTUM, rel=1e-3)
         assert record["n_images"] == n
+
+
+class TestPiezoFromDFPT:
+    """e = Z* . pinv(-Phi) . Lambda is exactly linear in two of its three
+    inputs and exactly inverse in the third, so those scalings are the test —
+    they hold for any inputs and do not depend on a reference material."""
+
+    @staticmethod
+    def _system(n_rows=1):
+        from pymatgen.core import Lattice, Structure
+        st = Structure(Lattice.cubic(4.0), ["Ba", "Ti", "O", "O"],
+                       [[0, 0, 0], [.5, .5, .5], [.5, .5, 0], [.5, 0, .5]])
+        md = mv.data.from_structures([st] * n_rows)
+        rng = np.random.RandomState(0)
+        n = len(st)
+        force = rng.randn(n * 3, n * 3)
+        force = (force + force.T) / 2
+        return md, (rng.randn(n, 3, 3), rng.randn(n, 3, 3, 3),
+                    np.reshape(force, (n, 3, n, 3)).swapaxes(1, 2))
+
+    def test_it_is_linear_in_the_born_charges(self):
+        md, (bec, ist, fcm) = self._system(2)
+        mv.prop.piezo_from_dfpt(md, [bec, 2 * bec], ist, fcm)
+        r = md.obs["piezo_norm_dfpt"].to_numpy()
+        assert r[1] / r[0] == pytest.approx(2.0, rel=1e-9)
+
+    def test_it_is_linear_in_the_internal_strain(self):
+        md, (bec, ist, fcm) = self._system(2)
+        mv.prop.piezo_from_dfpt(md, bec, [ist, 2 * ist], fcm)
+        r = md.obs["piezo_norm_dfpt"].to_numpy()
+        assert r[1] / r[0] == pytest.approx(2.0, rel=1e-9)
+
+    def test_a_stiffer_lattice_responds_less(self):
+        """Inverse in the force constants — which is the trade-off that makes
+        a soft material with ordinary Born charges beat a stiff one with large
+        ones, and the reason to look at the parts rather than the total."""
+        md, (bec, ist, fcm) = self._system(2)
+        mv.prop.piezo_from_dfpt(md, bec, ist, [fcm, 2 * fcm])
+        r = md.obs["piezo_norm_dfpt"].to_numpy()
+        assert r[1] / r[0] == pytest.approx(0.5, rel=1e-9)
+
+    def test_no_born_charges_means_no_response(self):
+        md, (bec, ist, fcm) = self._system()
+        mv.prop.piezo_from_dfpt(md, np.zeros_like(bec), ist, fcm)
+        assert float(md.obs["piezo_norm_dfpt"].iloc[0]) == \
+            pytest.approx(0.0, abs=1e-12)
+
+    def test_the_full_tensor_is_kept(self):
+        md, (bec, ist, fcm) = self._system()
+        mv.prop.piezo_from_dfpt(md, bec, ist, fcm)
+        tensor = np.asarray(
+            md.uns["piezo_from_dfpt"]["dfpt"]["tensors"][0], dtype=float)
+        assert tensor.shape == (3, 3, 3)
+        assert float(np.abs(tensor).max()) == \
+            pytest.approx(float(md.obs["piezo_max_dfpt"].iloc[0]), rel=1e-12)
+
+    def test_a_wrong_shape_is_reported_not_crashed_on(self):
+        md, (bec, ist, fcm) = self._system()
+        mv.prop.piezo_from_dfpt(md, np.zeros((2, 3, 3)), ist, fcm)
+        assert np.isnan(float(md.obs["piezo_norm_dfpt"].iloc[0]))
+        assert any("born charges are" in e
+                   for e in md.uns["piezo_from_dfpt"]["dfpt"]["errors"])
+
+    def test_the_level_records_where_the_tensors_came_from(self):
+        md, (bec, ist, fcm) = self._system()
+        mv.prop.piezo_from_dfpt(md, bec, ist, fcm, level="mydfpt")
+        assert "mydfpt" in mv.levels_used(md)
+        assert "DFPT" in md.uns["levels"]["mydfpt"]["note"]

@@ -146,6 +146,7 @@ WRAPPED: Dict[str, List[str]] = {
     "analysis.xps": ["mv.elec.xps"],
     "analysis.defects.recombination": ["mv.prop.capture"],
     "analysis.ferroelectricity.polarization": ["mv.prop.polarization"],
+    "analysis.piezo_sensitivity": ["mv.prop.piezo_from_dfpt"],
     "analysis.defects.corrections.freysoldt":
         ["mv.thermo.defect_formation"],
     "analysis.diffusion.aimd.clustering": ["mv.md.sites"],
@@ -464,14 +465,6 @@ BLOCKED: Dict[str, str] = {
         "run. mv.elec.cohp already reads ICOHPLIST from a directory, so the "
         "route in exists; what is missing is a real LOBSTER output "
         "directory to verify against.",
-    "analysis.piezo_sensitivity":
-        "matverse reads external first-principles output as a matter of "
-        "course - mv.dft.read_outputs, mv.dft.read_dos, mv.elec.read_bands "
-        "and mv.elec.cohp all take a directory of runs - so this is not "
-        "blocked by what matverse is. It is blocked by verification: it "
-        "needs Born effective charges and force constants from a DFPT run, "
-        "which is a vasprun matverse could parse - but not one that exists "
-        "here.",
     "analysis.topological.spillage":
         "matverse reads external first-principles output as a matter of "
         "course - mv.dft.read_outputs, mv.dft.read_dos, mv.elec.read_bands "

@@ -722,6 +722,56 @@ predicting what you have not computed, and choosing what to compute next.
 ```"""),
 
     ("markdown", """\
+## Why a material is piezoelectric, not just how much
+
+`mv.prop.piezoelectric` above took a tensor somebody else computed.
+`mv.prop.piezo_from_dfpt` builds it from the three things a DFPT run produces:
+
+$$e = Z^{*} \\cdot \\mathrm{pinv}(-\\Phi) \\cdot \\Lambda$$
+
+Born effective charges, the inverse force-constant matrix, and the internal
+strain tensor. Keeping them apart is what tells you *why* a material responds,
+which the finished tensor cannot."""),
+
+    ("code", """\
+from pymatgen.core import Lattice, Structure
+
+cell = Structure(Lattice.cubic(4.0), ["Ba", "Ti", "O", "O"],
+                 [[0, 0, 0], [.5, .5, .5], [.5, .5, 0], [.5, 0, .5]])
+candidates = mv.data.from_structures([cell] * 3)
+candidates.obs_names = ["baseline", "twice the Born charges", "twice as stiff"]
+
+rng = np.random.RandomState(0)
+n = len(cell)
+force = rng.randn(n * 3, n * 3)
+force = (force + force.T) / 2
+fcm = np.reshape(force, (n, 3, n, 3)).swapaxes(1, 2)
+bec, ist = rng.randn(n, 3, 3), rng.randn(n, 3, 3, 3)
+
+mv.prop.piezo_from_dfpt(candidates,
+                        [bec, 2 * bec, bec], ist, [fcm, fcm, 2 * fcm])
+candidates.obs[["piezo_max_dfpt", "piezo_norm_dfpt"]].round(3)"""),
+
+    ("markdown", """\
+Doubling the Born charges doubles the response. Doubling the force constants
+halves it. Both are exact — they fall straight out of the expression — and
+together they are the trade-off that decides real materials: **a soft lattice
+with ordinary Born charges beats a stiff one with large charges.**
+
+That is invisible in a single piezoelectric coefficient and obvious here, which
+is the reason to compute the tensor from its parts rather than to receive it.
+
+```{note}
+All three are arguments, one set per row or one shared: Born charges
+`(n_sites, 3, 3)`, internal strain `(n_sites, 3, 3, 3)`, force constants
+`(n_sites, n_sites, 3, 3)`. They come from density functional perturbation
+theory, which matverse does not run.
+
+The pseudo-inverse drops the three translational modes — their eigenvalues are
+zero and their inverse is not — and `rcond` sets where that cut falls.
+```"""),
+
+    ("markdown", """\
 ## The polarization that is not a number
 
 Polarization is only defined **modulo a quantum** — one lattice vector of charge
