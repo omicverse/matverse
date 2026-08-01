@@ -502,15 +502,18 @@ INTERNAL_MARKERS = (
 #: between a backlog and a wish.
 BLOCKED: Dict[str, str] = {
     "analysis.defects.corrections.kumagai":
-        "get_efnv_correction takes constructible arguments - structures "
-        "carrying a 'potential' site property and a dielectric tensor - but "
-        "raises 'vise/pydefect is not installed' before looking at them. "
-        "pydefect will not install on this machine, and the reason is the "
-        "machine: its scikit-image dependency ships cp312 wheels tagged "
-        "manylinux_2_28, this node runs glibc 2.17 and so accepts nothing "
-        "above manylinux_2_17, and the source fallback fails in pythran. On "
-        "a host with glibc 2.28 or newer this is a plain pip install and "
-        "the module becomes reachable.",
+        "the install is not the blocker after all. pip cannot place "
+        "pydefect here - its scikit-image dependency ships manylinux_2_28 "
+        "wheels and this node runs glibc 2.17 - but conda-forge builds for "
+        "the older glibc and installs it cleanly, which was checked rather "
+        "than assumed. With pydefect present get_efnv_correction imports "
+        "and runs. What stops it is the data: it maps each defect site onto "
+        "a perfect one and reads a site potential for both, and those "
+        "potentials come from the OUTCARs of two real runs. Fabricated "
+        "potentials get several layers into pydefect's site matching before "
+        "failing, and had they not, the correction they produced would have "
+        "been unverifiable against anything. Supply two real supercell runs "
+        "and this becomes reachable on any machine with conda.",
     "analysis.defects.finder":
         "DefectSiteFinder needs dscribe, dscribe imports sparse at module "
         "scope, and sparse needs numba. numba 0.66 requires numpy<2.5 while "
