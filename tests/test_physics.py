@@ -745,3 +745,107 @@ class TestCaptureCoefficient:
         md = self._cell()
         with pytest.raises(ValueError, match="'srh' or 'radiative'"):
             mv.prop.capture(md, coupling=1e-3, kind="auger", **self.BASE)
+
+
+class TestConfigurationCoordinate:
+    """A harmonic curve has a frequency that can be written down, so the fit
+    is checked against the closed form and, separately, against pymatgen's own
+    HarmonicDefect.omega_eV — two routes to the same number."""
+
+    #: hbar * sqrt(1 eV / (amu angstrom^2)), in eV.
+    K = 0.0646541380
+
+    @staticmethod
+    def _curve(curvature, n=21, span=2.0, shift=0.0):
+        from pymatgen.core import Lattice, Structure
+        st = Structure(Lattice.cubic(4.0), ["Ga", "N"],
+                       [[0, 0, 0], [.5, .5, .5]])
+        Q = np.linspace(-span, span, n)
+        md = mv.data.from_structures([st] * n)
+        md.obs["Q"] = Q
+        md.obs["energy_pbe"] = 0.5 * curvature * (Q - shift) ** 2
+        return md
+
+    def test_the_frequency_is_the_closed_form(self):
+        md = self._curve(0.6)
+        mv.prop.configuration_coordinate(md, coordinate="Q", level="pbe")
+        assert float(md.obs["cc_frequency_pbe"].iloc[0]) == \
+            pytest.approx(self.K * np.sqrt(0.6), rel=1e-9)
+
+    def test_it_agrees_with_pymatgens_own_conversion(self):
+        """HarmonicDefect.omega_eV applies the same constant to the same
+        curvature. Two independent routes, one answer."""
+        pytest.importorskip("pymatgen.analysis.defects.ccd")
+        from pymatgen.analysis.defects.ccd import HarmonicDefect, _get_omega
+        for curvature in (0.01, 0.25, 0.6):
+            md = self._curve(curvature)
+            mv.prop.configuration_coordinate(md, coordinate="Q", level="pbe")
+            Q = md.obs["Q"].to_numpy()
+            E = md.obs["energy_pbe"].to_numpy()
+            reference = HarmonicDefect(omega=_get_omega(Q, E, 0.0, 0.0),
+                                       charge_state=0, ispin=1)
+            assert float(md.obs["cc_frequency_pbe"].iloc[0]) == \
+                pytest.approx(reference.omega_eV, abs=1e-7)
+
+    def test_the_frequency_goes_as_the_square_root_of_the_curvature(self):
+        soft = self._curve(0.15)
+        stiff = self._curve(0.60)
+        mv.prop.configuration_coordinate(soft, coordinate="Q", level="pbe")
+        mv.prop.configuration_coordinate(stiff, coordinate="Q", level="pbe")
+        assert float(stiff.obs["cc_frequency_pbe"].iloc[0]) == \
+            pytest.approx(2.0 * float(soft.obs["cc_frequency_pbe"].iloc[0]),
+                          rel=1e-9)
+
+    def test_a_centred_curve_has_no_relaxation_energy(self):
+        md = self._curve(0.6, shift=0.0)
+        mv.prop.configuration_coordinate(md, coordinate="Q", level="pbe")
+        assert float(md.obs["cc_relaxation_pbe"].iloc[0]) == \
+            pytest.approx(0.0, abs=1e-9)
+
+    def test_an_offset_minimum_gives_the_franck_condon_shift(self):
+        """The relaxation energy is the curve's height at Q = 0 above its own
+        minimum, which for a parabola offset by dQ is exactly (1/2) c dQ^2."""
+        curvature, offset = 0.6, 1.5
+        md = self._curve(curvature, shift=offset)
+        mv.prop.configuration_coordinate(md, coordinate="Q", level="pbe")
+        assert float(md.obs["cc_relaxation_pbe"].iloc[0]) == \
+            pytest.approx(0.5 * curvature * offset ** 2, rel=1e-6)
+
+    def test_huang_rhys_is_the_relaxation_in_phonons(self):
+        md = self._curve(0.6, shift=1.5)
+        mv.prop.configuration_coordinate(md, coordinate="Q", level="pbe")
+        relaxation = float(md.obs["cc_relaxation_pbe"].iloc[0])
+        frequency = float(md.obs["cc_frequency_pbe"].iloc[0])
+        assert float(md.obs["cc_huang_rhys_pbe"].iloc[0]) == \
+            pytest.approx(relaxation / frequency, rel=1e-9)
+
+    def test_an_inverted_curve_is_refused(self):
+        """Negative curvature is a saddle, and a saddle has no harmonic
+        frequency — returning an imaginary one as NaN would hide that the
+        geometry was wrong."""
+        md = self._curve(-0.6)
+        with pytest.raises(ValueError, match="not a minimum"):
+            mv.prop.configuration_coordinate(md, coordinate="Q", level="pbe")
+
+    def test_three_points_are_needed(self):
+        md = self._curve(0.6, n=2)
+        with pytest.raises(ValueError, match="needs three points"):
+            mv.prop.configuration_coordinate(md, coordinate="Q", level="pbe")
+
+    def test_a_missing_coordinate_says_what_it_wants(self):
+        md = self._curve(0.6)
+        with pytest.raises(ValueError, match="mass-weighted"):
+            mv.prop.configuration_coordinate(md, coordinate="nope",
+                                             level="pbe")
+
+    def test_the_frequency_can_feed_a_capture_coefficient(self):
+        """The reason this exists: mv.prop.capture needs omega and nothing
+        produced one."""
+        pytest.importorskip("pymatgen.analysis.defects.recombination")
+        md = self._curve(0.6, shift=1.0)
+        mv.prop.configuration_coordinate(md, coordinate="Q", level="pbe")
+        omega = float(md.obs["cc_frequency_pbe"].iloc[0])
+        mv.prop.capture(md, dQ=1.0, dE=1.0, omega_i=omega, omega_f=omega,
+                        coupling=1e-3)
+        assert np.isfinite(
+            float(md.obs["capture_coefficient_srh"].iloc[0]))

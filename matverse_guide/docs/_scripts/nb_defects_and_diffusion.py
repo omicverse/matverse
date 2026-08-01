@@ -583,6 +583,54 @@ These come from `MVLCINEBEndPointSet`, the VTST-tested settings in
 and `mv.dft.read_outputs` brings the energies back onto the same rows."""),
 
     ("markdown", """\
+## The curve a charge state leaves behind
+
+When a defect changes charge, its neighbours move to a new equilibrium. The
+energy along that displacement is the configuration-coordinate curve, and two
+numbers come off it: the **curvature** gives an effective phonon frequency, and
+the height at the *other* state's geometry gives the **relaxation energy** —
+what gets dumped into the lattice when the charge changes.
+
+Those two are exactly what the capture coefficient below needs, and nothing in
+matverse produced them until now:"""),
+
+    ("code", """\
+import numpy as np
+
+# stand-in for energies computed along an interpolation between two relaxed
+# charge states; Q is mass-weighted, in amu^(1/2) angstrom
+Q = np.linspace(-2.0, 2.0, 21)
+curvature, offset = 0.6, 1.5
+
+curve = mv.data.from_structures(mv.structures(copper, "input") * len(Q))
+curve.obs["Q"] = Q
+curve.obs["energy_pbe"] = 0.5 * curvature * (Q - offset) ** 2
+
+mv.prop.configuration_coordinate(curve, coordinate="Q", level="pbe")
+curve.uns["configuration_coordinate"]["pbe"]"""),
+
+    ("markdown", """\
+The frequency is $\\hbar\\sqrt{c}$ with the mass-weighted units carried
+through — 0.050 eV here, about 400 cm⁻¹, an ordinary optical phonon. The
+relaxation energy is $\\tfrac{1}{2}c\\,\\Delta Q^2$, which for this offset is
+0.675 eV.
+
+**Huang–Rhys** is the ratio: how many phonons the relaxation is worth. Above
+about five, a one-dimensional harmonic picture is carrying more than it should,
+and anything computed from it is order-of-magnitude.
+
+```{note}
+Mass-weighting is not optional. The same displacement of a hydrogen and of a
+bismuth are not the same coordinate, and an unweighted fit returns a number that
+is not a frequency.
+
+Fitted here rather than wrapped: pymatgen's `HarmonicDefect` takes the frequency
+as an *input* rather than fitting it, and the fit lives in a private helper
+reachable only through `from_vaspruns`. The test suite checks this agrees with
+`HarmonicDefect.omega_eV` to 1e-7.
+```"""),
+
+    ("markdown", """\
 ## Is it a killer?
 
 A defect level in the gap is not automatically a problem. What decides whether

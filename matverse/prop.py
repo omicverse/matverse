@@ -2180,3 +2180,105 @@ def piezo_from_dfpt(md: AnnData, born, internal_strain, force_constants,
     }
     record(md, "prop.piezo_from_dfpt", level=level, source=source,
            rcond=float(rcond))
+
+
+#: hbar * sqrt(1 eV / (amu angstrom^2)), in eV — the constant that turns the
+#: curvature of a mass-weighted energy surface into a phonon energy.
+_CURVATURE_TO_EV = 0.0646541380
+
+
+@register_function(
+    aliases=["configuration coordinate", "ccd", "franck-condon",
+             "relaxation energy", "huang-rhys", "harmonic frequency",
+             "distortion curve"],
+    category="prop",
+    description="Fit a harmonic frequency and a relaxation energy to the "
+                "energy of a structure along a distortion.",
+    requires={"obs": ["energy_{level}", "{coordinate}"]},
+    produces={"obs": ["cc_frequency_{level}", "cc_relaxation_{level}",
+                      "cc_huang_rhys_{level}"]},
+    prerequisites=["mv.calc.energy"],
+    examples=["mv.prop.configuration_coordinate(md, coordinate='Q', "
+              "level='pbe')"],
+    related=["mv.prop.capture", "mv.thermo.defect_formation",
+             "mv.prop.phonon"],
+    notes="A defect that changes charge state pulls its neighbours to a new "
+          "equilibrium, and the energy along that distortion is the "
+          "configuration-coordinate curve. Two numbers come off it and both "
+          "matter: the curvature gives the effective phonon frequency, and "
+          "the height of the curve at the *other* state's geometry gives the "
+          "relaxation energy — how much is dissipated into the lattice when "
+          "the charge changes.\\n\\n"
+          "Those two are what mv.prop.capture needs and nothing in matverse "
+          "produced before, so this closes that loop: relax two charge "
+          "states, interpolate between them, compute the energies, fit here, "
+          "and hand the frequency to a capture coefficient.\\n\\n"
+          "obs['cc_huang_rhys'] is the relaxation energy divided by the "
+          "phonon energy, the number of phonons emitted. Above about five the "
+          "one-dimensional harmonic picture is being asked to carry more than "
+          "it can, and the capture rates that follow should be read as "
+          "order-of-magnitude.\\n\\n"
+          "**The coordinate is a column**, in amu^(1/2) angstrom, so the "
+          "frequency comes out in eV. Mass-weighting matters: the same "
+          "displacement of a hydrogen and of a bismuth are not the same "
+          "coordinate, and an unweighted fit gives a frequency that is not "
+          "one.\\n\\n"
+          "Fitted here rather than through "
+          "pymatgen.analysis.defects.ccd, whose HarmonicDefect takes the "
+          "frequency as an input rather than fitting it — the fit lives in a "
+          "private helper reachable only through from_vaspruns. The result is "
+          "checked against HarmonicDefect.omega_eV in the tests.",
+)
+def configuration_coordinate(md: AnnData, coordinate: str = "Q",
+                             level: str = "emt",
+                             key_added: str | None = None) -> None:
+    """Harmonic frequency and relaxation energy along a distortion."""
+    energy_key = f"energy_{level}"
+    for column, what in ((energy_key, f"run mv.calc.energy(md, level="
+                                      f"{level!r})"),
+                         (coordinate, "the mass-weighted distortion "
+                                      "coordinate, in amu^(1/2) angstrom")):
+        if column not in md.obs:
+            raise ValueError(f"obs[{column!r}] absent; {what}")
+
+    Q = md.obs[coordinate].to_numpy(dtype=float)
+    E = md.obs[energy_key].to_numpy(dtype=float)
+    good = np.isfinite(Q) & np.isfinite(E)
+    if good.sum() < 3:
+        raise ValueError(f"a parabola needs three points; {int(good.sum())} "
+                         f"of {md.n_obs} rows have both a coordinate and an "
+                         f"energy")
+
+    # A plain quadratic least squares. The curve is harmonic by assumption -
+    # that is what makes the frequency meaningful - so anything fancier would
+    # be fitting the deviation from the model rather than the model.
+    a, b, c = np.polyfit(Q[good], E[good], 2)
+    if a <= 0:
+        raise ValueError(f"the fitted curvature is {a:.3e}, not positive, so "
+                         f"this distortion is not a minimum and has no "
+                         f"harmonic frequency")
+
+    curvature = 2.0 * a                      # d^2E/dQ^2
+    frequency = _CURVATURE_TO_EV * np.sqrt(curvature)
+    q_min = -b / (2.0 * a)
+    relaxation = float(np.polyval([a, b, c], 0.0)
+                       - np.polyval([a, b, c], q_min))
+    huang_rhys = relaxation / frequency if frequency > 0 else np.nan
+
+    name = key_added or level
+    md.obs[f"cc_frequency_{name}"] = np.full(md.n_obs, float(frequency))
+    md.obs[f"cc_relaxation_{name}"] = np.full(md.n_obs, relaxation)
+    md.obs[f"cc_huang_rhys_{name}"] = np.full(md.n_obs, float(huang_rhys))
+    md.uns.setdefault("configuration_coordinate", {})[name] = {
+        "frequency_eV": float(frequency),
+        "relaxation_energy_eV": relaxation,
+        "huang_rhys": float(huang_rhys),
+        "curvature": float(curvature),
+        "minimum_at": float(q_min),
+        "n_points": int(good.sum()),
+        "coordinate_unit": "amu^(1/2) angstrom",
+        "note": ("Huang-Rhys above about five strains the one-dimensional "
+                 "harmonic picture; read what follows as order-of-magnitude"),
+    }
+    record(md, "prop.configuration_coordinate", coordinate=coordinate,
+           level=level, key_added=name)

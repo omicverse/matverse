@@ -478,6 +478,15 @@ def cases(tmp):
             cell, Dos(0.0, energies, {Spin.up: peak}),
             {site: {Orbital.dxy: {Spin.up: peak}} for site in cell})]
 
+    def distortion_curve():
+        """A harmonic energy curve along a mass-weighted coordinate."""
+        cell = mv.structures(one_metal(), "input")[0]
+        Q = np.linspace(-2.0, 2.0, 9)
+        out = mv.data.from_structures([cell] * len(Q))
+        out.obs["Q"] = Q
+        out.obs["energy_pbe"] = 0.5 * 0.6 * Q ** 2
+        return out
+
     def spin_orderings():
         """Two bcc iron orderings with energies, for mv.mag.exchange."""
         def cell(moments):
@@ -715,6 +724,8 @@ def cases(tmp):
         (mv.neb.hops, one_metal, ("Cu",), {"returns": "new"}),
 
         (mv.disorder.sro, one_metal, (), {}),
+        (mv.prop.configuration_coordinate, distortion_curve,
+         (), {"coordinate": "Q", "level": "pbe"}),
         (mv.mag.exchange, spin_orderings, (), {"level": "pbe",
                                              "cutoff": 3.0}),
         (mv.env.lobster, one_metal, (mv.multi.sites(one_metal()),

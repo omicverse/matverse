@@ -265,6 +265,16 @@ def equivalents(module: str) -> frozenset:
 # ---------------------------------------------------------------- NATIVE
 #: Capability present in matverse, implemented without pymatgen's module.
 NATIVE: Dict[str, str] = {
+    "analysis.defects.ccd":
+        "mv.prop.configuration_coordinate fits the harmonic frequency and "
+        "the relaxation energy from energies along a distortion, which is "
+        "what a configuration-coordinate diagram is for and what "
+        "mv.prop.capture needs. Not a wrapper: HarmonicDefect takes the "
+        "frequency as an input rather than fitting it, and the fit lives in "
+        "a private helper reachable only through from_vaspruns. The result "
+        "is checked against HarmonicDefect.omega_eV to 1e-7 in the tests. "
+        "What stays out of reach is the rest of that module - get_elph_me "
+        "and the dielectric function need WSWQ and Waveder from real runs.",
     "analysis.diffusion.neb.full_path_mapper":
         "mv.neb.hops enumerates the symmetry-distinct hops directly, which "
         "is what MigrationGraph is used for - knowing which barriers are "
@@ -458,6 +468,13 @@ INTERNAL_MARKERS = (
 #: — but they are not "nobody got to it", and the distinction is the difference
 #: between a backlog and a wish.
 BLOCKED: Dict[str, str] = {
+    "analysis.topological.spillage":
+        "SOCSpillage takes two WAVECAR paths and overlap_so_spinpol reads "
+        "band energies and k-points off both. Its other two public methods, "
+        "orth and isclose, are helpers. A spillage computed from fabricated "
+        "band energies would verify this library's arithmetic and say "
+        "nothing about topology, so there is nothing here worth shipping "
+        "without two real spin-orbit runs.",
     "analysis.defects.corrections.kumagai":
         "get_efnv_correction takes structures carrying a 'potential' site "
         "property and a dielectric tensor, so the data is constructible - "
@@ -466,28 +483,6 @@ BLOCKED: Dict[str, str] = {
         "scikit-image dependency has no wheel for this platform and the "
         "source build fails in pythran. Verified by attempting both, not "
         "inferred.",
-    "analysis.topological.spillage":
-        "matverse reads external first-principles output as a matter of "
-        "course - mv.dft.read_outputs, mv.dft.read_dos, mv.elec.read_bands "
-        "and mv.elec.cohp all take a directory of runs - so this is not "
-        "blocked by what matverse is. It is blocked by verification: "
-        "SOCSpillage compares two WAVECARs, with and without spin-orbit "
-        "coupling. Those are large binary files from two real runs and "
-        "there are none here.",
-    "analysis.defects.ccd":
-        "matverse reads external first-principles output as a matter of "
-        "course - mv.dft.read_outputs, mv.dft.read_dos, mv.elec.read_bands "
-        "and mv.elec.cohp all take a directory of runs - so this is not "
-        "blocked by what matverse is. It is blocked by verification: a "
-        "configuration-coordinate diagram needs the potential energy "
-        "surfaces of two charge states along a distortion, from real runs.",
-    "analysis.excitation":
-        "matverse reads external first-principles output as a matter of "
-        "course - mv.dft.read_outputs, mv.dft.read_dos, mv.elec.read_bands "
-        "and mv.elec.cohp all take a directory of runs - so this is not "
-        "blocked by what matverse is. It is blocked by verification: an "
-        "excitation spectrum comes from a TD-DFT or BSE run; the parser is "
-        "the easy half and the run is the missing one.",
     "analysis.bond_dissociation":
         "needs openbabel, and specifically its pybel bindings, which "
         "pymatgen imports as `from openbabel import openbabel, pybel`. "
@@ -544,6 +539,13 @@ BLOCKED: Dict[str, str] = {
 
 #: Individual modules that are plumbing despite not matching a marker.
 INTERNAL = {
+    # 603 characters: a Spectrum subclass that sets two axis labels and
+    # calls super().__init__. No computation to wrap. The contrast worth
+    # keeping in mind is analysis.xps, which also subclasses Spectrum but
+    # carries from_dos and its cross-section weighting - that one was
+    # worth wrapping and is (mv.elec.xps). This is a type, not a
+    # capability, in the same way transformation_abc is.
+    "analysis.excitation",
     # A convenience namespace, not an API. Its own docstring says it
     # "imports the key classes from both vasp_input and vasp_output ... to
     # retain backwards compatibility"; matverse imports io.vasp.outputs and
