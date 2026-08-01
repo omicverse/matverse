@@ -844,6 +844,72 @@ Berry-phase terms themselves are arguments, as VASP reports them.
 ```"""),
 
     ("markdown", """\
+## Corrections of your own
+
+`mv.thermo.corrections` applies the Materials Project's. Those are calibrated to
+PBE+U at MP's cutoffs and pseudopotentials, and they **do not transfer** — not to
+r2SCAN, not to a different pseudopotential set, not to a machine-learned
+potential. The moment you leave MP's settings you need your own, and deriving
+them is a regression of measured against computed formation energies.
+
+Here is a set of oxides where a −0.45 eV per oxygen error has been put in
+deliberately, so the fit has a known right answer:"""),
+
+    ("code", """\
+from pymatgen.core import Composition, Lattice, Structure
+
+def stand_in(formula):
+    comp = Composition(formula)
+    syms = [str(e) for e in comp.elements for _ in range(int(comp[e]))]
+    return Structure(Lattice.cubic(10.0), syms,
+                     [[i / len(syms), 0, 0] for i in range(len(syms))])
+
+oxides = [("Fe2O3", 3, 2), ("TiO2", 2, 1), ("MgO", 1, 1),
+          ("Al2O3", 3, 2), ("ZnO", 1, 1), ("CaO", 1, 1)]
+elements = ["Fe", "Ti", "Mg", "Al", "Zn", "Ca", "O2"]
+names = [f for f, _, _ in oxides] + elements
+
+calib = mv.data.from_structures([stand_in(n) for n in names])
+calib.obs_names = names
+calib.obs["energy_pbe"] = ([-3.0 * o - 2.0 * m for _, o, m in oxides]
+                           + [0.0] * len(elements))
+calib.obs["e_above_hull_pbe"] = [0.0] * len(names)
+# measured = computed, minus 0.45 eV for every oxygen
+calib.obs["dHf"] = ([-3.0 * o - 2.0 * m - 0.45 * o for _, o, m in oxides]
+                    + [float("nan")] * len(elements))
+
+mv.thermo.fit_corrections(calib, "dHf", level="pbe",
+                          max_error=5.0, allow_unstable=True)
+calib.uns["fitted_corrections"]["pbe"]["corrections"]"""),
+
+    ("markdown", """\
+**−0.45 eV per oxygen, recovered to four decimals**, with an error bar beside
+it. The corrected energies are deposited too, so Fe₂O₃ moves by three times the
+correction and the elements do not move at all:"""),
+
+    ("code", """\
+calib.obs.loc[["Fe2O3", "MgO", "Fe"],
+              ["energy_pbe", "correction_pbe", "energy_corrected_pbe"]]"""),
+
+    ("markdown", """\
+```{warning}
+**The measured column is a formation energy per formula unit**, not per atom.
+Getting that wrong rescales every correction by the formula size and fails
+silently — the fit still converges and still reports a small error bar. This
+convention was read out of pymatgen's source rather than guessed; two earlier
+attempts at inferring it from the outputs gave factors of 0.26 and 8 that
+nothing explained.
+
+The elements have to be rows of the dataset at the same level of theory,
+because that is what a formation energy is measured against. matverse refuses
+rather than assuming, since an elemental energy from a different functional
+would shift every correction by an unknown constant.
+
+And six compounds is six compounds. MP2020 used thousands; the error bar
+returned here is doing real work.
+```"""),
+
+    ("markdown", """\
 ## A hull the laboratory built
 
 Everything above compares a calculation with a measurement one row at a time.

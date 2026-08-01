@@ -906,3 +906,161 @@ def chempot_diagram(md: AnnData, level: str = "emt", source: str = "input",
                 "window of zero, which is an answer rather than a gap",
     }
     record(md, "thermo.chempot_diagram", level=level, source=source)
+
+
+@register_function(
+    aliases=["fit corrections", "derive corrections", "correction calculator",
+             "calibrate against experiment", "my own mp2020",
+             "fit anion correction", "refit corrections"],
+    category="thermo",
+    description="Fit your own energy corrections by regressing computed "
+                "formation energies against measured ones, the way MP2020 "
+                "was derived.",
+    requires={"obs": ["energy_{level}", "e_above_hull_{level}",
+                      "{experimental}"], "structures": ["{source}"]},
+    produces={"uns": ["fitted_corrections"],
+              "obs": ["correction_{level}", "energy_corrected_{level}"]},
+    prerequisites=["mv.thermo.hull", "mv.exp.measure"],
+    examples=["mv.thermo.fit_corrections(md, 'dHf_exp', level='pbe')",
+              "mv.thermo.fit_corrections(md, 'dHf_exp', level='r2scan', "
+              "species=('oxide', 'sulfide'))"],
+    related=["mv.thermo.corrections", "mv.thermo.hull",
+             "mv.exp.formation_hull"],
+    notes="mv.thermo.corrections applies the Materials Project's corrections. "
+          "This one derives corrections of your own, which is what you need "
+          "the moment you are not using MP's functional or MP's settings — "
+          "the MP2020 anion corrections are calibrated to PBE+U at MP's "
+          "cutoffs and do not transfer to r2SCAN, to a different pseudo"
+          "potential set, or to a machine-learned potential.\\n\\n"
+          "The fit is a least-squares regression of (measured minus computed) "
+          "formation energy onto the count of each correction species, both "
+          "divided by the atoms in the formula unit, so a correction comes "
+          "out in eV per atom of that species. Verified by construction: "
+          "inject a known offset per oxygen into the measured energies and "
+          "the fit returns it to four decimals.\\n\\n"
+          "**The measured column is a formation energy per formula unit**, "
+          "not per atom, and getting that wrong scales every correction by "
+          "the formula size without failing. mv.exp.measure is where such a "
+          "column comes from.\\n\\n"
+          "Needs e_above_hull, so run mv.thermo.hull first: the fit excludes "
+          "compounds too far above the hull, on the reasoning that a "
+          "measurement of a phase the calculation says is unstable is "
+          "probably not a measurement of the same thing.\\n\\n"
+          "A correction fitted to six compounds is a number with an error "
+          "bar, and the error bar is returned beside it. MP2020 used "
+          "thousands.",
+)
+def fit_corrections(md: AnnData, experimental: str, level: str = "pbe",
+                    source: str = "input", species=("oxide",),
+                    max_error: float = 0.1, allow_unstable=0.1,
+                    key_added: str | None = None) -> None:
+    """Fit energy corrections against measured formation energies."""
+    try:
+        from pymatgen.analysis.compatibility.correction_calculator import (
+            CorrectionCalculator)
+    except ImportError:                    # pymatgen <= 2025.10 kept it here
+        from pymatgen.entries.correction_calculator import (
+            CorrectionCalculator)
+    from pymatgen.analysis.structure_analyzer import oxide_type
+    from pymatgen.entries.computed_entries import ComputedEntry
+
+    energy_key = f"energy_{level}"
+    hull_key = f"e_above_hull_{level}"
+    for column, hint in ((energy_key, f"run mv.calc.energy(md, level="
+                                      f"{level!r})"),
+                         (hull_key, f"run mv.thermo.hull(md, level={level!r})"),
+                         (experimental, "attach it with mv.exp.measure")):
+        if column not in md.obs:
+            raise ValueError(f"obs[{column!r}] absent; {hint}")
+
+    energies = md.obs[energy_key].to_numpy(dtype=float)
+    above = md.obs[hull_key].to_numpy(dtype=float)
+    measured = md.obs[experimental].to_numpy(dtype=float)
+    cells = structures(md, source)
+
+    exp_entries, calc_entries = [], {}
+    skipped: list[str] = []
+    for row, structure in enumerate(cells):
+        name = str(md.obs_names[row])
+        composition = structure.composition.reduced_composition
+        formula = composition.reduced_formula
+        if not np.isfinite(energies[row]):
+            skipped.append(f"{name}: no {energy_key}")
+            continue
+
+        entry = ComputedEntry(composition, float(energies[row]))
+        entry.parameters["run_type"] = "GGA"
+        try:
+            kind = oxide_type(structure)
+        except Exception:
+            kind = "None"
+        entry.data.update({
+            "e_above_hull": float(above[row]) if np.isfinite(above[row]) else 0.0,
+            "oxide_type": kind, "sulfide_type": None})
+        calc_entries[formula] = entry
+
+        if composition.is_element:
+            continue                       # a reference, not a fitting point
+        if not np.isfinite(measured[row]):
+            skipped.append(f"{name}: no measured value")
+            continue
+        exp_entries.append({"formula": formula,
+                            "exp energy": float(measured[row]),
+                            "uncertainty": 0.01})
+
+    if len(exp_entries) < 2:
+        raise ValueError(f"only {len(exp_entries)} compound(s) have both a "
+                         f"computed and a measured energy; a regression needs "
+                         f"more than that")
+
+    # Formation energies are measured against the elements, so the elements
+    # have to be in the dataset at the same level of theory. Nothing can be
+    # inferred here: an elemental energy from a different functional would
+    # shift every formation energy and so every correction.
+    needed = {str(element)
+              for entry in calc_entries.values()
+              for element in entry.composition.elements}
+    have = {str(next(iter(entry.composition.elements)))
+            for entry in calc_entries.values()
+            if entry.composition.is_element}
+    missing = sorted(needed - have)
+    if missing:
+        raise ValueError(
+            f"no elemental reference for {', '.join(missing)}. A formation "
+            f"energy is measured against the elements, so they must be rows "
+            f"of this dataset with an {energy_key} from the same level of "
+            f"theory — add them and rerun.")
+
+    calculator = CorrectionCalculator(species=list(species),
+                                      max_error=float(max_error),
+                                      allow_unstable=allow_unstable)
+    fitted = calculator.compute_corrections(exp_entries, calc_entries)
+
+    # Apply what was fitted, so the corrected energies sit beside the raw ones
+    # rather than requiring the caller to redo the bookkeeping.
+    name = key_added or level
+    per_row = np.zeros(md.n_obs)
+    for row, structure in enumerate(cells):
+        composition = structure.composition.reduced_composition
+        total = 0.0
+        for label, (value, _err) in fitted.items():
+            if label == "oxide":
+                total += float(value) * composition.get("O", 0.0)
+            elif label in {str(el) for el in composition.elements}:
+                total += float(value) * composition.get(label, 0.0)
+        per_row[row] = total
+
+    md.obs[f"correction_{name}"] = per_row
+    md.obs[f"energy_corrected_{name}"] = energies + per_row
+    md.uns.setdefault("fitted_corrections", {})[name] = {
+        "corrections": {k: [float(v[0]), float(v[1])]
+                        for k, v in fitted.items()},
+        "unit": "eV per atom of the species",
+        "species": list(species), "n_compounds": len(exp_entries),
+        "measured_column": experimental,
+        "skipped": skipped,
+        "note": "fitted here, not the Materials Project's — MP2020 is "
+                "calibrated to PBE+U at MP's settings and does not transfer",
+    }
+    record(md, "thermo.fit_corrections", level=level,
+           experimental=experimental, species=list(species), key_added=name)

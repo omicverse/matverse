@@ -150,6 +150,8 @@ WRAPPED: Dict[str, List[str]] = {
     "analysis.lobster_env": ["mv.env.lobster"],
     "analysis.magnetism.heisenberg": ["mv.mag.exchange"],
     "analysis.functional_groups": ["mv.mol.functional_groups"],
+    "analysis.compatibility.correction_calculator":
+        ["mv.thermo.fit_corrections"],
     "analysis.defects.corrections.freysoldt":
         ["mv.thermo.defect_formation"],
     "analysis.diffusion.aimd.clustering": ["mv.md.sites"],
@@ -485,21 +487,6 @@ INTERNAL_MARKERS = (
 #: — but they are not "nobody got to it", and the distinction is the difference
 #: between a backlog and a wish.
 BLOCKED: Dict[str, str] = {
-    "analysis.compatibility.correction_calculator":
-        "not wrapped, and the earlier reason - that pymatgen ships no "
-        "experimental data to fit to - framed a data problem where there is "
-        "a convention problem. compute_corrections takes plain dicts of "
-        "formula, experimental energy and uncertainty alongside computed "
-        "entries carrying e_above_hull, oxide_type and elemental "
-        "references; all of that is constructible and it runs here on "
-        "synthetic input, returning a fit with a 0.002 standard error. What "
-        "is missing is its normalisation: shifting the experimental "
-        "energies by a known amount per oxygen moves the fitted correction "
-        "linearly but by a factor of 0.26 and with the same sign rather "
-        "than the opposite, which does not match a per-formula-unit or "
-        "per-atom reading. Shipping a wrapper whose test expectation was "
-        "tuned until it matched would be worse than the gap, so this waits "
-        "until the convention is pinned down against a known MP2020 refit.",
     "analysis.chemenv.coordination_environments.voronoi":
         "not wrapped, and the earlier reason - that it is reached only "
         "through compute_structure_environments and has no entry point - is "

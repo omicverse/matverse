@@ -531,6 +531,30 @@ def cases(tmp):
         return (rng.randn(n, 3, 3), rng.randn(n, 3, 3, 3),
                 np.reshape(force, (n, 3, n, 3)).swapaxes(1, 2))
 
+    def oxide_calibration():
+        """Oxides plus their elemental references, for fit_corrections."""
+        from pymatgen.core import Composition
+        rows = [("Fe2O3", 3, 2), ("TiO2", 2, 1), ("MgO", 1, 1),
+                ("Al2O3", 3, 2), ("ZnO", 1, 1), ("CaO", 1, 1)]
+        elements = ["Fe", "Ti", "Mg", "Al", "Zn", "Ca", "O2"]
+
+        def cell(formula):
+            comp = Composition(formula)
+            syms = [str(e) for e in comp.elements
+                    for _ in range(int(comp[e]))]
+            return Structure(Lattice.cubic(10.0), syms,
+                             [[i / len(syms), 0, 0] for i in range(len(syms))])
+
+        names = [f for f, _, _ in rows] + elements
+        out = mv.data.from_structures([cell(n) for n in names])
+        out.obs_names = names
+        out.obs["energy_pbe"] = ([-3.0 * o - 2.0 * m for _, o, m in rows]
+                                 + [0.0] * len(elements))
+        out.obs["e_above_hull_pbe"] = [0.0] * len(names)
+        out.obs["dHf"] = ([-3.0 * o - 2.0 * m - 0.45 * o for _, o, m in rows]
+                          + [float("nan")] * len(elements))
+        return out
+
     def ethanol_whole():
         from pymatgen.core import Molecule
         out = mv.mol.from_molecules([Molecule(
@@ -744,6 +768,8 @@ def cases(tmp):
         (mv.neb.hops, one_metal, ("Cu",), {"returns": "new"}),
 
         (mv.disorder.sro, one_metal, (), {}),
+        (mv.thermo.fit_corrections, oxide_calibration, ("dHf",),
+         {"level": "pbe", "max_error": 5.0, "allow_unstable": True}),
         (mv.mol.dissociation, ethanol_fragments,
          (ethanol_whole(),), {"level": "x", "returns": "new"}),
         (mv.prop.configuration_coordinate, distortion_curve,
