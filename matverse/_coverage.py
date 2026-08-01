@@ -503,6 +503,21 @@ INTERNAL_MARKERS = (
 #: — but they are not "nobody got to it", and the distinction is the difference
 #: between a backlog and a wish.
 BLOCKED: Dict[str, str] = {
+    "electronic_structure.boltztrap":
+        "the BoltzTraP 1 Fortran binary, which is not on conda-forge - "
+        "checked - and is distributed from its author's site behind a "
+        "registration. It is also superseded: BoltzTraP2 does the same job, "
+        "is packaged, and is wrapped by mv.elec.transport. This is the one "
+        "gap here that would be worth leaving open even if the binary "
+        "appeared.",
+    "analysis.topological.spillage":
+        "SOCSpillage stores two paths and overlap_so_spinpol opens both "
+        "with Wavecar. There is no way in: pymatgen reads WAVECAR and does "
+        "not write one, and the spillage is an overlap of the plane-wave "
+        "coefficients themselves rather than of band energies, so "
+        "fabricating the file would mean fabricating wavefunctions. Two "
+        "real runs of the same cell, one with LSORBIT and one without, are "
+        "the only input this takes.",
     "analysis.defects.corrections.kumagai":
         "the install is not the blocker after all. pip cannot place "
         "pydefect here - its scikit-image dependency ships manylinux_2_28 "
@@ -516,14 +531,6 @@ BLOCKED: Dict[str, str] = {
         "failing, and had they not, the correction they produced would have "
         "been unverifiable against anything. Supply two real supercell runs "
         "and this becomes reachable on any machine with conda.",
-    "analysis.topological.spillage":
-        "SOCSpillage takes two WAVECAR paths and overlap_so_spinpol reads "
-        "band energies and k-points off both. Its other two public methods, "
-        "orth and isclose, are helpers. A spillage computed from fabricated "
-        "band energies would verify this library's arithmetic and say "
-        "nothing about topology, so there is nothing here worth shipping "
-        "without two real spin-orbit runs.",
-    "electronic_structure.boltztrap": "needs the BoltzTraP binary",
 }
 
 
