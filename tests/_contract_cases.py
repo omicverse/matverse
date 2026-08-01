@@ -478,6 +478,17 @@ def cases(tmp):
             cell, Dos(0.0, energies, {Spin.up: peak}),
             {site: {Orbital.dxy: {Spin.up: peak}} for site in cell})]
 
+    def spin_orderings():
+        """Two bcc iron orderings with energies, for mv.mag.exchange."""
+        def cell(moments):
+            st = Structure(Lattice.cubic(2.87), ["Fe", "Fe"],
+                           [[0, 0, 0], [.5, .5, .5]])
+            st.add_site_property("magmom", list(moments))
+            return st
+        out = mv.data.from_structures([cell([1.0, 1.0]), cell([1.0, -1.0])])
+        out.obs["energy_pbe"] = [-0.08, 0.08]
+        return out
+
     def rocksalt_icohp():
         """An IcohpCollection over one_metal's own neighbours."""
         from pymatgen.electronic_structure.cohp import IcohpCollection
@@ -704,6 +715,8 @@ def cases(tmp):
         (mv.neb.hops, one_metal, ("Cu",), {"returns": "new"}),
 
         (mv.disorder.sro, one_metal, (), {}),
+        (mv.mag.exchange, spin_orderings, (), {"level": "pbe",
+                                             "cutoff": 3.0}),
         (mv.env.lobster, one_metal, (mv.multi.sites(one_metal()),
                                      [rocksalt_icohp()]), {}),
         (mv.prop.piezo_from_dfpt, one_metal, dfpt_tensors(), {}),

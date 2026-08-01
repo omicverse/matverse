@@ -263,4 +263,74 @@ The answer also depends on the spin state, which is guessed only if you ask
 with `guess_spin=True`. A structure that already carries oxidation states from
 `mv.transform.oxidation_states` is used as given rather than re-assigned.
 ```"""),
+
+    ("markdown", """\
+## How far above room temperature does it stay a magnet?
+
+Which ordering is lowest says whether a material is a ferromagnet or an
+antiferromagnet. It says nothing about how hot it can get before it stops being
+one — and that is usually the question a screen is really asking.
+
+Mapping the ordering energies onto a Heisenberg Hamiltonian gives the exchange
+couplings, and a mean-field estimate of the ordering temperature follows:"""),
+
+    ("code", """\
+from pymatgen.core import Lattice, Structure
+
+def iron(moments):
+    st = Structure(Lattice.cubic(2.87), ["Fe", "Fe"],
+                   [[0, 0, 0], [.5, .5, .5]])
+    st.add_site_property("magmom", list(moments))
+    return st
+
+# stand-in for two spin-polarised total energies, 80 meV apart
+spins = mv.data.from_structures([iron([1.0, 1.0]), iron([1.0, -1.0])])
+spins.obs_names = ["ferromagnetic", "antiferromagnetic"]
+spins.obs["energy_pbe"] = [-0.08, 0.08]
+
+mv.mag.exchange(spins, level="pbe", cutoff=3.0)
+
+spins.obs[["energy_pbe", "exchange_pbe", "ordering_temperature_pbe"]].round(3)"""),
+
+    ("markdown", """\
+The ferromagnetic arrangement is lower, so the coupling is positive and the
+material orders ferromagnetically — and it does so up to roughly 620 K on this
+estimate.
+
+```{warning}
+**Read that temperature as an upper bound.** Mean-field theory ignores exactly
+the fluctuations that destroy magnetic order, so it overestimates Curie and Néel
+temperatures systematically — often by a third to a half. It is good for ranking
+candidates and for ruling things out ("nowhere near room temperature"); it is
+not a prediction of a measurement.
+
+The couplings come back in meV under pymatgen's convention, which counts per
+site rather than per bond. Ratios between materials are convention-free; the
+absolute number is not.
+```"""),
+
+    ("markdown", """\
+### When the fit has nothing to fit
+
+This only means anything for energies from a **spin-polarised** calculation. A
+potential that does not distinguish spin returns the same energy for every
+ordering, and the Heisenberg fit is then degenerate. matverse says so instead of
+reporting a small coupling:"""),
+
+    ("code", """\
+import warnings
+
+flat = spins.copy()
+flat.obs["energy_pbe"] = [-1.0, -1.0]      # what a spin-blind potential gives
+
+with warnings.catch_warnings(record=True) as caught:
+    warnings.simplefilter("always")
+    mv.mag.exchange(flat, level="pbe", cutoff=3.0)
+
+print(str(caught[-1].message)[:150])
+flat.uns["exchange"]["pbe"]["error"]"""),
+
+    ("markdown", """\
+A NaN and a stated reason, rather than a number near zero that would read as
+"weakly coupled" when it actually means "not calculated with spin"."""),
 ]

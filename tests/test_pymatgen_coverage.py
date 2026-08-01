@@ -45,7 +45,7 @@ def _importable(module: str) -> bool:
     return True
 
 
-COVERED_FLOOR = 121
+COVERED_FLOOR = 122
 
 #: The pymatgen the floor was recorded against. matverse supports two, and they
 #: ship different module trees — 162 modules in scope against 134 — so a count

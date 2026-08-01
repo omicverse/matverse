@@ -454,3 +454,106 @@ def jahn_teller(md: AnnData, source: str = "input", guess_spin: bool = False,
     md.uns["jahn_teller"] = {"source": source, "guess_spin": bool(guess_spin),
                              "n_failed": int(failed), "per_material": detail}
     record(md, "mag.jahn_teller", source=source, guess_spin=guess_spin)
+
+
+@register_function(
+    aliases=["exchange", "exchange coupling", "heisenberg", "curie "
+             "temperature", "neel temperature", "ordering temperature",
+             "magnetic coupling", "J"],
+    category="mag",
+    description="Fit Heisenberg exchange couplings to the energies of "
+                "different magnetic orderings, and estimate the ordering "
+                "temperature from them.",
+    requires={"obs": ["energy_{level}"], "structures": ["{source}"]},
+    produces={"obs": ["exchange_{level}", "ordering_temperature_{level}"],
+              "uns": ["exchange"]},
+    prerequisites=["mv.mag.orderings", "mv.calc.energy"],
+    examples=["mv.mag.exchange(orderings, level='pbe')",
+              "mv.mag.exchange(orderings, level='pbe', cutoff=5.0)"],
+    related=["mv.mag.orderings", "mv.mag.ground_state", "mv.mag.describe"],
+    notes="Which ordering is lowest tells you whether a material is a "
+          "ferromagnet or an antiferromagnet. It does not tell you how far "
+          "above room temperature it stays one, and that is usually the "
+          "question. Mapping the energies onto a Heisenberg Hamiltonian gives "
+          "the exchange couplings, and a mean-field estimate of the ordering "
+          "temperature follows from them.\\n\\n"
+          "**Read the temperature as an upper bound.** Mean-field theory "
+          "ignores the fluctuations that destroy order, so it overestimates "
+          "Curie and Neel temperatures systematically, often by a third to a "
+          "half. It is useful for ranking candidates and for saying 'not "
+          "anywhere near room temperature'; it is not a prediction of a "
+          "measurement.\\n\\n"
+          "Needs several orderings — one energy cannot determine a coupling — "
+          "and they must be genuinely different arrangements of the same "
+          "cell, which is what mv.mag.orderings produces. The couplings come "
+          "back in meV under pymatgen's own convention, which counts per site "
+          "rather than per bond; the ratio between two materials is "
+          "convention-free and the absolute value is not.\\n\\n"
+          "This is only worth running on energies from a spin-polarised "
+          "calculation. A potential that does not distinguish spin gives the "
+          "same energy for every ordering, the fit is then degenerate, and "
+          "the failure is recorded rather than dressed up as a small "
+          "coupling.",
+)
+def exchange(md: AnnData, level: str = "pbe", source: str = "input",
+             cutoff: float = 0.0, tol: float = 0.02,
+             key_added: str | None = None) -> None:
+    """Heisenberg couplings and an ordering temperature. Deposits ``None``."""
+    from pymatgen.analysis.magnetism.heisenberg import HeisenbergMapper
+
+    energy_key = f"energy_{level}"
+    if energy_key not in md.obs:
+        raise ValueError(f"obs[{energy_key!r}] absent; run "
+                         f"mv.calc.energy(orderings, level={level!r}) first")
+    if md.n_obs < 2:
+        raise ValueError(f"exchange needs at least two orderings to compare, "
+                         f"got {md.n_obs}; one energy cannot determine a "
+                         f"coupling")
+
+    energies = md.obs[energy_key].to_numpy(dtype=float)
+    cells = structures(md, source)
+    finite = np.isfinite(energies)
+    if finite.sum() < 2:
+        raise ValueError(f"only {int(finite.sum())} of {md.n_obs} orderings "
+                         f"have a finite {energy_key}")
+
+    name = key_added or level
+    spread = float(np.nanmax(energies) - np.nanmin(energies))
+    couplings, temperature, error = {}, np.nan, ""
+
+    if spread < 1e-9:
+        error = (f"every ordering has the same energy to within {spread:.2e} "
+                 f"eV, so the Heisenberg fit is degenerate — this is what a "
+                 f"calculator that does not distinguish spin produces")
+    else:
+        try:
+            mapper = HeisenbergMapper(
+                [cells[i] for i in np.flatnonzero(finite)],
+                [float(e) for e in energies[finite]],
+                cutoff=float(cutoff), tol=float(tol))
+            couplings = {str(k): float(v)
+                         for k, v in mapper.get_exchange().items()}
+            if couplings:
+                temperature = float(
+                    mapper.get_mft_temperature(list(couplings.values())[0]))
+        except Exception as exc:
+            error = f"{type(exc).__name__}: {exc}"
+
+    primary = (float(list(couplings.values())[0]) if couplings else np.nan)
+    md.obs[f"exchange_{name}"] = np.full(md.n_obs, primary)
+    md.obs[f"ordering_temperature_{name}"] = np.full(md.n_obs, temperature)
+    md.uns.setdefault("exchange", {})[name] = {
+        "couplings": couplings, "unit": "meV",
+        "convention": "pymatgen's, counted per site rather than per bond",
+        "ordering_temperature": temperature,
+        "temperature_note": "mean-field, an upper bound — fluctuations are "
+                            "ignored and it overestimates systematically",
+        "energy_spread": spread, "n_orderings": int(finite.sum()),
+        "error": error or None,
+    }
+    if error:
+        import warnings as _warnings
+        _warnings.warn(f"mv.mag.exchange could not fit couplings: {error}",
+                       stacklevel=2)
+    record(md, "mag.exchange", level=level, cutoff=float(cutoff),
+           key_added=name)

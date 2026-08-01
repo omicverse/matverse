@@ -148,6 +148,7 @@ WRAPPED: Dict[str, List[str]] = {
     "analysis.ferroelectricity.polarization": ["mv.prop.polarization"],
     "analysis.piezo_sensitivity": ["mv.prop.piezo_from_dfpt"],
     "analysis.lobster_env": ["mv.env.lobster"],
+    "analysis.magnetism.heisenberg": ["mv.mag.exchange"],
     "analysis.defects.corrections.freysoldt":
         ["mv.thermo.defect_formation"],
     "analysis.diffusion.aimd.clustering": ["mv.md.sites"],
@@ -521,10 +522,6 @@ BLOCKED: Dict[str, str] = {
         "during a mv.env.chemenv call, but pymatgen imports it lazily "
         "inside the finder, so there is no import chain from matverse to "
         "it and no entry point to wrap - only compute_structure_environments",
-    "analysis.magnetism.heisenberg":
-        "fitting exchange couplings needs spin-polarised energies, and no "
-        "calculator matverse ships is spin-polarised, so nothing here can "
-        "verify the result.",
     "symmetry.maggroups":
         "a lookup table with no derivation. The database holds all 1651 "
         "magnetic space groups and MagneticSpaceGroup takes a BNS or OG "

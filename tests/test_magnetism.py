@@ -149,3 +149,94 @@ class TestDescribe:
         counts = mixed.obs["n_magnetic_species"].to_numpy(dtype=int)
         assert counts[0] == 1        # Ni
         assert counts[2] == 0        # Al
+
+
+class TestExchange:
+    """Fitting is checked against synthetic energies built from a known
+    coupling, so the answer is known in advance rather than compared to a
+    stored one. The absolute scale is pymatgen's convention — a constant
+    factor of the coordination number — so the assertions are on linearity
+    and sign, which no convention can change."""
+
+    A = 2.87
+    NN = 8              # bcc coordination
+
+    @classmethod
+    def _pair(cls, coupling):
+        """A ferromagnetic and an antiferromagnetic bcc cell whose energies
+        come from E = -J * sum over bonds, with 8 bonds per cell."""
+        from pymatgen.core import Lattice, Structure
+
+        def cell(moments):
+            st = Structure(Lattice.cubic(cls.A), ["Fe", "Fe"],
+                           [[0, 0, 0], [.5, .5, .5]])
+            st.add_site_property("magmom", list(moments))
+            return st
+
+        md = mv.data.from_structures([cell([1.0, 1.0]), cell([1.0, -1.0])])
+        md.obs_names = ["FM", "AFM"]
+        md.obs["energy_pbe"] = [-coupling * cls.NN, coupling * cls.NN]
+        return md
+
+    def test_a_known_coupling_comes_back(self):
+        md = self._pair(0.010)
+        mv.mag.exchange(md, level="pbe", cutoff=3.0)
+        assert float(md.obs["exchange_pbe"].iloc[0]) == pytest.approx(80.0,
+                                                                     rel=1e-6)
+
+    def test_the_fit_is_linear_in_the_energy_difference(self):
+        """Convention-free: whatever constant pymatgen folds in, doubling the
+        splitting must double the coupling."""
+        small = self._pair(0.005)
+        large = self._pair(0.010)
+        mv.mag.exchange(small, level="pbe", cutoff=3.0)
+        mv.mag.exchange(large, level="pbe", cutoff=3.0)
+        assert float(large.obs["exchange_pbe"].iloc[0]) == pytest.approx(
+            2.0 * float(small.obs["exchange_pbe"].iloc[0]), rel=1e-6)
+
+    def test_the_ordering_temperature_scales_with_the_coupling(self):
+        small = self._pair(0.005)
+        large = self._pair(0.010)
+        mv.mag.exchange(small, level="pbe", cutoff=3.0)
+        mv.mag.exchange(large, level="pbe", cutoff=3.0)
+        assert float(large.obs["ordering_temperature_pbe"].iloc[0]) == \
+            pytest.approx(
+                2.0 * float(small.obs["ordering_temperature_pbe"].iloc[0]),
+                rel=1e-6)
+
+    def test_a_ferromagnet_and_an_antiferromagnet_differ_in_sign(self):
+        """Flip which ordering is lower and the coupling must change sign —
+        the one thing that decides what kind of magnet it is."""
+        ferro = self._pair(0.010)
+        antiferro = self._pair(-0.010)
+        mv.mag.exchange(ferro, level="pbe", cutoff=3.0)
+        mv.mag.exchange(antiferro, level="pbe", cutoff=3.0)
+        assert float(ferro.obs["exchange_pbe"].iloc[0]) > 0
+        assert float(antiferro.obs["exchange_pbe"].iloc[0]) < 0
+
+    def test_degenerate_energies_are_refused_not_fitted(self):
+        """A calculator that does not distinguish spin gives every ordering
+        the same energy. The fit is then degenerate, and reporting a small
+        coupling instead of saying so would be the worst outcome."""
+        md = self._pair(0.010)
+        md.obs["energy_pbe"] = [-1.0, -1.0]
+        with pytest.warns(UserWarning, match="degenerate"):
+            mv.mag.exchange(md, level="pbe", cutoff=3.0)
+        assert np.isnan(float(md.obs["exchange_pbe"].iloc[0]))
+        assert "degenerate" in md.uns["exchange"]["pbe"]["error"]
+
+    def test_one_ordering_is_not_enough(self):
+        md = self._pair(0.010)[:1].copy()
+        with pytest.raises(ValueError, match="at least two orderings"):
+            mv.mag.exchange(md, level="pbe")
+
+    def test_a_missing_energy_column_says_what_to_run(self):
+        md = self._pair(0.010)
+        with pytest.raises(ValueError, match="mv.calc.energy"):
+            mv.mag.exchange(md, level="nothere")
+
+    def test_the_mean_field_caveat_is_recorded(self):
+        md = self._pair(0.010)
+        mv.mag.exchange(md, level="pbe", cutoff=3.0)
+        note = md.uns["exchange"]["pbe"]["temperature_note"]
+        assert "upper bound" in note and "overestimates" in note
