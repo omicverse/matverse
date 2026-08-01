@@ -485,6 +485,23 @@ INTERNAL_MARKERS = (
 #: — but they are not "nobody got to it", and the distinction is the difference
 #: between a backlog and a wish.
 BLOCKED: Dict[str, str] = {
+    "analysis.defects.corrections.kumagai":
+        "get_efnv_correction takes constructible arguments - structures "
+        "carrying a 'potential' site property and a dielectric tensor - but "
+        "raises 'vise/pydefect is not installed' before looking at them. "
+        "pydefect will not install on this machine, and the reason is the "
+        "machine: its scikit-image dependency ships cp312 wheels tagged "
+        "manylinux_2_28, this node runs glibc 2.17 and so accepts nothing "
+        "above manylinux_2_17, and the source fallback fails in pythran. On "
+        "a host with glibc 2.28 or newer this is a plain pip install and "
+        "the module becomes reachable.",
+    "analysis.defects.finder":
+        "DefectSiteFinder needs dscribe, dscribe imports sparse at module "
+        "scope, and sparse needs numba. numba 0.66 requires numpy<2.5 while "
+        "this environment has numpy 2.5.1, so installing it would mean "
+        "downgrading numpy for pymatgen, pandas and everything else in "
+        "order to reach one module. Not an unfixable blocker - a stack "
+        "pinned below numpy 2.5 would work - but not one to force here.",
     "analysis.topological.spillage":
         "SOCSpillage takes two WAVECAR paths and overlap_so_spinpol reads "
         "band energies and k-points off both. Its other two public methods, "
@@ -492,22 +509,6 @@ BLOCKED: Dict[str, str] = {
         "band energies would verify this library's arithmetic and say "
         "nothing about topology, so there is nothing here worth shipping "
         "without two real spin-orbit runs.",
-    "analysis.defects.corrections.kumagai":
-        "get_efnv_correction takes structures carrying a 'potential' site "
-        "property and a dielectric tensor, so the data is constructible - "
-        "but the function raises 'vise/pydefect is not installed' before it "
-        "looks at any of it. pydefect does not install here either: its "
-        "scikit-image dependency has no wheel for this platform and the "
-        "source build fails in pythran. Verified by attempting both, not "
-        "inferred.",
-    "analysis.defects.finder":
-        "DefectSiteFinder needs dscribe, and dscribe needs numba - not "
-        "directly, but through `sparse`, which it imports at module scope. "
-        "Verified rather than assumed: with dscribe 2.1.2 on the path, "
-        "`from dscribe.descriptors import SOAP` raises ModuleNotFoundError: "
-        "No module named 'numba'. The numba version pin is what makes this "
-        "expensive; installing it for one module would move the whole "
-        "environment.",
     "analysis.chemenv.coordination_environments.voronoi":
         "the Voronoi construction ChemEnv runs before it fits a "
         "polyhedron. Confirmed by runtime check to be loaded and executed "
