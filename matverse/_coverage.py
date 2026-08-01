@@ -501,6 +501,16 @@ INTERNAL_MARKERS = (
 #: — but they are not "nobody got to it", and the distinction is the difference
 #: between a backlog and a wish.
 BLOCKED: Dict[str, str] = {
+    "electronic_structure.boltztrap2":
+        "not wrapped, and the old note that 'mv.elec.transport already "
+        "reports the install command' was misleading about why. "
+        "mv.elec.transport does not use pymatgen's BztInterpolator at all - "
+        "it checks that BoltzTraP2 imports and then raises "
+        "NotImplementedError, which it did whether or not the backend was "
+        "present. That is now said on the function itself. Separately, "
+        "conda-forge has boltztrap2 only up to a py310 build and this "
+        "environment is py312, so even wiring it up could not be exercised "
+        "here.",
     "analysis.defects.corrections.kumagai":
         "the install is not the blocker after all. pip cannot place "
         "pydefect here - its scikit-image dependency ships manylinux_2_28 "
@@ -529,9 +539,6 @@ BLOCKED: Dict[str, str] = {
         "nothing about topology, so there is nothing here worth shipping "
         "without two real spin-orbit runs.",
     "electronic_structure.boltztrap": "needs the BoltzTraP binary",
-    "electronic_structure.boltztrap2":
-        "BoltzTraP2 links against netCDF and does not build here; "
-        "mv.elec.transport already reports the install command",
 }
 
 

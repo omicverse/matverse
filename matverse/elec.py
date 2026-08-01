@@ -481,17 +481,24 @@ def cohp(md: AnnData, root, level: str = "dft",
     aliases=["transport", "seebeck", "boltztrap", "electronic transport",
              "electrical conductivity", "power factor"],
     category="elec",
-    description="Semiclassical transport from the band structure — Seebeck "
-                "coefficient, electrical conductivity and power factor — via "
-                "BoltzTraP2.",
-    produces={"obs": ["seebeck_{level}", "sigma_over_tau_{level}",
-                      "power_factor_{level}"]},
+    description="PLACEHOLDER, raises NotImplementedError — semiclassical "
+                "transport via BoltzTraP2 is not wired up. Registered so the "
+                "gap is visible rather than silent.",
     prerequisites=["mv.elec.read_bands"],
     examples=["mv.elec.transport(md, bands, level='pbe', temperature=300.0)"],
     related=["mv.elec.band_features", "mv.prop.thermal_conductivity"],
-    notes="BoltzTraP2 links against netCDF and is not pip-installable "
-          "everywhere; when it is absent this raises with the install command "
-          "rather than returning zeros.\n\n"
+    notes="**This function does not work.** It raises NotImplementedError "
+          "whether or not BoltzTraP2 is installed, and it is registered "
+          "anyway so that searching for 'seebeck' finds an honest gap instead "
+          "of nothing at all.\n\n"
+          "It previously declared that it produces seebeck, sigma_over_tau "
+          "and power_factor columns. It does not produce anything, and the "
+          "contract probe was reporting those three claims as skipped for a "
+          "missing backend — which reads as 'install BoltzTraP2 and this "
+          "works'. Installing BoltzTraP2 does not make it work.\n\n"
+          "What is real: BoltzTraP2 links against netCDF and is not "
+          "pip-installable everywhere, so the import guard below stays and "
+          "gives the conda command.\n\n"
           "The conductivity is reported as **sigma/tau** because the constant "
           "relaxation time approximation cannot supply tau. Multiplying by a "
           "guessed tau to get a number in S/m is how thermoelectric screens "
