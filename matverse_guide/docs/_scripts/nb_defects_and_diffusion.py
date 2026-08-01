@@ -163,6 +163,15 @@ synthesis conditions rather than a constant. `mv.thermo.chempot_limits` reports
 the range the phase diagram allows."""),
 
     ("code", """\
+mv.thermo.chempot_limits(copper, level="emt")"""),
+
+    ("markdown", """\
+An elemental solid has no window — copper in equilibrium with copper fixes its
+own chemical potential, so the range is a point. The number below uses that
+point; in a compound it would be a range, and where you sit in it is the
+difference between growing under a metal-rich or an anion-rich atmosphere."""),
+
+    ("code", """\
 mu_cu = float(copper.obs["energy_per_atom_emt"].iloc[0])
 n_host = int(copper.obs["nsites"].iloc[0]) * 8
 e_host = float(copper.obs["energy_per_atom_emt"].iloc[0]) * n_host
@@ -581,6 +590,59 @@ where it started and hand you a barrier for a hop that did not happen.
 These come from `MVLCINEBEndPointSet`, the VTST-tested settings in
 `pymatgen-analysis-diffusion`. Write the inputs, run them wherever you run VASP,
 and `mv.dft.read_outputs` brings the energies back onto the same rows."""),
+
+    ("markdown", """\
+## Finding a defect somebody else made
+
+`mv.pp.defects` puts defects where it chooses and remembers. The other
+direction is commoner: a relaxed supercell arrives from someone else's
+calculation, the defect is wherever it ended up, and the neighbours have moved
+in around it. Subtracting site lists does not work — they are ordered
+differently and everything has shifted.
+
+`mv.pp.locate_defect` finds it from the local environment instead:"""),
+
+    ("code", """\
+# 3x3x3, not 2x2x2: the descriptor this uses has a 5 A cutoff, and a cell
+# shorter than 10 A lets every site see the defect through its own periodic
+# images. matverse warns when that happens, because the answer is wrong
+# without looking wrong.
+perfect = mv.structures(copper, "input")[0].copy()
+perfect.make_supercell([3, 3, 3])
+damaged = perfect.copy()
+removed_at = perfect[13].frac_coords
+damaged.remove_sites([13])
+
+# reverse the site order, as a foreign file might well arrive
+from pymatgen.core import Structure
+shuffled = Structure.from_sites(list(damaged.sites)[::-1])
+
+hunt = mv.data.from_structures([shuffled])
+try:
+    mv.pp.locate_defect(hunt, host=mv.data.from_structures([perfect]))
+    result = hunt.obs[["defect_a", "defect_b", "defect_c",
+                       "defect_nearest_site"]].round(4)
+    print("removed at:", removed_at.round(4))
+except ImportError as exc:
+    result = str(exc)[:200]      # dscribe is an optional extra
+result"""),
+
+    ("markdown", """\
+The vacancy comes back at the coordinates it was made at, from a cell whose
+sites are in the opposite order.
+
+```{warning}
+**Use a big enough supercell.** The descriptor underneath has a hard-coded 5 Å
+cutoff, so a cell shorter than 10 Å along any axis lets every site see the
+defect through its own periodic images — none looks distinctly perturbed, and
+the position comes back wrong without anything looking wrong. 2×2×2 fcc copper
+misses by 3.5 Å. matverse warns when the cell is too small; 3×3×3 and larger are
+exact.
+
+Needs **dscribe**, which imports `sparse`, which imports `numba`, which requires
+numpy below 2.5. On a newer numpy the install resolves and the import does not,
+so the cell above catches that rather than failing the tutorial.
+```"""),
 
     ("markdown", """\
 ## The curve a charge state leaves behind

@@ -138,10 +138,24 @@ so "the most electronegative element in this compound" is the quantity it sounds
 like rather than an amount-weighted blend.
 
 Composition descriptors cannot tell two polymorphs apart, because polymorphs have
-the same composition. When that matters, reach for a structure descriptor:
+the same composition. When that matters, reach for a structure descriptor:"""),
 
-```python
-mv.feat.soap(md)          # needs matverse[descriptors]
+    ("code", """\
+try:
+    mv.feat.soap(md)
+    result = md.obsm["soap"].shape
+except ImportError as exc:
+    result = str(exc)[:170]     # needs matverse[descriptors]
+result"""),
+
+    ("markdown", """\
+A site-averaged SOAP vector per structure, which separates two polymorphs of
+one composition where a composition descriptor cannot.
+
+```{note}
+Needs **dscribe**, which imports `sparse`, which imports `numba`, which pins
+numpy below 2.5. On a newer numpy the install resolves and the import does not,
+so this cell reports rather than fails.
 ```
 
 ### Descriptors matverse does not ship

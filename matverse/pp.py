@@ -1046,6 +1046,12 @@ def locate_defect(md: AnnData, host: AnnData, source: str = "input",
             f"requires numpy < 2.5 — on a newer numpy the install resolves "
             f"and the import does not. ({exc})") from exc
 
+    #: DefectSiteFinder hard-codes SOAP(r_cut=5). A cell shorter than twice
+    #: that lets every site see the defect through its own periodic images, so
+    #: none looks distinctly perturbed and the answer is confidently wrong.
+    #: 2x2x2 fcc copper - 7.22 A - misses by 3.5 A without complaint.
+    soap_cutoff = 5.0
+
     hosts = list(structures(host, host_source))
     if len(hosts) not in (1, md.n_obs):
         raise ValueError(f"host has {len(hosts)} structures for {md.n_obs} "
@@ -1055,6 +1061,7 @@ def locate_defect(md: AnnData, host: AnnData, source: str = "input",
     position = np.full((md.n_obs, 3), np.nan)
     nearest = np.full(md.n_obs, -1, dtype=int)
     failed: list[str] = []
+    cramped: list[str] = []
     finder = DefectSiteFinder()
 
     for row, structure in enumerate(structures(md, source)):
@@ -1065,11 +1072,24 @@ def locate_defect(md: AnnData, host: AnnData, source: str = "input",
         except Exception as exc:
             failed.append(f"row {row}: {type(exc).__name__}: {exc}")
             continue
+        shortest = float(min(structure.lattice.abc))
+        if shortest < 2.0 * soap_cutoff:
+            cramped.append(f"{md.obs_names[row]} ({shortest:.2f} A)")
         position[row] = found
         delta = np.asarray(structure.frac_coords, dtype=float) - found
         delta -= np.round(delta)
         cartesian = delta @ np.asarray(structure.lattice.matrix, dtype=float)
         nearest[row] = int(np.argmin(np.linalg.norm(cartesian, axis=1)))
+
+    if cramped:
+        import warnings as _warnings
+        _warnings.warn(
+            f"{len(cramped)} cell(s) are shorter than {2 * soap_cutoff:.0f} A "
+            f"along some axis, and the descriptor this uses has a 5 A cutoff. "
+            f"Every site then sees the defect through the periodic images, no "
+            f"site looks distinctly perturbed, and the position returned is "
+            f"wrong without being flagged — 2x2x2 fcc copper misses by 3.5 A. "
+            f"Use a larger supercell. First: {cramped[0]}", stacklevel=2)
 
     for index, axis in enumerate("abc"):
         md.obs[f"defect_{axis}{suffix}"] = position[:, index]

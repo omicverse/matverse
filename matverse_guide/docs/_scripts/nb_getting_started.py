@@ -245,15 +245,29 @@ is parameterised for Al, Cu, Ag, Au, Ni, Pd, Pt, H, C, N and O — which exclude
 the Fe, P and V in the cathodes above.
 
 That is a real constraint, not a tutorial convenience, so the screen switches to
-materials EMT can run. For anything else, register a machine-learned potential:
+materials EMT can run. For anything else, register a machine-learned potential.
+The factory is lazy — it is not called until something runs at that level — so
+the registration itself works whether or not the package is installed:"""),
 
-```python
-from mace.calculators import mace_mp
+    ("code", """\
+def mace_factory():
+    "Imported only when a calculation actually asks for this level."
+    from mace.calculators import mace_mp
+    return mace_mp(model="medium-mpa-0")
 
-mv.calc.register_calculator("mace-mpa", lambda: mace_mp(model="medium-mpa-0"),
+mv.calc.register_calculator("mace-mpa", mace_factory,
                             kind="mlip", method="MACE-MPA-0",
                             reference="PBE+U", license="MIT")
-```"""),
+
+mv.calc.available()["mace-mpa"]"""),
+
+    ("markdown", """\
+Registered, with its provenance attached — the method, the level of theory it
+reproduces, and the licence. That last one is not decoration: `mv.check_commercial_use`
+reads it, and a screen assembled from levels nobody recorded is one you cannot
+publish from.
+
+Running at that level is what would need MACE installed."""),
 
     ("code", """\
 metals = mv.datasets.metals()

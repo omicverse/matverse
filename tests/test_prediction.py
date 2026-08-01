@@ -819,6 +819,29 @@ class TestLocateDefect:
         assert np.isfinite(md.obs[["defect_a", "defect_b",
                                    "defect_c"]].to_numpy(float)).all()
 
+    def test_a_cramped_cell_is_warned_about(self):
+        """The descriptor has a hard 5 A cutoff. Below twice that, every site
+        sees the defect through the periodic images, no site looks distinctly
+        perturbed, and the position returned is wrong by angstroms without
+        anything in the output looking wrong. 2x2x2 fcc copper misses by 3.5."""
+        from pymatgen.core import Lattice, Structure
+        base = Structure(Lattice.cubic(3.61), ["Cu"] * 4,
+                         [[0, 0, 0], [0, .5, .5], [.5, 0, .5], [.5, .5, 0]])
+        small = base.copy()
+        small.make_supercell([2, 2, 2])
+        damaged = small.copy()
+        damaged.remove_sites([13])
+        md = mv.data.from_structures([damaged])
+        with pytest.warns(UserWarning, match="cutoff"):
+            mv.pp.locate_defect(md, host=mv.data.from_structures([small]))
+
+    def test_a_roomy_cell_passes_quietly(self):
+        perfect, cells, _ = self._with_vacancy([13])
+        md = mv.data.from_structures(cells)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", UserWarning)
+            mv.pp.locate_defect(md, host=mv.data.from_structures([perfect]))
+
     def test_a_mismatched_host_count_is_refused(self):
         perfect, cells, _ = self._with_vacancy([13, 40, 66])
         md = mv.data.from_structures(cells)

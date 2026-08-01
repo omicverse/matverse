@@ -205,14 +205,20 @@ sites.uns["rank_elements_groups"]["True"][
 That is `rank_genes_groups` answering "which elements sit in the highest-force
 environments", and it needed no new function.
 
-### One object, if you want one
+### One object, if you want one"""),
 
-```python
-mdata = mv.multi.to_mudata(md, sites)     # needs matverse[multi]
-```
+    ("code", """\
+try:
+    mdata = mv.multi.to_mudata(md, sites)
+    result = mdata
+except ImportError as exc:
+    result = str(exc)[:160]        # needs matverse[multi]
+result"""),
 
+    ("markdown", """\
 Optional throughout. matverse's operations take `AnnData`, and the sites object
-is useful without ever being assembled."""),
+is useful without ever being assembled — the MuData is for when you want the
+two axes travelling as one file."""),
 
     ("code", """\
 mv.prop.tem(md, r_max=1.2, step=0.02)

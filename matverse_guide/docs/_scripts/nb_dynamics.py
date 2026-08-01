@@ -174,13 +174,26 @@ mv.md.batched_available()"""),
 
     ("markdown", """\
 Empty in this build, because the engine is not installed. Registering one is the
-same contract as `mv.calc.register_calculator`:
+same contract as `mv.calc.register_calculator` — a name, a factory that is not
+called until the level is used, and the provenance that travels with it:"""),
+
+    ("code", """\
+def torchsim_factory():
+    "Imported only when someone actually runs at this level."
+    import torch_sim as ts
+    return ts.integrate
+
+mv.md.register_batched("torchsim", torchsim_factory,
+                       method="TorchSim NVT", license="Apache-2.0")
+
+mv.md.batched_available()["models"]"""),
+
+    ("markdown", """\
+The factory is lazy, which is why that cell runs in an environment without
+TorchSim installed: registering a level is a promise, and the import only has
+to hold when someone runs at that level.
 
 ```python
-import torch_sim as ts
-
-mv.md.register_batched("torchsim", lambda: ts.integrate,
-                       method="TorchSim NVT", license="Apache-2.0")
 mv.md.run(md, level="torchsim", temperature=300.0, steps=10000)
 ```
 
