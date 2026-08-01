@@ -154,6 +154,7 @@ WRAPPED: Dict[str, List[str]] = {
         ["mv.thermo.fit_corrections"],
     "analysis.chemenv.coordination_environments.voronoi":
         ["mv.env.voronoi"],
+    "analysis.defects.finder": ["mv.pp.locate_defect"],
     "analysis.defects.corrections.freysoldt":
         ["mv.thermo.defect_formation"],
     "analysis.diffusion.aimd.clustering": ["mv.md.sites"],
@@ -531,13 +532,6 @@ BLOCKED: Dict[str, str] = {
         "failing, and had they not, the correction they produced would have "
         "been unverifiable against anything. Supply two real supercell runs "
         "and this becomes reachable on any machine with conda.",
-    "analysis.defects.finder":
-        "DefectSiteFinder needs dscribe, dscribe imports sparse at module "
-        "scope, and sparse needs numba. numba 0.66 requires numpy<2.5 while "
-        "this environment has numpy 2.5.1, so installing it would mean "
-        "downgrading numpy for pymatgen, pandas and everything else in "
-        "order to reach one module. Not an unfixable blocker - a stack "
-        "pinned below numpy 2.5 would work - but not one to force here.",
     "analysis.topological.spillage":
         "SOCSpillage takes two WAVECAR paths and overlap_so_spinpol reads "
         "band energies and k-points off both. Its other two public methods, "

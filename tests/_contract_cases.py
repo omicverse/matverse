@@ -51,6 +51,9 @@ UNPROBEABLE: dict[str, str] = {
     "mv.elec.cohp": "parses ICOHPLIST.lobster from a real LOBSTER run",
     "mv.feat.matminer": "matminer is not installed in this environment",
     "mv.feat.soap": "dscribe is not installed in this environment",
+    "mv.pp.locate_defect":
+        "needs dscribe, which imports sparse, which imports numba, "
+        "which requires numpy < 2.5; this environment has 2.5.1",
     "mv.elec.transport":
         "raises NotImplementedError — a registered placeholder, not a "
         "backend problem; installing BoltzTraP2 does not make it work",
