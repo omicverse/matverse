@@ -481,47 +481,109 @@ def cohp(md: AnnData, root, level: str = "dft",
     aliases=["transport", "seebeck", "boltztrap", "electronic transport",
              "electrical conductivity", "power factor"],
     category="elec",
-    description="PLACEHOLDER, raises NotImplementedError — semiclassical "
-                "transport via BoltzTraP2 is not wired up. Registered so the "
-                "gap is visible rather than silent.",
+    description="Semiclassical transport from a band structure — Seebeck "
+                "coefficient, conductivity over relaxation time and power "
+                "factor — through BoltzTraP2.",
+    produces={"obs": ["seebeck_{level}", "sigma_over_tau_{level}",
+                      "power_factor_{level}"]},
     prerequisites=["mv.elec.read_bands"],
-    examples=["mv.elec.transport(md, bands, level='pbe', temperature=300.0)"],
+    examples=["mv.elec.transport(md, bandstructures, level='pbe')",
+              "mv.elec.transport(md, bandstructures, mu=0.2, "
+              "temperature=600.0)"],
     related=["mv.elec.band_features", "mv.prop.thermal_conductivity"],
-    notes="**This function does not work.** It raises NotImplementedError "
-          "whether or not BoltzTraP2 is installed, and it is registered "
-          "anyway so that searching for 'seebeck' finds an honest gap instead "
-          "of nothing at all.\n\n"
-          "It previously declared that it produces seebeck, sigma_over_tau "
-          "and power_factor columns. It does not produce anything, and the "
-          "contract probe was reporting those three claims as skipped for a "
-          "missing backend — which reads as 'install BoltzTraP2 and this "
-          "works'. Installing BoltzTraP2 does not make it work.\n\n"
-          "What is real: BoltzTraP2 links against netCDF and is not "
-          "pip-installable everywhere, so the import guard below stays and "
-          "gives the conda command.\n\n"
-          "The conductivity is reported as **sigma/tau** because the constant "
-          "relaxation time approximation cannot supply tau. Multiplying by a "
-          "guessed tau to get a number in S/m is how thermoelectric screens "
-          "produce figures of merit that do not survive measurement — the "
-          "Seebeck coefficient, which is independent of tau, is the number to "
-          "trust here.",
+    notes="The conductivity is reported as **sigma/tau**, because the "
+          "constant relaxation time approximation cannot supply tau. "
+          "Multiplying by a guessed tau to reach S/m is how thermoelectric "
+          "screens produce figures of merit that do not survive measurement. "
+          "The Seebeck coefficient does not depend on tau and is the number "
+          "to trust.\n\n"
+          "**mu is where you dope to**, in eV relative to the Fermi level of "
+          "the band structure you passed. At mu = 0 an intrinsic "
+          "semiconductor gives almost nothing — the conductivity in the "
+          "middle of a gap is exponentially small and underflows to zero, "
+          "which is a true answer and a useless one. The interesting numbers "
+          "are at finite doping, and choosing how much is a decision this "
+          "function will not make for you.\n\n"
+          "**Needs BoltzTraP2**, which links against netCDF, is not "
+          "pip-installable everywhere, and on conda-forge exists only up to a "
+          "Python 3.10 build: `conda install -c conda-forge boltztrap2`.\n\n"
+          "Two upstream traps are worked around here so they need not be "
+          "rediscovered. BandstructureLoader accepts nelect and stores it as "
+          "nelect_all while BztTransportProperties reads .nelect. And the "
+          "interpolation must run with curvature=True, or the Hall term is "
+          "None and the constructor fails on a TypeError that names neither "
+          "the term nor the cause.",
 )
-def transport(md: AnnData, bands_obj: AnnData, level: str = "dft",
-              temperature: float = 300.0, doping=None) -> None:
+def transport(md: AnnData, bandstructures, level: str = "dft",
+              temperature: float = 300.0, mu: float = 0.0,
+              lpfac: int = 10) -> None:
     """Semiclassical transport coefficients. Deposits on ``md``."""
     try:
-        import BoltzTraP2                                # noqa: F401
+        from pymatgen.electronic_structure.boltztrap2 import (
+            BandstructureLoader, BztInterpolator, BztTransportProperties)
+        import BoltzTraP2                                  # noqa: F401
     except ImportError as exc:
         raise ImportError(
             "mv.elec.transport needs BoltzTraP2, which links against netCDF "
             "and often will not build from a wheel. Try `conda install -c "
-            "conda-forge boltztrap2`, or compute the Seebeck coefficient from "
-            "the bands yourself — mv.elec.band_features gives you the edges."
+            "conda-forge boltztrap2` — note conda-forge carries it only up "
+            "to a Python 3.10 build. Or read the band edges off "
+            "mv.elec.band_features and estimate the Seebeck coefficient "
+            "yourself."
         ) from exc
 
-    raise NotImplementedError(
-        "BoltzTraP2 is importable but the matverse binding is not wired yet; "
-        "open an issue with the code you would like to run.")
+    if len(bandstructures) != md.n_obs:
+        raise ValueError(f"got {len(bandstructures)} band structures for "
+                         f"{md.n_obs} rows; one per row is needed")
+
+    seebeck = np.full(md.n_obs, np.nan)
+    sigma = np.full(md.n_obs, np.nan)
+    power = np.full(md.n_obs, np.nan)
+    failed: list[str] = []
+
+    for row, band_structure in enumerate(bandstructures):
+        if band_structure is None:
+            failed.append(f"row {row}: no band structure")
+            continue
+        try:
+            loader = BandstructureLoader(band_structure)
+            # Stored as nelect_all by the loader, read as .nelect by the
+            # transport class. The AttributeError names neither.
+            if not hasattr(loader, "nelect"):
+                loader.nelect = loader.nelect_all
+            # curvature=True or Hall_mu comes back None and the constructor
+            # dies subscripting it.
+            interpolated = BztInterpolator(loader, lpfac=int(lpfac),
+                                           curvature=True)
+            properties = BztTransportProperties(
+                interpolated, temp_r=np.array([float(temperature)]))
+            grid = np.asarray(properties.mu_r_eV, dtype=float)
+            index = int(np.argmin(np.abs(grid - float(mu))))
+
+            def average(tensor):
+                block = np.asarray(tensor)[0][index]
+                return float(np.trace(block) / 3.0)
+
+            seebeck[row] = average(properties.Seebeck_mu)
+            sigma[row] = average(properties.Conductivity_mu)
+            # S^2 sigma, with S in uV/K, so 1e-12 puts it in W/(m K^2 s).
+            power[row] = seebeck[row] ** 2 * sigma[row] * 1e-12
+        except Exception as exc:
+            failed.append(f"row {row}: {type(exc).__name__}: {exc}")
+
+    md.obs[f"seebeck_{level}"] = seebeck
+    md.obs[f"sigma_over_tau_{level}"] = sigma
+    md.obs[f"power_factor_{level}"] = power
+    md.uns.setdefault("transport", {})[level] = {
+        "temperature": float(temperature), "mu": float(mu),
+        "seebeck_unit": "uV/K", "sigma_unit": "1/(ohm m s)",
+        "power_factor_unit": "W/(m K^2 s)",
+        "errors": failed,
+        "caveat": "sigma is per unit relaxation time; only the Seebeck "
+                  "coefficient is independent of tau",
+    }
+    record(md, "elec.transport", level=level, mu=float(mu),
+           temperature=float(temperature))
 
 
 __all__ = ["AXIS_KEY", "PATH_TYPES", "kpath", "bands", "read_bands", "xps",

@@ -155,6 +155,7 @@ WRAPPED: Dict[str, List[str]] = {
     "analysis.chemenv.coordination_environments.voronoi":
         ["mv.env.voronoi"],
     "analysis.defects.finder": ["mv.pp.locate_defect"],
+    "electronic_structure.boltztrap2": ["mv.elec.transport"],
     "analysis.defects.corrections.freysoldt":
         ["mv.thermo.defect_formation"],
     "analysis.diffusion.aimd.clustering": ["mv.md.sites"],
@@ -502,23 +503,6 @@ INTERNAL_MARKERS = (
 #: — but they are not "nobody got to it", and the distinction is the difference
 #: between a backlog and a wish.
 BLOCKED: Dict[str, str] = {
-    "electronic_structure.boltztrap2":
-        "not wrapped, and an attempt at it got far enough to be worth "
-        "recording so the next one starts here. conda-forge has boltztrap2 "
-        "up to a py310 build; in such an environment BandstructureLoader, "
-        "BztInterpolator and BztTransportProperties run on a band structure "
-        "built in memory and return a Seebeck coefficient symmetric about "
-        "the gap at +/-1586 uV/K, which is what a symmetric two-band model "
-        "must give. Two upstream traps on the way: BandstructureLoader "
-        "stores the nelect it is given as nelect_all while "
-        "BztTransportProperties reads .nelect, and the interpolation must "
-        "be run with curvature=True or the Hall term is None and the "
-        "constructor fails on a TypeError naming neither. What stopped the "
-        "wrapper was the chemical potential grid - reading the value at the "
-        "Fermi level gave an exact zero conductivity in the gap and NaN "
-        "once the Fermi level moved, neither of which I could account for, "
-        "and mv.elec.transport is a declared placeholder rather than a "
-        "half-understood number.",
     "analysis.defects.corrections.kumagai":
         "the install is not the blocker after all. pip cannot place "
         "pydefect here - its scikit-image dependency ships manylinux_2_28 "

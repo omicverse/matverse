@@ -55,8 +55,8 @@ UNPROBEABLE: dict[str, str] = {
         "needs dscribe, which imports sparse, which imports numba, "
         "which requires numpy < 2.5; this environment has 2.5.1",
     "mv.elec.transport":
-        "raises NotImplementedError — a registered placeholder, not a "
-        "backend problem; installing BoltzTraP2 does not make it work",
+        "needs BoltzTraP2, which conda-forge carries only to a py310 build; "
+        "absent in this environment",
     "mv.mol.functional_groups":
         "needs openbabel's Python bindings, which additionally need "
         "libXrender at runtime; neither is present in this environment",

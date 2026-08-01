@@ -319,3 +319,97 @@ class TestXPS:
         md = mv.data.from_structures([st])
         with pytest.raises(ValueError, match="no XPS could be built"):
             mv.elec.xps(md, [None], level="model")
+
+
+def _has_boltztrap2() -> bool:
+    try:
+        import BoltzTraP2  # noqa: F401
+        from pymatgen.electronic_structure.boltztrap2 import (  # noqa: F401
+            BztTransportProperties)
+    except Exception:
+        return False
+    return True
+
+
+@pytest.mark.skipif(not _has_boltztrap2(),
+                    reason="BoltzTraP2 absent (conda-forge carries it only "
+                           "to a py310 build)")
+class TestTransport:
+    """A symmetric two-band model has a Seebeck coefficient that is odd in the
+    chemical potential and a conductivity that is even in it. Neither depends
+    on any convention, so they are the test."""
+
+    @staticmethod
+    def _model():
+        from pymatgen.core import Lattice, Structure
+        from pymatgen.electronic_structure.bandstructure import BandStructure
+        from pymatgen.electronic_structure.core import Spin
+        cell = Structure(Lattice.cubic(4.0), ["Si"], [[0, 0, 0]])
+        n = 8
+        kpoints = np.array([[i / n, j / n, k / n]
+                            for i in range(n) for j in range(n)
+                            for k in range(n)])
+        energy = 3.0 * np.sum((kpoints - 0.5) ** 2, axis=1)
+        bands = {Spin.up: np.vstack([-energy - 0.5, energy + 0.5])}
+        return cell, BandStructure(kpoints, bands,
+                                   cell.lattice.reciprocal_lattice,
+                                   efermi=0.0, structure=cell)
+
+    @classmethod
+    def _at(cls, mu):
+        cell, band_structure = cls._model()
+        md = mv.data.from_structures([cell])
+        mv.elec.transport(md, [band_structure], level="m", mu=mu)
+        return (float(md.obs["seebeck_m"].iloc[0]),
+                float(md.obs["sigma_over_tau_m"].iloc[0]), md)
+
+    def test_a_symmetric_band_has_no_seebeck_at_its_centre(self):
+        seebeck, _sigma, _md = self._at(0.0)
+        assert seebeck == pytest.approx(0.0, abs=1e-6)
+
+    def test_electrons_and_holes_give_opposite_signs(self):
+        n_type, sigma_n, _ = self._at(0.6)
+        p_type, sigma_p, _ = self._at(-0.6)
+        assert n_type == pytest.approx(-p_type, rel=1e-6)
+        assert sigma_n == pytest.approx(sigma_p, rel=1e-6)
+        assert n_type < 0 < p_type
+
+    def test_heavier_doping_lowers_the_seebeck_coefficient(self):
+        """More carriers, less entropy per carrier. The trade-off against
+        conductivity is the whole difficulty of thermoelectrics."""
+        light, sigma_light, _ = self._at(0.6)
+        heavy, sigma_heavy, _ = self._at(0.9)
+        assert abs(heavy) < abs(light)
+        assert sigma_heavy > sigma_light
+
+    def test_the_gap_conducts_nothing(self):
+        """Exponentially small, and it underflows to zero. A true answer and
+        a useless one, which is why mu is a parameter."""
+        _seebeck, sigma, _md = self._at(0.0)
+        assert sigma == pytest.approx(0.0, abs=1e-12)
+
+    def test_the_power_factor_is_the_two_of_them(self):
+        seebeck, sigma, md = self._at(0.6)
+        assert float(md.obs["power_factor_m"].iloc[0]) == \
+            pytest.approx(seebeck ** 2 * sigma * 1e-12, rel=1e-9)
+
+    def test_the_doping_and_temperature_are_recorded(self):
+        _s, _c, md = self._at(0.6)
+        record = md.uns["transport"]["m"]
+        assert record["mu"] == 0.6
+        assert record["temperature"] == 300.0
+        assert "independent of tau" in record["caveat"]
+
+    def test_one_band_structure_per_row(self):
+        cell, band_structure = self._model()
+        md = mv.data.from_structures([cell, cell])
+        with pytest.raises(ValueError, match="one per row"):
+            mv.elec.transport(md, [band_structure], level="m")
+
+    def test_a_missing_band_structure_is_recorded(self):
+        cell, band_structure = self._model()
+        md = mv.data.from_structures([cell, cell])
+        mv.elec.transport(md, [band_structure, None], level="m", mu=0.6)
+        assert np.isnan(float(md.obs["seebeck_m"].iloc[1]))
+        assert any("no band structure" in e
+                   for e in md.uns["transport"]["m"]["errors"])
