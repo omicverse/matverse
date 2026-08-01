@@ -664,3 +664,92 @@ class TestFunctionalGroups:
         assert "functional_groups_strict" in md.obs
         assert "functional_groups_loose" in md.obs
         assert md.uns["functional_groups"]["loose"]["heteroatoms_only"] is False
+
+
+class TestBondDissociation:
+    """BDE is arithmetic on top of two energies, so the tests use energies
+    chosen to make the answer exact rather than a calculator whose accuracy on
+    radicals would be the thing under test."""
+
+    @staticmethod
+    def _ethanol():
+        from pymatgen.core import Molecule
+        return Molecule(
+            ["C", "C", "O", "H", "H", "H", "H", "H", "H"],
+            [[-1.1, 0.2, 0.0], [0.2, -0.5, 0.0], [1.3, 0.4, 0.0],
+             [-1.0, 1.3, 0.0], [-1.7, -0.1, 0.9], [-1.7, -0.1, -0.9],
+             [0.3, -1.2, 0.9], [0.3, -1.2, -0.9], [2.1, -0.1, 0.0]])
+
+    @classmethod
+    def _prepared(cls, whole=-100.0, per_atom=-10.0):
+        md = mv.mol.from_molecules([cls._ethanol()])
+        md.obs_names = ["ethanol"]
+        frags = mv.mol.fragments(md, depth=1)
+        md.obs["energy_x"] = [whole]
+        frags.obs["energy_x"] = [per_atom * n
+                                 for n in frags.obs["fragment_size"]]
+        return md, frags
+
+    def test_the_energy_is_pieces_minus_whole(self):
+        """Every cut of ethanol leaves nine atoms between the fragments, so at
+        a fixed energy per atom every bond must come out the same, and equal
+        to (9 * per_atom) - whole."""
+        md, frags = self._prepared(whole=-100.0, per_atom=-10.0)
+        bde = mv.mol.dissociation(frags, md, level="x")
+        values = bde.obs["bond_dissociation_energy_x"].to_numpy(dtype=float)
+        assert np.allclose(values, 9 * -10.0 - (-100.0))
+
+    def test_there_is_one_row_per_bond(self):
+        """Ethanol has eight acyclic bonds and they are all named."""
+        md, frags = self._prepared()
+        bde = mv.mol.dissociation(frags, md, level="x")
+        assert bde.n_obs == 8
+        assert len(set(bde.obs["broken_bond"])) == 8
+        assert (bde.obs["n_fragments"] == 2).all()
+
+    def test_a_stronger_bond_costs_more(self):
+        """Make one fragment pair unusually stable and its bond becomes the
+        cheapest to break — the ordering is what this is used for."""
+        md, frags = self._prepared()
+        target = frags.obs["broken_bond"].iloc[0]
+        mask = (frags.obs["broken_bond"] == target).to_numpy()
+        energies = frags.obs["energy_x"].to_numpy(dtype=float).copy()
+        energies[mask] -= 5.0
+        frags.obs["energy_x"] = energies
+        bde = mv.mol.dissociation(frags, md, level="x")
+        cheapest = bde.obs.loc[
+            bde.obs["bond_dissociation_energy_x"].idxmin(), "broken_bond"]
+        assert cheapest == target
+
+    def test_rows_point_back_at_the_molecule(self):
+        md, frags = self._prepared()
+        bde = mv.mol.dissociation(frags, md, level="x")
+        assert set(bde.obs["parent"]) == {"ethanol"}
+
+    def test_a_missing_fragment_energy_is_recorded(self):
+        md, frags = self._prepared()
+        energies = frags.obs["energy_x"].to_numpy(dtype=float).copy()
+        energies[0] = np.nan
+        frags.obs["energy_x"] = energies
+        bde = mv.mol.dissociation(frags, md, level="x")
+        assert np.isnan(bde.obs["bond_dissociation_energy_x"]).any()
+        assert bde.uns["dissociation"]["errors"]
+
+    def test_the_molecule_energy_is_required(self):
+        md, frags = self._prepared()
+        del md.obs["energy_x"]
+        with pytest.raises(ValueError, match="the whole is what the pieces"):
+            mv.mol.dissociation(frags, md, level="x")
+
+    def test_the_fragment_energy_is_required(self):
+        md, frags = self._prepared()
+        del frags.obs["energy_x"]
+        with pytest.raises(ValueError, match="mv.calc.energy"):
+            mv.mol.dissociation(frags, md, level="x")
+
+    def test_the_radical_caveat_is_recorded(self):
+        """Fragments are radicals and most methods are worse on those than on
+        the closed-shell molecule. Saying so beside the number is the point."""
+        md, frags = self._prepared()
+        bde = mv.mol.dissociation(frags, md, level="x")
+        assert "radicals" in bde.uns["dissociation"]["caveat"]

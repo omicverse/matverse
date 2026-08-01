@@ -266,6 +266,22 @@ def equivalents(module: str) -> frozenset:
 # ---------------------------------------------------------------- NATIVE
 #: Capability present in matverse, implemented without pymatgen's module.
 NATIVE: Dict[str, str] = {
+    "analysis.bond_dissociation":
+        "mv.mol.dissociation computes the bond dissociation energy directly "
+        "- the energies of the fragments minus the energy of the molecule - "
+        "on top of mv.mol.fragments, which already breaks the bonds. "
+        "BondDissociationEnergies wraps the same arithmetic around a Q-Chem "
+        "workflow and its own fragmenter; there is nothing in it matverse "
+        "cannot do with a calculator it already has, and doing it natively "
+        "keeps the fragment traceable to the bond.",
+    "analysis.fragmenter":
+        "mv.mol.fragments already does this, breaking every acyclic bond "
+        "through networkx rather than through openbabel. Checked against "
+        "Fragmenter on ethanol: the unique fragments agree exactly - CH3, "
+        "CH3O, C2H5, C2H5O, OH, H. The difference is that Fragmenter "
+        "deduplicates by graph isomorphism and can open rings at greater "
+        "depth, while matverse keeps one row per cut, which is what makes "
+        "the fragment traceable to the bond it came from.",
     "analysis.defects.ccd":
         "mv.prop.configuration_coordinate fits the harmonic frequency and "
         "the relaxation energy from energies along a distortion, which is "
@@ -469,19 +485,6 @@ INTERNAL_MARKERS = (
 #: — but they are not "nobody got to it", and the distinction is the difference
 #: between a backlog and a wish.
 BLOCKED: Dict[str, str] = {
-    "analysis.bond_dissociation":
-        "same openbabel situation as analysis.fragmenter, and additionally "
-        "needs an energy per fragment, so it is a wrapper plus a calculator "
-        "loop rather than a wrapper. Not wrapped yet.",
-    "analysis.fragmenter":
-        "openbabel does work once libXrender is present - the wheel bundles "
-        "cairo but not libXrender, and every format plugin links against "
-        "it, so the bindings fail with a ValueError from the format table "
-        "rather than a missing-library error. Installed and verified here "
-        "via conda-forge's xorg-libxrender, which is how "
-        "mv.mol.functional_groups came to be wrapped. This one is simply "
-        "not wrapped yet: fragmenting a molecule by breaking bonds is a "
-        "real capability and would sit beside mv.mol.fragments.",
     "analysis.topological.spillage":
         "SOCSpillage takes two WAVECAR paths and overlap_so_spinpol reads "
         "band energies and k-points off both. Its other two public methods, "

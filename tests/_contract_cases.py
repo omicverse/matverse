@@ -531,6 +531,23 @@ def cases(tmp):
         return (rng.randn(n, 3, 3), rng.randn(n, 3, 3, 3),
                 np.reshape(force, (n, 3, n, 3)).swapaxes(1, 2))
 
+    def ethanol_whole():
+        from pymatgen.core import Molecule
+        out = mv.mol.from_molecules([Molecule(
+            ["C", "C", "O", "H", "H", "H", "H", "H", "H"],
+            [[-1.1, 0.2, 0.0], [0.2, -0.5, 0.0], [1.3, 0.4, 0.0],
+             [-1.0, 1.3, 0.0], [-1.7, -0.1, 0.9], [-1.7, -0.1, -0.9],
+             [0.3, -1.2, 0.9], [0.3, -1.2, -0.9], [2.1, -0.1, 0.0]])])
+        out.obs_names = ["ethanol"]
+        out.obs["energy_x"] = [-100.0]
+        return out
+
+    def ethanol_fragments():
+        whole = ethanol_whole()
+        frags = mv.mol.fragments(whole, depth=1)
+        frags.obs["energy_x"] = [-10.0 * n for n in frags.obs["fragment_size"]]
+        return frags
+
     def water_with_energy():
         """One molecule with a total energy, for mv.mol.quasirrho."""
         from pymatgen.core import Molecule
@@ -727,6 +744,8 @@ def cases(tmp):
         (mv.neb.hops, one_metal, ("Cu",), {"returns": "new"}),
 
         (mv.disorder.sro, one_metal, (), {}),
+        (mv.mol.dissociation, ethanol_fragments,
+         (ethanol_whole(),), {"level": "x", "returns": "new"}),
         (mv.prop.configuration_coordinate, distortion_curve,
          (), {"coordinate": "Q", "level": "pbe"}),
         (mv.mag.exchange, spin_orderings, (), {"level": "pbe",
