@@ -478,6 +478,27 @@ def cases(tmp):
             cell, Dos(0.0, energies, {Spin.up: peak}),
             {site: {Orbital.dxy: {Spin.up: peak}} for site in cell})]
 
+    def rocksalt_icohp():
+        """An IcohpCollection over one_metal's own neighbours."""
+        from pymatgen.electronic_structure.cohp import IcohpCollection
+        from pymatgen.electronic_structure.core import Spin
+        cell = mv.structures(one_metal(), "input")[0]
+        L, A1, A2, LEN, TR, N, IC = [], [], [], [], [], [], []
+        k = 0
+        for i, site in enumerate(cell):
+            for nb in cell.get_neighbors(site, 3.0):
+                if nb.index <= i:
+                    continue
+                k += 1
+                L.append(str(k))
+                A1.append(f"{site.specie.symbol}{i + 1}")
+                A2.append(f"{nb.specie.symbol}{nb.index + 1}")
+                LEN.append(float(nb.nn_distance))
+                TR.append(tuple(int(v) for v in nb.image))
+                N.append(1)
+                IC.append({Spin.up: -2.5})
+        return IcohpCollection(L, A1, A2, LEN, TR, N, IC, False)
+
     def dfpt_tensors():
         """Born charges, internal strain and force constants for one_metal."""
         n = len(mv.structures(one_metal(), "input")[0])
@@ -683,6 +704,8 @@ def cases(tmp):
         (mv.neb.hops, one_metal, ("Cu",), {"returns": "new"}),
 
         (mv.disorder.sro, one_metal, (), {}),
+        (mv.env.lobster, one_metal, (mv.multi.sites(one_metal()),
+                                     [rocksalt_icohp()]), {}),
         (mv.prop.piezo_from_dfpt, one_metal, dfpt_tensors(), {}),
         (mv.prop.polarization, two_metals,
          (np.zeros((2, 3)), np.zeros((2, 3))), {}),

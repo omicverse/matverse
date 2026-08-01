@@ -479,6 +479,86 @@ that `mv.env` writes into.
 ```"""),
 
     ("markdown", """\
+## Who counts as a neighbour?
+
+`mv.env.coordination` decides that from geometry — a distance, a Voronoi solid
+angle, a bond-valence sum. `mv.env.lobster` decides it from the calculated
+bonding: two atoms are neighbours when there is an integrated crystal orbital
+Hamilton population between them, and not otherwise.
+
+On rocksalt the two agree, which is the baseline worth establishing first:"""),
+
+    ("code", """\
+from pymatgen.core import Lattice, Structure
+from pymatgen.electronic_structure.cohp import IcohpCollection
+from pymatgen.electronic_structure.core import Spin
+
+salt = Structure.from_spacegroup("Fm-3m", Lattice.cubic(5.64), ["Na", "Cl"],
+                                 [[0, 0, 0], [.5, .5, .5]])
+
+def icohp_for(cell, cutoff=3.0, skip=()):
+    "An ICOHP list over the neighbours within a cutoff, minus any skipped."
+    L, A1, A2, LEN, TR, N, IC = [], [], [], [], [], [], []
+    k = 0
+    for i, site in enumerate(cell):
+        for nb in cell.get_neighbors(site, cutoff):
+            if nb.index <= i:
+                continue
+            if k in skip:
+                k += 1
+                continue
+            k += 1
+            L.append(str(k)); A1.append(f"{site.specie.symbol}{i + 1}")
+            A2.append(f"{nb.specie.symbol}{nb.index + 1}")
+            LEN.append(float(nb.nn_distance))
+            TR.append(tuple(int(v) for v in nb.image))
+            N.append(1); IC.append({Spin.up: -2.5})
+    return IcohpCollection(L, A1, A2, LEN, TR, N, IC, False)
+
+rocksalt = mv.data.from_structures([salt])
+rs_sites = mv.multi.sites(rocksalt)
+mv.env.lobster(rocksalt, rs_sites, [icohp_for(salt)],
+               valences=[1.0] * 4 + [-1.0] * 4)
+
+rs_sites.obs[["element", "lobster_coordination", "lobster_environment"]]"""),
+
+    ("markdown", """\
+Six and octahedral for every site, which is what rocksalt is.
+
+Now the case that separates the two criteria. Drop four bonds from the ICOHP
+list and change **nothing** about the geometry — the atoms are exactly where
+they were:"""),
+
+    ("code", """\
+partial = mv.data.from_structures([salt])
+p_sites = mv.multi.sites(partial)
+mv.env.lobster(partial, p_sites, [icohp_for(salt, skip=(0, 1, 2, 3))],
+               valences=[1.0] * 4 + [-1.0] * 4)
+
+p_sites.obs[["element", "lobster_coordination"]]"""),
+
+    ("markdown", """\
+Lower coordination, from an identical structure. A geometric criterion would
+still say six at any cutoff, because **the information is not in the geometry** —
+a short contact with no bonding is not a bond, and no distance threshold can
+know that.
+
+That is the case worth reaching for this function for. Most of the time it will
+agree with `mv.env.coordination`, and the times it does not are the times the
+geometric answer was wrong.
+
+```{note}
+The ICOHP data is an argument, one per row, as an `Icohplist` or
+`IcohpCollection` — the same arrangement as the band structures above. Read one
+off disk with `pymatgen.io.lobster.Icohplist(filename='ICOHPLIST.lobster')`;
+`mv.elec.cohp` does exactly that for the per-material bonding summaries.
+
+`additional_condition` follows LOBSTER's own numbering: 1, the default, keeps
+cation–anion bonds only and needs valences, which is what an ionic solid wants.
+Pass 0 to keep every bond.
+```"""),
+
+    ("markdown", """\
 ## What photoemission actually sees
 
 A measured XPS spectrum looks nothing like a plotted density of states, and the

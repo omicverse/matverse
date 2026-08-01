@@ -336,3 +336,110 @@ class TestPolyhedralConnectivity:
 
     def test_nothing_failed_silently(self, frameworks):
         assert frameworks.uns["connectivity"]["n_failed"] == 0
+
+
+def _has_lobster_env() -> bool:
+    try:
+        import pymatgen.analysis.lobster_env  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+@pytest.mark.skipif(not _has_lobster_env(),
+                    reason="pymatgen.analysis.lobster_env is absent before "
+                           "pymatgen 2026")
+class TestLobsterEnvironment:
+    """Coordination decided by calculated bonding rather than by geometry.
+
+    The check is rocksalt, where both answers are six and octahedral — so
+    agreement with the geometric route is the baseline — followed by a case
+    built to make them disagree, which is the only way to show the bonding
+    criterion is doing anything.
+    """
+
+    A = 5.64
+
+    @staticmethod
+    def _icohp(structure, cutoff=3.0, strength=-2.5, skip=()):
+        """An IcohpCollection over the neighbours within a cutoff.
+
+        `skip` drops bonds by index, which is how a contact that is close but
+        not bonded gets represented — the thing geometry cannot see.
+        """
+        from pymatgen.electronic_structure.cohp import IcohpCollection
+        from pymatgen.electronic_structure.core import Spin
+        labels, a1, a2, length, trans, num, icohp = [], [], [], [], [], [], []
+        k = 0
+        for i, site in enumerate(structure):
+            for nb in structure.get_neighbors(site, cutoff):
+                if nb.index <= i:
+                    continue
+                if k in skip:
+                    k += 1
+                    continue
+                k += 1
+                labels.append(str(k))
+                a1.append(f"{site.specie.symbol}{i + 1}")
+                a2.append(f"{nb.specie.symbol}{nb.index + 1}")
+                length.append(float(nb.nn_distance))
+                trans.append(tuple(int(v) for v in nb.image))
+                num.append(1)
+                icohp.append({Spin.up: strength})
+        return IcohpCollection(labels, a1, a2, length, trans, num, icohp,
+                               False)
+
+    @staticmethod
+    def _rocksalt(a):
+        from pymatgen.core import Lattice, Structure
+        return Structure.from_spacegroup("Fm-3m", Lattice.cubic(a),
+                                         ["Na", "Cl"],
+                                         [[0, 0, 0], [.5, .5, .5]])
+
+    @pytest.fixture
+    def salt(self):
+        st = self._rocksalt(self.A)
+        md = mv.data.from_structures([st])
+        return md, mv.multi.sites(md), st
+
+    def test_rocksalt_is_six_coordinate(self, salt):
+        md, sites, st = salt
+        mv.env.lobster(md, sites, [self._icohp(st)],
+                       valences=[1.0] * 4 + [-1.0] * 4)
+        assert (sites.obs["lobster_coordination"] == 6).all()
+
+    def test_the_environment_is_octahedral(self, salt):
+        md, sites, st = salt
+        mv.env.lobster(md, sites, [self._icohp(st)],
+                       valences=[1.0] * 4 + [-1.0] * 4)
+        assert set(sites.obs["lobster_environment"]) == {"O:6"}
+
+    def test_a_contact_without_bonding_is_not_a_neighbour(self, salt):
+        """The whole point. Drop four bonds from the ICOHP list while leaving
+        the geometry untouched: a geometric criterion still counts six, and
+        this counts fewer, because the information is not in the geometry."""
+        md, sites, st = salt
+        mv.env.lobster(md, sites, [self._icohp(st, skip=(0, 1, 2, 3))],
+                       valences=[1.0] * 4 + [-1.0] * 4)
+        reduced = sites.obs["lobster_coordination"].to_numpy(dtype=float)
+        assert np.nanmin(reduced) < 6, \
+            "removing bonds must reduce somebody's coordination"
+
+    def test_one_icohp_set_per_row(self, salt):
+        md, sites, st = salt
+        with pytest.raises(ValueError, match="one per row"):
+            mv.env.lobster(md, sites, [self._icohp(st)] * 2)
+
+    def test_a_missing_set_is_recorded(self, salt):
+        md, sites, st = salt
+        mv.env.lobster(md, sites, [None])
+        assert np.isnan(sites.obs["lobster_coordination"].to_numpy(float)).all()
+        assert any("no ICOHP" in e
+                   for e in sites.uns["lobster_env"]["settings"]["errors"])
+
+    def test_the_bond_filter_is_recorded(self, salt):
+        md, sites, st = salt
+        mv.env.lobster(md, sites, [self._icohp(st)],
+                       valences=[1.0] * 4 + [-1.0] * 4,
+                       additional_condition=0)
+        assert sites.uns["lobster_env"]["settings"]["additional_condition"] == 0

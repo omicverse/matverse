@@ -147,6 +147,7 @@ WRAPPED: Dict[str, List[str]] = {
     "analysis.defects.recombination": ["mv.prop.capture"],
     "analysis.ferroelectricity.polarization": ["mv.prop.polarization"],
     "analysis.piezo_sensitivity": ["mv.prop.piezo_from_dfpt"],
+    "analysis.lobster_env": ["mv.env.lobster"],
     "analysis.defects.corrections.freysoldt":
         ["mv.thermo.defect_formation"],
     "analysis.diffusion.aimd.clustering": ["mv.md.sites"],
@@ -456,15 +457,14 @@ INTERNAL_MARKERS = (
 #: — but they are not "nobody got to it", and the distinction is the difference
 #: between a backlog and a wish.
 BLOCKED: Dict[str, str] = {
-    "analysis.lobster_env":
-        "matverse reads external first-principles output as a matter of "
-        "course - mv.dft.read_outputs, mv.dft.read_dos, mv.elec.read_bands "
-        "and mv.elec.cohp all take a directory of runs - so this is not "
-        "blocked by what matverse is. It is blocked by verification: "
-        "LobsterNeighbors needs ICOHPLIST and CHARGE files from a LOBSTER "
-        "run. mv.elec.cohp already reads ICOHPLIST from a directory, so the "
-        "route in exists; what is missing is a real LOBSTER output "
-        "directory to verify against.",
+    "analysis.defects.corrections.kumagai":
+        "get_efnv_correction takes structures carrying a 'potential' site "
+        "property and a dielectric tensor, so the data is constructible - "
+        "but the function raises 'vise/pydefect is not installed' before it "
+        "looks at any of it. pydefect does not install here either: its "
+        "scikit-image dependency has no wheel for this platform and the "
+        "source build fails in pythran. Verified by attempting both, not "
+        "inferred.",
     "analysis.topological.spillage":
         "matverse reads external first-principles output as a matter of "
         "course - mv.dft.read_outputs, mv.dft.read_dos, mv.elec.read_bands "
@@ -473,13 +473,6 @@ BLOCKED: Dict[str, str] = {
         "SOCSpillage compares two WAVECARs, with and without spin-orbit "
         "coupling. Those are large binary files from two real runs and "
         "there are none here.",
-    "analysis.defects.corrections.kumagai":
-        "matverse reads external first-principles output as a matter of "
-        "course - mv.dft.read_outputs, mv.dft.read_dos, mv.elec.read_bands "
-        "and mv.elec.cohp all take a directory of runs - so this is not "
-        "blocked by what matverse is. It is blocked by verification: it "
-        "needs the atomic site potentials from the OUTCARs of the defective "
-        "and pristine supercells. None here.",
     "analysis.defects.ccd":
         "matverse reads external first-principles output as a matter of "
         "course - mv.dft.read_outputs, mv.dft.read_dos, mv.elec.read_bands "

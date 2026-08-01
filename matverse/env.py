@@ -459,3 +459,103 @@ def _periodicity(component) -> int:
             pass
     label = str(getattr(component, "periodicity", "0D"))
     return {"0D": 0, "1D": 1, "2D": 2, "3D": 3}.get(label, 0)
+
+
+@register_function(
+    aliases=["lobster coordination", "bonding coordination",
+             "icohp coordination", "coordination from bonding",
+             "lobster neighbours", "chemical bonding environment"],
+    category="env",
+    description="Coordination number and environment decided by bond strength "
+                "from a LOBSTER calculation, rather than by geometry.",
+    requires={"structures": ["{source}"]},
+    produces={"sites.obs": ["lobster_coordination", "lobster_environment"]},
+    prerequisites=["mv.multi.sites"],
+    examples=["mv.env.lobster(md, sites, icohp)",
+              "mv.env.lobster(md, sites, icohp, valences=charges)"],
+    related=["mv.env.coordination", "mv.env.chemenv", "mv.elec.cohp"],
+    notes="mv.env.coordination decides who is a neighbour from geometry — "
+          "distance, Voronoi solid angle, a bond-valence sum. This decides it "
+          "from the calculated bonding: two atoms are neighbours when there is "
+          "an integrated crystal orbital Hamilton population between them, "
+          "and not otherwise.\\n\\n"
+          "The two usually agree, and where they disagree the bonding answer "
+          "is the one worth having: a short contact with no bonding is not a "
+          "bond, and a long one with strong overlap is. That is the case a "
+          "geometric criterion cannot get right at any cutoff, because the "
+          "information is not in the geometry.\\n\\n"
+          "**The ICOHP data is an argument**, one per row, as an "
+          "`Icohplist` or `IcohpCollection` — the same arrangement as "
+          "mv.elec.bands taking band structures. Read one off disk with "
+          "`pymatgen.io.lobster.Icohplist(filename='ICOHPLIST.lobster')`; "
+          "mv.elec.cohp does that for the per-material summaries.\\n\\n"
+          "additional_condition follows LOBSTER's own numbering and decides "
+          "which bonds count — 1, the default here, keeps cation-anion bonds "
+          "only, which needs valences and is what you want for an ionic "
+          "solid. Pass 0 to keep every bond.",
+)
+def lobster(md: AnnData, sites: AnnData, icohp, source: str = "input",
+            valences=None, additional_condition: int = 1) -> None:
+    """Bonding-based coordination from ICOHP. Deposits on ``sites``."""
+    try:
+        from pymatgen.analysis.lobster_env import LobsterNeighbors
+    except ImportError as exc:                             # pragma: no cover
+        raise ImportError(
+            f"mv.env.lobster needs pymatgen.analysis.lobster_env, which is "
+            f"absent from pymatgen 2025.10.7 and earlier. Upgrade pymatgen, "
+            f"or use mv.env.coordination for the geometric answer. ({exc})"
+        ) from exc
+    from pymatgen.electronic_structure.cohp import IcohpCollection
+    from pymatgen.io.lobster import Icohplist
+
+    if len(icohp) != md.n_obs:
+        raise ValueError(f"got {len(icohp)} ICOHP sets for {md.n_obs} rows; "
+                         f"one per row is needed")
+
+    numbers = np.full(sites.n_obs, np.nan)
+    environments = np.array([""] * sites.n_obs, dtype=object)
+    failed: list[str] = []
+    cursor = 0
+
+    for row, structure in enumerate(structures(md, source)):
+        span = slice(cursor, cursor + len(structure))
+        cursor += len(structure)
+        entry = icohp[row]
+        if entry is None:
+            failed.append(f"row {row}: no ICOHP")
+            continue
+        listing = (Icohplist(icohpcollection=entry)
+                   if isinstance(entry, IcohpCollection) else entry)
+        charges = valences[row] if (valences is not None
+                                    and len(valences) == md.n_obs
+                                    and not np.isscalar(valences[0])) \
+            else valences
+        try:
+            neighbours = LobsterNeighbors(
+                structure=structure, icoxxlist_obj=listing,
+                valences=list(charges) if charges is not None else None,
+                additional_condition=int(additional_condition))
+            numbers[span] = [neighbours.get_cn(structure, i)
+                             for i in range(len(structure))]
+        except Exception as exc:
+            failed.append(f"row {row}: {type(exc).__name__}: {exc}")
+            continue
+
+        try:
+            summary = neighbours.get_light_structure_environment()
+            environments[span] = [
+                (block[0]["ce_symbol"] if block else "")
+                for block in summary.coordination_environments]
+        except Exception as exc:
+            failed.append(f"row {row} environments: {type(exc).__name__}: "
+                          f"{exc}")
+
+    sites.obs["lobster_coordination"] = numbers
+    sites.obs["lobster_environment"] = environments
+    sites.uns.setdefault("lobster_env", {})["settings"] = {
+        "additional_condition": int(additional_condition),
+        "condition_meaning": "1 keeps cation-anion bonds only; 0 keeps all",
+        "n_failed": len(failed), "errors": failed[:20],
+    }
+    record(md, "env.lobster", source=source,
+           additional_condition=int(additional_condition))
