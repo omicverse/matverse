@@ -149,6 +149,7 @@ WRAPPED: Dict[str, List[str]] = {
     "analysis.piezo_sensitivity": ["mv.prop.piezo_from_dfpt"],
     "analysis.lobster_env": ["mv.env.lobster"],
     "analysis.magnetism.heisenberg": ["mv.mag.exchange"],
+    "analysis.functional_groups": ["mv.mol.functional_groups"],
     "analysis.defects.corrections.freysoldt":
         ["mv.thermo.defect_formation"],
     "analysis.diffusion.aimd.clustering": ["mv.md.sites"],
@@ -468,6 +469,19 @@ INTERNAL_MARKERS = (
 #: — but they are not "nobody got to it", and the distinction is the difference
 #: between a backlog and a wish.
 BLOCKED: Dict[str, str] = {
+    "analysis.bond_dissociation":
+        "same openbabel situation as analysis.fragmenter, and additionally "
+        "needs an energy per fragment, so it is a wrapper plus a calculator "
+        "loop rather than a wrapper. Not wrapped yet.",
+    "analysis.fragmenter":
+        "openbabel does work once libXrender is present - the wheel bundles "
+        "cairo but not libXrender, and every format plugin links against "
+        "it, so the bindings fail with a ValueError from the format table "
+        "rather than a missing-library error. Installed and verified here "
+        "via conda-forge's xorg-libxrender, which is how "
+        "mv.mol.functional_groups came to be wrapped. This one is simply "
+        "not wrapped yet: fragmenting a molecule by breaking bonds is a "
+        "real capability and would sit beside mv.mol.fragments.",
     "analysis.topological.spillage":
         "SOCSpillage takes two WAVECAR paths and overlap_so_spinpol reads "
         "band energies and k-points off both. Its other two public methods, "
@@ -483,26 +497,6 @@ BLOCKED: Dict[str, str] = {
         "scikit-image dependency has no wheel for this platform and the "
         "source build fails in pythran. Verified by attempting both, not "
         "inferred.",
-    "analysis.bond_dissociation":
-        "needs openbabel, and specifically its pybel bindings, which "
-        "pymatgen imports as `from openbabel import openbabel, pybel`. "
-        "openbabel-wheel 3.1.1.23 does now ship a cp312 manylinux wheel - "
-        "the older note here said there was none, which was out of date - "
-        "but installing it is not enough: several format plugins need "
-        "libXrender.so.1, absent on this system, and pybel builds its "
-        "format table by parsing GetSupportedInputFormat() with no "
-        "tolerance for a plugin that failed to load, so it dies on a "
-        "ValueError and takes BabelMolAdaptor with it. Verified: openbabel "
-        "imports, pybel does not.",
-    "analysis.fragmenter":
-        "needs openbabel's pybel bindings - see analysis.bond_dissociation "
-        "for what actually fails and why installing the wheel does not fix "
-        "it",
-    "analysis.functional_groups":
-        "needs openbabel's pybel bindings - see analysis.bond_dissociation. "
-        "FunctionalGroupExtractor itself is pure structure analysis and "
-        "would be the cheapest of the three to wrap if pybel ever imports "
-        "here",
     "analysis.defects.finder":
         "DefectSiteFinder needs dscribe, and dscribe needs numba - not "
         "directly, but through `sparse`, which it imports at module scope. "

@@ -567,7 +567,7 @@ def match(md: AnnData, source: str = "input", tolerance: float = 0.1,
 
 
 __all__ = ["BOND_STRATEGIES", "from_molecules", "point_group", "bonds",
-           "quasirrho",
+           "quasirrho", "functional_groups",
            "bond_lengths",
            "descriptors", "fragments", "match"]
 
@@ -773,3 +773,107 @@ def quasirrho(md: AnnData, frequencies, energy: str, source: str = "input",
     }
     record(md, "mol.quasirrho", energy=energy, temperature=float(temperature),
            cutoff=float(cutoff), key_added=name or None)
+
+
+@register_function(
+    aliases=["functional groups", "moieties", "substituents", "what groups",
+             "hydroxyl", "carbonyl", "chemical groups"],
+    category="mol",
+    description="Identify the functional groups in each molecule and count "
+                "them, so a set of candidates can be filtered on chemistry "
+                "rather than on formula.",
+    requires={"structures": ["{source}"]},
+    produces={"obs": ["functional_groups", "n_functional_groups"],
+              "uns": ["functional_groups"]},
+    prerequisites=["mv.mol.from_molecules"],
+    examples=["mv.mol.functional_groups(md)",
+              "mv.mol.functional_groups(md, heteroatoms_only=False)"],
+    related=["mv.mol.bonds", "mv.mol.descriptors", "mv.mol.fragments"],
+    notes="A formula does not say what a molecule does. C2H6O is ethanol or "
+          "dimethyl ether depending on where the oxygen sits, and a screen "
+          "over candidate molecules usually wants 'the ones with a carboxylic "
+          "acid' rather than 'the ones with two carbons'.\\n\\n"
+          "obs['functional_groups'] is a sorted, semicolon-separated list of "
+          "the groups found, which is a string so it can be filtered on with "
+          "mv.screen.filter and read without unpacking anything. The counts "
+          "per group go to uns, one entry per row, where a dict belongs.\\n\\n"
+          "Groups are found by walking out from heteroatoms and from carbons "
+          "in unusual bonding, which is what pymatgen's "
+          "FunctionalGroupExtractor does; heteroatoms_only=False also returns "
+          "plain alkyl fragments, which is noisier and occasionally what you "
+          "want.\\n\\n"
+          "**Needs openbabel**, and openbabel needs libXrender at runtime — "
+          "every one of its format plugins links against it through cairo, "
+          "and without it the Python bindings fail to import with a "
+          "ValueError from the format table rather than anything that names "
+          "the missing library. `conda install -c conda-forge xorg-libxrender` "
+          "or your distribution's libXrender package fixes it; the error "
+          "raised here says so, because the failure otherwise costs an "
+          "afternoon.",
+)
+def functional_groups(md: AnnData, source: str = "input",
+                      heteroatoms_only: bool = True,
+                      key_added: str | None = None) -> None:
+    """Functional groups per molecule. Deposits; returns ``None``."""
+    try:
+        from pymatgen.analysis.functional_groups import (
+            FunctionalGroupExtractor)
+        from pymatgen.analysis.graphs import MoleculeGraph
+        from pymatgen.analysis.local_env import OpenBabelNN
+    except ImportError as exc:                             # pragma: no cover
+        raise ImportError(
+            f"mv.mol.functional_groups needs openbabel with its Python "
+            f"bindings. `pip install openbabel-wheel` provides them, and they "
+            f"additionally need libXrender at runtime - without it the import "
+            f"fails with an unrelated-looking ValueError. Get it with `conda "
+            f"install -c conda-forge xorg-libxrender` or your distribution's "
+            f"libXrender package. ({exc})") from exc
+
+    suffix = f"_{key_added}" if key_added else ""
+    listed, totals, failed = [], [], []
+    per_row: list = []
+
+    for row, molecule in enumerate(structures(md, source)):
+        try:
+            graph = MoleculeGraph.from_local_env_strategy(molecule,
+                                                          OpenBabelNN())
+            extractor = FunctionalGroupExtractor(graph)
+            found = extractor.get_all_functional_groups(
+                catch_basic=heteroatoms_only)
+            summary = extractor.categorize_functional_groups(found)
+        except Exception as exc:
+            failed.append(f"row {row}: {type(exc).__name__}: {exc}")
+            listed.append("")
+            totals.append(0)
+            per_row.append({})
+            continue
+
+        counts = {str(name): int(block.get("count", 0))
+                  for name, block in summary.items()}
+        listed.append(";".join(sorted(counts)))
+        totals.append(int(sum(counts.values())))
+        per_row.append(counts)
+
+    # openbabel does not fail at import - pymatgen's local_env imports
+    # OpenBabelNN whether or not the bindings work, and the failure surfaces
+    # per molecule inside BabelMolAdaptor. Without this, a missing libXrender
+    # produces a column of empty strings and no complaint, which is the worst
+    # of the three possible outcomes.
+    if failed and len(failed) == md.n_obs and any(
+            word in " ".join(failed).lower()
+            for word in ("babel", "openbabel")):
+        raise ImportError(
+            f"every molecule failed in openbabel. Its Python bindings need "
+            f"libXrender at runtime and fail without it — `conda install -c "
+            f"conda-forge xorg-libxrender`, or your distribution's "
+            f"libxrender1. First error: {failed[0]}")
+
+    md.obs[f"functional_groups{suffix}"] = listed
+    md.obs[f"n_functional_groups{suffix}"] = np.array(totals, dtype=int)
+    md.uns.setdefault("functional_groups", {})[key_added or "default"] = {
+        "counts": per_row,
+        "heteroatoms_only": bool(heteroatoms_only),
+        "errors": failed,
+    }
+    record(md, "mol.functional_groups", source=source,
+           heteroatoms_only=bool(heteroatoms_only), key_added=key_added)

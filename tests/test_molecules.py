@@ -564,3 +564,103 @@ class TestQuasiRRHO:
         for column in ("entropy_quasirrho", "entropy_harmonic",
                        "free_energy_quasirrho", "enthalpy_correction"):
             assert md.obs[column].dtype.kind == "f", column
+
+
+def _has_openbabel() -> bool:
+    """openbabel's bindings, which also need libXrender at runtime.
+
+    Importing `openbabel.openbabel` succeeds without it; `pybel` is what
+    fails, and pymatgen imports both, so this checks the pair.
+    """
+    try:
+        from openbabel import openbabel, pybel  # noqa: F401
+    except Exception:
+        return False
+    return True
+
+
+@pytest.mark.skipif(not _has_openbabel(),
+                    reason="openbabel bindings absent (needs openbabel-wheel "
+                           "and libXrender)")
+class TestFunctionalGroups:
+    """Ethanol and dimethyl ether are both C2H6O and are not the same
+    molecule, which is the whole reason to ask this question of a structure
+    rather than of a formula."""
+
+    @staticmethod
+    def _ethanol():
+        from pymatgen.core import Molecule
+        return Molecule(
+            ["C", "C", "O", "H", "H", "H", "H", "H", "H"],
+            [[-1.1, 0.2, 0.0], [0.2, -0.5, 0.0], [1.3, 0.4, 0.0],
+             [-1.0, 1.3, 0.0], [-1.7, -0.1, 0.9], [-1.7, -0.1, -0.9],
+             [0.3, -1.2, 0.9], [0.3, -1.2, -0.9], [2.1, -0.1, 0.0]])
+
+    @staticmethod
+    def _water():
+        from pymatgen.core import Molecule
+        return Molecule(["O", "H", "H"],
+                        [[0, 0, 0.117], [0, 0.757, -0.469],
+                         [0, -0.757, -0.469]])
+
+    def test_ethanol_has_a_hydroxyl(self):
+        md = mv.mol.from_molecules([self._ethanol()])
+        mv.mol.functional_groups(md)
+        assert "[OH]" in md.obs["functional_groups"].iloc[0]
+
+    def test_ethanol_has_a_methyl(self):
+        md = mv.mol.from_molecules([self._ethanol()])
+        mv.mol.functional_groups(md)
+        assert "[CH3]" in md.obs["functional_groups"].iloc[0]
+
+    def test_the_column_is_a_string_a_screen_can_filter_on(self):
+        """Semicolon-separated and sorted, so `contains('[OH]')` works without
+        unpacking anything."""
+        md = mv.mol.from_molecules([self._ethanol(), self._water()])
+        mv.mol.functional_groups(md)
+        column = md.obs["functional_groups"]
+        # Not a dtype assertion: pandas 3 gives this StringDtype and pandas 2
+        # gives object, and what matters is that it behaves like text.
+        assert all(isinstance(v, str) for v in column)
+        with_oh = column.str.contains(r"\[OH\]", regex=True)
+        assert bool(with_oh.iloc[0])
+
+    def test_the_counts_are_kept_where_a_dict_belongs(self):
+        md = mv.mol.from_molecules([self._ethanol()])
+        mv.mol.functional_groups(md)
+        counts = md.uns["functional_groups"]["default"]["counts"][0]
+        assert counts["[OH]"] == 1
+        assert sum(counts.values()) == \
+            int(md.obs["n_functional_groups"].iloc[0])
+
+    def test_two_molecules_get_two_answers(self):
+        md = mv.mol.from_molecules([self._ethanol(), self._water()])
+        md.obs_names = ["ethanol", "water"]
+        mv.mol.functional_groups(md)
+        assert md.obs["functional_groups"]["ethanol"] != \
+            md.obs["functional_groups"]["water"]
+
+    def test_total_failure_raises_rather_than_leaving_blanks(self,
+                                                             monkeypatch):
+        """openbabel does not fail at import — pymatgen imports OpenBabelNN
+        regardless and the failure surfaces per molecule. Without a check,
+        a missing libXrender gives a column of empty strings and no
+        complaint."""
+        import pymatgen.analysis.graphs as graphs
+
+        def explode(*args, **kwargs):
+            raise RuntimeError("BabelMolAdaptor requires openbabel")
+
+        monkeypatch.setattr(graphs.MoleculeGraph, "from_local_env_strategy",
+                            staticmethod(explode))
+        md = mv.mol.from_molecules([self._ethanol()])
+        with pytest.raises(ImportError, match="libXrender"):
+            mv.mol.functional_groups(md)
+
+    def test_a_key_added_keeps_two_runs_apart(self):
+        md = mv.mol.from_molecules([self._ethanol()])
+        mv.mol.functional_groups(md, key_added="strict")
+        mv.mol.functional_groups(md, heteroatoms_only=False, key_added="loose")
+        assert "functional_groups_strict" in md.obs
+        assert "functional_groups_loose" in md.obs
+        assert md.uns["functional_groups"]["loose"]["heteroatoms_only"] is False

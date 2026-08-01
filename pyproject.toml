@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "matverse"
-version = "0.1.60"
+version = "0.1.61"
 description = "A materials analysis ecosystem on the AnnData substrate"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -43,6 +43,11 @@ cost = ["bibtexparser"]                               # mv.prop.cost price table
 diffusion = ["pymatgen-analysis-diffusion"]           # mv.md.rdf, mv.md.sites,
                                                      # mv.neb.percolation
 alloys = ["pymatgen-analysis-alloys"]                # mv.gen.alloy_pairs
+# mv.mol.functional_groups. openbabel additionally needs libXrender at
+# runtime, which pip cannot supply - every format plugin links against it
+# through cairo, and without it the bindings fail to import with a
+# ValueError from the format table rather than a missing-library error.
+molecules = ["openbabel-wheel"]
 defects = ["pymatgen-analysis-defects"]              # interstitial and antisite
                                                      # kinds of mv.pp.defects
 mp = ["mp-api>=0.46.2"]                              # Delta-table data products

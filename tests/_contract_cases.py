@@ -51,6 +51,9 @@ UNPROBEABLE: dict[str, str] = {
     "mv.elec.cohp": "parses ICOHPLIST.lobster from a real LOBSTER run",
     "mv.feat.matminer": "matminer is not installed in this environment",
     "mv.feat.soap": "dscribe is not installed in this environment",
+    "mv.mol.functional_groups":
+        "needs openbabel's Python bindings, which additionally need "
+        "libXrender at runtime; neither is present in this environment",
     "mv.feat.embed": "needs a registered third-party embedding model",
     "mv.utils.submit": "would submit a real job to the scheduler",
     "mv.disorder.sqs": "needs ATAT's mcsqs on PATH, which is not installed",

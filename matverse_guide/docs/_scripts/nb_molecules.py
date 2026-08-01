@@ -359,6 +359,56 @@ rather than a default: the registry entry names both routes, so an agent
 choosing between them can see that the choice exists."""),
 
     ("markdown", """\
+## What is actually on the molecule
+
+A formula does not say what a molecule does. C₂H₆O is ethanol or dimethyl
+ether depending on where the oxygen sits, and those behave nothing alike. A
+screen over candidate molecules almost always wants *"the ones with a
+carboxylic acid"* rather than *"the ones with two carbons"*.
+
+`mv.mol.functional_groups` walks out from the heteroatoms and reports what it
+finds:"""),
+
+    ("code", """\
+from pymatgen.core import Molecule
+
+ethanol = Molecule(
+    ["C", "C", "O", "H", "H", "H", "H", "H", "H"],
+    [[-1.1, 0.2, 0.0], [0.2, -0.5, 0.0], [1.3, 0.4, 0.0], [-1.0, 1.3, 0.0],
+     [-1.7, -0.1, 0.9], [-1.7, -0.1, -0.9], [0.3, -1.2, 0.9],
+     [0.3, -1.2, -0.9], [2.1, -0.1, 0.0]])
+water = Molecule(["O", "H", "H"],
+                 [[0, 0, 0.117], [0, 0.757, -0.469], [0, -0.757, -0.469]])
+
+groups = mv.mol.from_molecules([ethanol, water])
+groups.obs_names = ["ethanol", "water"]
+
+try:
+    mv.mol.functional_groups(groups)
+    result = groups.obs[["functional_groups", "n_functional_groups"]]
+except ImportError as exc:
+    result = str(exc)[:200]      # openbabel is an optional extra
+result"""),
+
+    ("markdown", """\
+Ethanol comes back as `[CH3];[OH]` — a methyl and a hydroxyl, which is what it
+is. The column is a sorted, semicolon-separated **string** on purpose, so it
+can go straight into `mv.screen.filter` with a `contains` and be read without
+unpacking anything. The counts per group live in `uns`, where a dict belongs.
+
+```{warning}
+This needs openbabel's Python bindings, and openbabel needs **libXrender** at
+runtime. `pip install openbabel-wheel` gets the bindings; without libXrender
+they fail to import with a `ValueError` raised from openbabel's format table —
+an error that names neither openbabel nor the missing library, and costs an
+afternoon to trace.
+
+`conda install -c conda-forge xorg-libxrender`, or your distribution's
+`libxrender1`, fixes it. The error matverse raises says all of this, which is
+the only reason it is worth writing down here.
+```"""),
+
+    ("markdown", """\
 ## Free energies, and the mode you trust least
 
 A rigid-rotor harmonic-oscillator entropy diverges as $1/\\omega$. That is fine
