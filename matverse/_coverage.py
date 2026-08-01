@@ -485,6 +485,32 @@ INTERNAL_MARKERS = (
 #: — but they are not "nobody got to it", and the distinction is the difference
 #: between a backlog and a wish.
 BLOCKED: Dict[str, str] = {
+    "analysis.compatibility.correction_calculator":
+        "not wrapped, and the earlier reason - that pymatgen ships no "
+        "experimental data to fit to - framed a data problem where there is "
+        "a convention problem. compute_corrections takes plain dicts of "
+        "formula, experimental energy and uncertainty alongside computed "
+        "entries carrying e_above_hull, oxide_type and elemental "
+        "references; all of that is constructible and it runs here on "
+        "synthetic input, returning a fit with a 0.002 standard error. What "
+        "is missing is its normalisation: shifting the experimental "
+        "energies by a known amount per oxygen moves the fitted correction "
+        "linearly but by a factor of 0.26 and with the same sign rather "
+        "than the opposite, which does not match a per-formula-unit or "
+        "per-atom reading. Shipping a wrapper whose test expectation was "
+        "tuned until it matched would be worse than the gap, so this waits "
+        "until the convention is pinned down against a known MP2020 refit.",
+    "analysis.chemenv.coordination_environments.voronoi":
+        "not wrapped, and the earlier reason - that it is reached only "
+        "through compute_structure_environments and has no entry point - is "
+        "wrong. DetailedVoronoiContainer takes a structure directly and "
+        "returns six neighbours for rocksalt sodium, each with a normalised "
+        "distance and angle. What it would add over mv.env.coordination is "
+        "those normalised figures: how borderline a neighbour is, rather "
+        "than whether it counts. That is a real quantity and largely "
+        "overlaps CrystalNN, which is itself Voronoi-based, so this is a "
+        "judgement that it duplicates rather than a claim that it cannot be "
+        "done.",
     "analysis.defects.corrections.kumagai":
         "get_efnv_correction takes constructible arguments - structures "
         "carrying a 'potential' site property and a dielectric tensor - but "
@@ -509,12 +535,6 @@ BLOCKED: Dict[str, str] = {
         "band energies would verify this library's arithmetic and say "
         "nothing about topology, so there is nothing here worth shipping "
         "without two real spin-orbit runs.",
-    "analysis.chemenv.coordination_environments.voronoi":
-        "the Voronoi construction ChemEnv runs before it fits a "
-        "polyhedron. Confirmed by runtime check to be loaded and executed "
-        "during a mv.env.chemenv call, but pymatgen imports it lazily "
-        "inside the finder, so there is no import chain from matverse to "
-        "it and no entry point to wrap - only compute_structure_environments",
     "symmetry.maggroups":
         "a lookup table with no derivation. The database holds all 1651 "
         "magnetic space groups and MagneticSpaceGroup takes a BNS or OG "
@@ -522,12 +542,6 @@ BLOCKED: Dict[str, str] = {
         "structure's magnetic space group from its moments - there is no "
         "MagneticSpaceGroupAnalyzer beside SpacegroupAnalyzer, so there is "
         "no route from a structure to a label.",
-    "analysis.compatibility.correction_calculator":
-        "fits a correction scheme rather than applying one. "
-        "compute_corrections needs experimental formation enthalpies paired "
-        "with calculated entries for the same compounds, and pymatgen ships "
-        "no such data file - the module references none. Applying the "
-        "result is mv.thermo.corrections, wrapped.",
     "electronic_structure.boltztrap": "needs the BoltzTraP binary",
     "electronic_structure.boltztrap2":
         "BoltzTraP2 links against netCDF and does not build here; "
