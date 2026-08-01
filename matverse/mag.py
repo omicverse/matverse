@@ -557,3 +557,115 @@ def exchange(md: AnnData, level: str = "pbe", source: str = "input",
                        stacklevel=2)
     record(md, "mag.exchange", level=level, cutoff=float(cutoff),
            key_added=name)
+
+
+@register_function(
+    aliases=["magnetic symmetry", "magnetic space group", "time reversal",
+             "how symmetric is the ordering", "magnetic point group",
+             "compensated"],
+    category="mag",
+    description="How much of a structure's symmetry survives once its "
+                "magnetic moments are taken into account, and whether time "
+                "reversal is among the operations that survive.",
+    requires={"structures": ["{source}"]},
+    produces={"obs": ["magnetic_symmetry_order", "parent_symmetry_order",
+                      "magnetic_symmetry_fraction"]},
+    prerequisites=["mv.mag.orderings"],
+    examples=["mv.mag.symmetry(orderings)",
+              "mv.mag.symmetry(orderings, magmom='magmom')"],
+    related=["mv.mag.orderings", "mv.mag.describe", "mv.pp.symmetry"],
+    notes="Putting moments on a lattice breaks some of its symmetry and "
+          "keeps the rest, and which is which is what a magnetic space group "
+          "records. pymatgen ships the database of all 1651 of them but no "
+          "analyser that reads one off a structure — there is no "
+          "MagneticSpaceGroupAnalyzer beside SpacegroupAnalyzer — so this "
+          "computes the underlying quantity instead of naming it.\\n\\n"
+          "Each operation of the non-magnetic parent group is applied to the "
+          "moments as the axial vectors they are, once as-is and once "
+          "combined with time reversal. An operation survives if either "
+          "version maps the arrangement onto itself.\\n\\n"
+          "obs['time_reversal_symmetric'] is the useful flag. Reversing every "
+          "moment gives back the same arrangement exactly when the structure "
+          "is compensated — an antiferromagnet, or something with no moments "
+          "at all. A ferromagnet is never time-reversal symmetric, whatever "
+          "its lattice looks like, so this separates the two without "
+          "reference to a net moment.\\n\\n"
+          "obs['magnetic_symmetry_fraction'] is what survived over what there "
+          "was. One means the moments cost nothing; a small number means the "
+          "ordering has broken most of the crystal's symmetry, which is when "
+          "to expect anisotropy, and when two orderings with the same energy "
+          "are not the same state.\\n\\n"
+          "Collinear or not, the moments are read from the 'magmom' site "
+          "property, where mv.mag.orderings leaves them.",
+)
+def symmetry(md: AnnData, source: str = "input", magmom: str = "magmom",
+             symprec: float = 0.1, tol: float = 1e-3) -> None:
+    """Magnetic symmetry retained by each ordering. Deposits ``None``."""
+    from pymatgen.core.operations import MagSymmOp
+    from pymatgen.electronic_structure.core import Magmom
+    from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
+
+    kept = np.full(md.n_obs, np.nan)
+    parent = np.full(md.n_obs, np.nan)
+    failed: list[str] = []
+
+    for row, structure in enumerate(structures(md, source)):
+        raw = structure.site_properties.get(magmom)
+        if raw is None:
+            failed.append(f"row {row}: no site property {magmom!r}")
+            continue
+        moments = np.array([np.array(Magmom(m).global_moment, dtype=float)
+                            for m in raw])
+
+        try:
+            # Strip the moments before asking for the parent group, or
+            # SpacegroupAnalyzer treats them as a site property and returns the
+            # magnetic symmetry already reduced - which would make the
+            # fraction below identically one.
+            bare = structure.copy()
+            bare.remove_site_property(magmom)
+            operations = SpacegroupAnalyzer(
+                bare, symprec=symprec).get_symmetry_operations()
+        except Exception as exc:
+            failed.append(f"row {row}: {type(exc).__name__}: {exc}")
+            continue
+        parent[row] = len(operations)
+
+        frac = np.array(structure.frac_coords, dtype=float)
+        survivors = 0
+        for operation in operations:
+            moved = operation.operate_multi(frac) % 1.0
+            # Where each site went. A site maps to whichever original site
+            # sits at the same place; if none does, the operation is not a
+            # symmetry of the positions and cannot be one of the moments.
+            delta = frac[None, :, :] - moved[:, None, :]
+            delta -= np.round(delta)
+            distance = np.linalg.norm(delta, axis=2)
+            partner = np.argmin(distance, axis=1)
+            if distance[np.arange(len(frac)), partner].max() > symprec:
+                continue
+            for reversal in (1, -1):
+                magnetic = MagSymmOp.from_rotation_and_translation_and_time_reversal(
+                    operation.rotation_matrix, operation.translation_vector,
+                    time_reversal=reversal)
+                turned = np.array(
+                    [np.array(magnetic.operate_magmom(Magmom(m)).global_moment,
+                              dtype=float) for m in moments])
+                if np.abs(turned - moments[partner]).max() < tol:
+                    survivors += 1
+                    break
+        kept[row] = survivors
+
+    with np.errstate(invalid="ignore", divide="ignore"):
+        fraction = kept / parent
+
+    md.obs["magnetic_symmetry_order"] = kept
+    md.obs["parent_symmetry_order"] = parent
+    md.obs["magnetic_symmetry_fraction"] = fraction
+    md.uns.setdefault("magnetic_symmetry", {})["settings"] = {
+        "symprec": float(symprec), "tol": float(tol),
+        "magmom_property": magmom, "errors": failed,
+        "note": "operations of the non-magnetic parent group, each tried with "
+                "and without time reversal",
+    }
+    record(md, "mag.symmetry", source=source, symprec=float(symprec))

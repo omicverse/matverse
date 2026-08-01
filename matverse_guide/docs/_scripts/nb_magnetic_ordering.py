@@ -333,4 +333,55 @@ flat.uns["exchange"]["pbe"]["error"]"""),
     ("markdown", """\
 A NaN and a stated reason, rather than a number near zero that would read as
 "weakly coupled" when it actually means "not calculated with spin"."""),
+
+    ("markdown", """\
+## What the moments cost in symmetry
+
+Putting moments on a lattice breaks some of its symmetry and leaves the rest.
+Which is which is what a magnetic space group records — and pymatgen ships all
+1651 of them but **no analyser that reads one off a structure**. There is no
+`MagneticSpaceGroupAnalyzer` beside `SpacegroupAnalyzer`.
+
+`mv.mag.symmetry` computes the underlying quantity instead of naming the group:
+every operation of the non-magnetic parent is applied to the moments as the
+axial vectors they are, once plainly and once with time reversal, and an
+operation survives if either version maps the arrangement onto itself."""),
+
+    ("code", """\
+from pymatgen.core import Lattice, Structure
+
+def iron_with(moments):
+    st = Structure(Lattice.cubic(2.87), ["Fe", "Fe"],
+                   [[0, 0, 0], [.5, .5, .5]])
+    st.add_site_property("magmom", list(moments))
+    return st
+
+arrangements = mv.data.from_structures([
+    iron_with([0.0, 0.0]), iron_with([2.2, 2.2]), iron_with([2.2, -2.2])])
+arrangements.obs_names = ["no moments", "ferromagnetic", "antiferromagnetic"]
+
+mv.mag.symmetry(arrangements)
+arrangements.obs[["parent_symmetry_order", "magnetic_symmetry_order",
+                  "magnetic_symmetry_fraction"]]"""),
+
+    ("markdown", """\
+bcc iron has **96** operations. With no moments all 96 survive. With any
+collinear ordering along *z*, only the **32** that leave that axis alone do —
+a third of the crystal's symmetry, gone, from adding a property that changes no
+atomic position.
+
+That fraction is worth having in a screen: one means the moments cost nothing,
+a small number means the ordering has broken most of the symmetry, and that is
+where to expect magnetic anisotropy and where two orderings at the same energy
+are not the same state.
+
+```{note}
+**Ferromagnet against antiferromagnet is deliberately not reported here.** The
+clean statement of that is whether the magnetic space group contains pure time
+reversal, and counting primed operations is not the same thing — a collinear
+ferromagnet has primed operations too, picked up from rotations that reverse
+its axis. Getting it right needs the group type, which needs the analyser that
+does not exist. `mv.mag.describe` gives the net moment, which answers the
+practical question without dressing itself up as a symmetry classification.
+```"""),
 ]

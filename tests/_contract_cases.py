@@ -768,6 +768,7 @@ def cases(tmp):
         (mv.neb.hops, one_metal, ("Cu",), {"returns": "new"}),
 
         (mv.disorder.sro, one_metal, (), {}),
+        (mv.mag.symmetry, spin_orderings, (), {}),
         (mv.env.voronoi, one_metal,
          (mv.multi.sites(one_metal()),), {}),
         (mv.thermo.fit_corrections, oxide_calibration, ("dHf",),

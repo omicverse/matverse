@@ -270,6 +270,18 @@ def equivalents(module: str) -> frozenset:
 # ---------------------------------------------------------------- NATIVE
 #: Capability present in matverse, implemented without pymatgen's module.
 NATIVE: Dict[str, str] = {
+    "symmetry.maggroups":
+        "mv.mag.symmetry computes what the database is for without naming a "
+        "group: how many of the non-magnetic parent's operations survive "
+        "once the moments are applied as axial vectors, each tried with and "
+        "without time reversal. pymatgen ships all 1651 magnetic space "
+        "groups and MagSymmOp.operate_magmom to apply them, but no analyser "
+        "that reads a group off a structure - so the quantity is computed "
+        "and the label is not claimed. What is deliberately not reported is "
+        "ferromagnet against antiferromagnet: that is a statement about the "
+        "group type, and a count of primed operations is not it, since a "
+        "collinear ferromagnet picks up primed operations from rotations "
+        "that reverse its axis.",
     "analysis.bond_dissociation":
         "mv.mol.dissociation computes the bond dissociation energy directly "
         "- the energies of the fragments minus the energy of the molecule - "
@@ -513,13 +525,6 @@ BLOCKED: Dict[str, str] = {
         "band energies would verify this library's arithmetic and say "
         "nothing about topology, so there is nothing here worth shipping "
         "without two real spin-orbit runs.",
-    "symmetry.maggroups":
-        "a lookup table with no derivation. The database holds all 1651 "
-        "magnetic space groups and MagneticSpaceGroup takes a BNS or OG "
-        "label, but pymatgen ships no analyser that determines a "
-        "structure's magnetic space group from its moments - there is no "
-        "MagneticSpaceGroupAnalyzer beside SpacegroupAnalyzer, so there is "
-        "no route from a structure to a label.",
     "electronic_structure.boltztrap": "needs the BoltzTraP binary",
     "electronic_structure.boltztrap2":
         "BoltzTraP2 links against netCDF and does not build here; "

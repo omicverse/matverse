@@ -240,3 +240,77 @@ class TestExchange:
         mv.mag.exchange(md, level="pbe", cutoff=3.0)
         note = md.uns["exchange"]["pbe"]["temperature_note"]
         assert "upper bound" in note and "overestimates" in note
+
+
+class TestMagneticSymmetry:
+    """How much of the crystal's symmetry the moments leave standing.
+
+    bcc iron has 96 operations. With no moments all 96 survive; with any
+    collinear ordering along z only the 32 that leave the z axis alone do.
+    Both numbers are properties of Im-3m rather than of this implementation.
+    """
+
+    @staticmethod
+    def _bcc(moments):
+        from pymatgen.core import Lattice, Structure
+        st = Structure(Lattice.cubic(2.87), ["Fe", "Fe"],
+                       [[0, 0, 0], [.5, .5, .5]])
+        st.add_site_property("magmom", list(moments))
+        return st
+
+    @classmethod
+    def _run(cls, orderings):
+        md = mv.data.from_structures([cls._bcc(m) for m in orderings])
+        mv.mag.symmetry(md)
+        return md
+
+    def test_no_moments_cost_no_symmetry(self):
+        md = self._run([[0.0, 0.0]])
+        assert float(md.obs["magnetic_symmetry_fraction"].iloc[0]) == \
+            pytest.approx(1.0)
+        assert float(md.obs["magnetic_symmetry_order"].iloc[0]) == \
+            float(md.obs["parent_symmetry_order"].iloc[0])
+
+    def test_the_parent_is_the_non_magnetic_group(self):
+        """96 for Im-3m. If the moments were left on the structure while
+        asking for the parent, SpacegroupAnalyzer would use them and the
+        fraction below would be identically one for everything."""
+        md = self._run([[0.0, 0.0], [2.2, 2.2], [2.2, -2.2]])
+        assert (md.obs["parent_symmetry_order"] == 96).all()
+
+    def test_ordering_breaks_symmetry(self):
+        md = self._run([[2.2, 2.2]])
+        assert float(md.obs["magnetic_symmetry_fraction"].iloc[0]) < 1.0
+        assert float(md.obs["magnetic_symmetry_order"].iloc[0]) == 32
+
+    def test_the_fraction_is_the_two_orders(self):
+        md = self._run([[2.2, 2.2], [2.2, -2.2], [0.0, 0.0]])
+        kept = md.obs["magnetic_symmetry_order"].to_numpy(dtype=float)
+        parent = md.obs["parent_symmetry_order"].to_numpy(dtype=float)
+        assert np.allclose(
+            md.obs["magnetic_symmetry_fraction"].to_numpy(dtype=float),
+            kept / parent)
+
+    def test_more_moments_never_keep_more_symmetry(self):
+        """Adding moments can only remove operations, never add them."""
+        md = self._run([[0.0, 0.0], [2.2, 2.2], [2.2, -2.2]])
+        bare = float(md.obs["magnetic_symmetry_order"].iloc[0])
+        for row in (1, 2):
+            assert float(md.obs["magnetic_symmetry_order"].iloc[row]) <= bare
+
+    def test_a_missing_magmom_is_recorded(self):
+        from pymatgen.core import Lattice, Structure
+        plain = Structure(Lattice.cubic(2.87), ["Fe", "Fe"],
+                          [[0, 0, 0], [.5, .5, .5]])
+        md = mv.data.from_structures([plain])
+        mv.mag.symmetry(md)
+        assert np.isnan(float(md.obs["magnetic_symmetry_order"].iloc[0]))
+        assert any("magmom" in e for e in
+                   md.uns["magnetic_symmetry"]["settings"]["errors"])
+
+    def test_it_does_not_claim_to_classify_the_magnetism(self):
+        """Ferromagnet against antiferromagnet is a statement about the
+        magnetic space group type, which needs an analyser pymatgen does not
+        have. This deliberately reports neither, and says so."""
+        md = self._run([[2.2, 2.2]])
+        assert "time_reversal_symmetric" not in md.obs
