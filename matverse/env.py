@@ -559,3 +559,93 @@ def lobster(md: AnnData, sites: AnnData, icohp, source: str = "input",
     }
     record(md, "env.lobster", source=source,
            additional_condition=int(additional_condition))
+
+
+@register_function(
+    aliases=["voronoi", "voronoi weights", "how sure is the coordination",
+             "coordination margin", "solid angle", "borderline neighbours"],
+    category="env",
+    description="Voronoi solid-angle weights per site, and how safely the "
+                "coordination number can be cut out of them.",
+    requires={"structures": ["{source}"]},
+    produces={"sites.obs": ["voronoi_faces", "voronoi_coordination",
+                            "voronoi_margin"]},
+    prerequisites=["mv.multi.sites"],
+    examples=["mv.env.voronoi(md, sites)",
+              "mv.env.voronoi(md, sites, threshold=0.5)"],
+    related=["mv.env.coordination", "mv.env.chemenv", "mv.env.lobster"],
+    notes="mv.env.coordination returns an integer. This returns the evidence "
+          "behind one, which is the thing you want when two algorithms "
+          "disagree or when a number looks wrong.\n\n"
+          "Every site has more Voronoi neighbours than it has bonds, and each "
+          "face carries a solid angle normalised so that the largest is 1. "
+          "Sodium in rocksalt gets six faces all at 1.0 — nothing to decide. "
+          "Titanium in rutile gets ten: four at 1.0, two at 0.978, and four "
+          "at exactly 0.0. Those numbers say more than 'six' does: the 4+2 "
+          "split is the tetragonal distortion of the octahedron, and the four "
+          "zeros are second-shell contacts that are geometric neighbours and "
+          "not chemical ones.\n\n"
+          "obs['voronoi_margin'] is the gap between the weakest counted "
+          "neighbour and the strongest rejected one. A large margin means the "
+          "coordination number is not a judgement call; a small one means it "
+          "is, and that a different algorithm may well return something else. "
+          "It is the column to sort on when auditing a coordination number "
+          "across a screen rather than trusting it row by row.\n\n"
+          "Uses ChemEnv's DetailedVoronoiContainer, which is what "
+          "mv.env.chemenv runs underneath — this exposes its intermediate "
+          "rather than only the environment it concludes with.",
+)
+def voronoi(md: AnnData, sites: AnnData, source: str = "input",
+            threshold: float = 0.5, cutoff: float = 10.0) -> None:
+    """Voronoi weights and the coordination margin. Deposits on ``sites``."""
+    from pymatgen.analysis.chemenv.coordination_environments.voronoi import (
+        DetailedVoronoiContainer)
+
+    faces = np.full(sites.n_obs, np.nan)
+    counted = np.full(sites.n_obs, np.nan)
+    margin = np.full(sites.n_obs, np.nan)
+    failed: list[str] = []
+    cursor = 0
+
+    for row, structure in enumerate(structures(md, source)):
+        span = slice(cursor, cursor + len(structure))
+        cursor += len(structure)
+        try:
+            container = DetailedVoronoiContainer(
+                structure, isites=list(range(len(structure))),
+                voronoi_cutoff=float(cutoff))
+        except Exception as exc:
+            failed.append(f"row {row}: {type(exc).__name__}: {exc}")
+            continue
+
+        totals, keeps, margins = [], [], []
+        for index in range(len(structure)):
+            weights = np.array([n["normalized_angle"]
+                                for n in container.voronoi_list2[index]],
+                               dtype=float)
+            totals.append(len(weights))
+            kept = weights >= threshold
+            keeps.append(int(kept.sum()))
+            # The gap the threshold sits in. Wide means the count is not a
+            # judgement call; narrow means a different algorithm may disagree.
+            if kept.any() and (~kept).any():
+                margins.append(float(weights[kept].min()
+                                     - weights[~kept].max()))
+            elif kept.all():
+                margins.append(float(weights.min()))
+            else:
+                margins.append(0.0)
+        faces[span] = totals
+        counted[span] = keeps
+        margin[span] = margins
+
+    sites.obs["voronoi_faces"] = faces
+    sites.obs["voronoi_coordination"] = counted
+    sites.obs["voronoi_margin"] = margin
+    sites.uns.setdefault("voronoi", {})["settings"] = {
+        "threshold": float(threshold), "cutoff": float(cutoff),
+        "margin_meaning": "weakest counted weight minus strongest rejected "
+                          "one; large is unambiguous",
+        "errors": failed,
+    }
+    record(md, "env.voronoi", source=source, threshold=float(threshold))

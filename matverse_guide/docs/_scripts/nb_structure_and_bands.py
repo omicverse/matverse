@@ -479,6 +479,61 @@ that `mv.env` writes into.
 ```"""),
 
     ("markdown", """\
+## How sure is a coordination number?
+
+`mv.env.coordination` returns an integer. Sometimes that integer is a fact and
+sometimes it is a judgement call, and nothing about the integer says which.
+
+`mv.env.voronoi` returns the evidence instead. Every site has more Voronoi
+neighbours than bonds, each face carrying a solid angle normalised so the
+largest is 1:"""),
+
+    ("code", """\
+from pymatgen.core import Lattice, Structure
+
+rocksalt = Structure.from_spacegroup("Fm-3m", Lattice.cubic(5.64),
+                                     ["Na", "Cl"], [[0, 0, 0], [.5, .5, .5]])
+rutile = Structure.from_spacegroup(
+    "P4_2/mnm", Lattice.tetragonal(4.594, 2.959), ["Ti", "O"],
+    [[0, 0, 0], [0.305, 0.305, 0]])
+
+vor = mv.data.from_structures([rocksalt, rutile])
+vor.obs_names = ["NaCl", "TiO2"]
+vor_sites = mv.multi.sites(vor)
+mv.env.voronoi(vor, vor_sites)
+
+vor_sites.obs[["element", "voronoi_faces", "voronoi_coordination",
+               "voronoi_margin"]].head(10)"""),
+
+    ("markdown", """\
+Sodium gets six faces and six neighbours, every weight 1.0 — nothing to decide.
+Titanium gets **ten faces and six neighbours**: four at 1.0, two at 0.978, and
+four at exactly 0.0. Those extra numbers say more than "six" does. The 4+2 split
+is the tetragonal distortion of the TiO₆ octahedron, and the four zeros are
+second-shell contacts that are geometric neighbours and not chemical ones.
+
+`voronoi_margin` is the gap between the weakest counted neighbour and the
+strongest rejected one. Both of these are 1.0 and 0.978 — wide margins, so the
+coordination number is not a judgement call for either. Distort the cell and it
+narrows:"""),
+
+    ("code", """\
+awkward = Structure(Lattice.tetragonal(5.64, 5.64), ["Na", "Cl", "Na", "Cl"],
+                    [[0, 0, 0], [.5, .5, .5], [.5, .5, 0], [0, 0, .5]])
+odd = mv.data.from_structures([awkward])
+odd_sites = mv.multi.sites(odd)
+mv.env.voronoi(odd, odd_sites)
+
+print(f"rocksalt margin: {vor_sites.obs['voronoi_margin'].iloc[0]:.3f}")
+print(f"distorted margin: {odd_sites.obs['voronoi_margin'].iloc[0]:.3f}")"""),
+
+    ("markdown", """\
+0.58 against 1.00. That is the column to sort on when auditing coordination
+numbers across a screen: a small margin flags the rows where a different
+algorithm would plausibly disagree, which is exactly where you want to look
+before trusting a number rather than after."""),
+
+    ("markdown", """\
 ## Who counts as a neighbour?
 
 `mv.env.coordination` decides that from geometry — a distance, a Voronoi solid

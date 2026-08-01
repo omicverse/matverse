@@ -443,3 +443,95 @@ class TestLobsterEnvironment:
                        valences=[1.0] * 4 + [-1.0] * 4,
                        additional_condition=0)
         assert sites.uns["lobster_env"]["settings"]["additional_condition"] == 0
+
+
+class TestVoronoiWeights:
+    """The margin is the point: how safely a coordination number can be cut
+    out of the Voronoi weights, rather than the number itself."""
+
+    @staticmethod
+    def _rocksalt():
+        from pymatgen.core import Lattice, Structure
+        return Structure.from_spacegroup("Fm-3m", Lattice.cubic(5.64),
+                                         ["Na", "Cl"],
+                                         [[0, 0, 0], [.5, .5, .5]])
+
+    @staticmethod
+    def _rutile():
+        from pymatgen.core import Lattice, Structure
+        return Structure.from_spacegroup(
+            "P4_2/mnm", Lattice.tetragonal(4.594, 2.959), ["Ti", "O"],
+            [[0, 0, 0], [0.305, 0.305, 0]])
+
+    @staticmethod
+    def _run(structures_):
+        md = mv.data.from_structures(structures_)
+        sites = mv.multi.sites(md)
+        mv.env.voronoi(md, sites)
+        return md, sites
+
+    def test_rocksalt_is_unambiguous(self):
+        """Six faces, six neighbours, every weight 1.0 — nothing to decide,
+        so the margin is maximal."""
+        _md, sites = self._run([self._rocksalt()])
+        assert (sites.obs["voronoi_faces"] == 6).all()
+        assert (sites.obs["voronoi_coordination"] == 6).all()
+        assert np.allclose(sites.obs["voronoi_margin"].to_numpy(dtype=float),
+                           1.0)
+
+    def test_rutile_has_more_faces_than_bonds(self):
+        """Titanium gets ten Voronoi faces and six neighbours: the extra four
+        are second-shell contacts carrying zero solid angle. A geometric
+        neighbour is not a chemical one, and this is where that shows."""
+        _md, sites = self._run([self._rutile()])
+        titanium = sites.obs[sites.obs["element"] == "Ti"]
+        assert (titanium["voronoi_faces"] == 10).all()
+        assert (titanium["voronoi_coordination"] == 6).all()
+
+    def test_faces_never_fewer_than_neighbours(self):
+        _md, sites = self._run([self._rocksalt(), self._rutile()])
+        assert (sites.obs["voronoi_faces"]
+                >= sites.obs["voronoi_coordination"]).all()
+
+    def test_the_margin_responds_to_geometry(self):
+        """A distorted cell gives a smaller margin than a perfect one, which
+        is what makes the column worth sorting on — a small margin says a
+        different algorithm might well return a different number."""
+        from pymatgen.core import Lattice, Structure
+        awkward = Structure(Lattice.tetragonal(5.64, 5.64),
+                            ["Na", "Cl", "Na", "Cl"],
+                            [[0, 0, 0], [.5, .5, .5], [.5, .5, 0], [0, 0, .5]])
+        _md, sites = self._run([awkward])
+        assert float(sites.obs["voronoi_margin"].iloc[0]) < 0.9
+        _md2, clean = self._run([self._rocksalt()])
+        assert float(sites.obs["voronoi_margin"].iloc[0]) < \
+            float(clean.obs["voronoi_margin"].iloc[0])
+
+    def test_the_margin_moves_monotonically_with_a_distortion(self):
+        """Stretching one axis changes the weights continuously, so the margin
+        has to move continuously too — a step would mean it was reporting a
+        threshold crossing rather than a distance to one."""
+        from pymatgen.core import Lattice, Structure
+        margins = []
+        for ratio in (1.0, 1.10, 1.25, 1.45):
+            cell = Structure(Lattice.tetragonal(5.64, 5.64 * ratio),
+                             ["Na", "Cl", "Na", "Cl"],
+                             [[0, 0, 0], [.5, .5, .5], [.5, .5, 0],
+                              [0, 0, .5]])
+            _md, sites = self._run([cell])
+            margins.append(float(sites.obs["voronoi_margin"].iloc[0]))
+        assert all(b > a for a, b in zip(margins, margins[1:])), margins
+
+    def test_the_threshold_is_recorded(self):
+        _md, sites = self._run([self._rocksalt()])
+        assert sites.uns["voronoi"]["settings"]["threshold"] == 0.5
+        assert "unambiguous" in \
+            sites.uns["voronoi"]["settings"]["margin_meaning"]
+
+    def test_a_looser_threshold_counts_more(self):
+        md = mv.data.from_structures([self._rutile()])
+        sites = mv.multi.sites(md)
+        mv.env.voronoi(md, sites, threshold=0.5)
+        strict = sites.obs["voronoi_coordination"].copy()
+        mv.env.voronoi(md, sites, threshold=0.0)
+        assert (sites.obs["voronoi_coordination"] >= strict).all()

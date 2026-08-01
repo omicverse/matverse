@@ -768,6 +768,8 @@ def cases(tmp):
         (mv.neb.hops, one_metal, ("Cu",), {"returns": "new"}),
 
         (mv.disorder.sro, one_metal, (), {}),
+        (mv.env.voronoi, one_metal,
+         (mv.multi.sites(one_metal()),), {}),
         (mv.thermo.fit_corrections, oxide_calibration, ("dHf",),
          {"level": "pbe", "max_error": 5.0, "allow_unstable": True}),
         (mv.mol.dissociation, ethanol_fragments,

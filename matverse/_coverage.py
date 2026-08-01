@@ -152,6 +152,8 @@ WRAPPED: Dict[str, List[str]] = {
     "analysis.functional_groups": ["mv.mol.functional_groups"],
     "analysis.compatibility.correction_calculator":
         ["mv.thermo.fit_corrections"],
+    "analysis.chemenv.coordination_environments.voronoi":
+        ["mv.env.voronoi"],
     "analysis.defects.corrections.freysoldt":
         ["mv.thermo.defect_formation"],
     "analysis.diffusion.aimd.clustering": ["mv.md.sites"],
@@ -487,17 +489,6 @@ INTERNAL_MARKERS = (
 #: — but they are not "nobody got to it", and the distinction is the difference
 #: between a backlog and a wish.
 BLOCKED: Dict[str, str] = {
-    "analysis.chemenv.coordination_environments.voronoi":
-        "not wrapped, and the earlier reason - that it is reached only "
-        "through compute_structure_environments and has no entry point - is "
-        "wrong. DetailedVoronoiContainer takes a structure directly and "
-        "returns six neighbours for rocksalt sodium, each with a normalised "
-        "distance and angle. What it would add over mv.env.coordination is "
-        "those normalised figures: how borderline a neighbour is, rather "
-        "than whether it counts. That is a real quantity and largely "
-        "overlaps CrystalNN, which is itself Voronoi-based, so this is a "
-        "judgement that it duplicates rather than a claim that it cannot be "
-        "done.",
     "analysis.defects.corrections.kumagai":
         "get_efnv_correction takes constructible arguments - structures "
         "carrying a 'potential' site property and a dielectric tensor - but "
