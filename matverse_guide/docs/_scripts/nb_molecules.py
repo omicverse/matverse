@@ -111,11 +111,8 @@ group contains no improper operation. All four here have a mirror plane, so
 none has an enantiomer."""),
 
     ("code", """\
-import matplotlib.pyplot as plt
-
-fig, ax = plt.subplots(figsize=(6, 3.4))
-ax.bar(md.obs["formula"], md.obs["symmetry_order"],
-       color=["#4c72b0" if p else "#cccccc" for p in md.obs["can_be_polar"]])
+ax = mv.pl.scatter(md, "formula", "symmetry_order", kind="bar",
+                   color="can_be_polar")
 ax.set_ylabel("order of the point group")
 ax.set_title("blue can be polar; grey is forbidden by symmetry")"""),
 

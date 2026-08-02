@@ -392,3 +392,185 @@ class TestRegistryNaming:
         entry = mv.registry.get("pareto")
         assert entry is not None
         assert entry["public_name"] == "mv.screen.pareto"
+
+
+class TestGeneralPlots:
+    """The three plots the tutorials were hand-drawing.
+
+    Every assertion is about what ended up on the axis — how many points, how
+    many lines, where the Fermi level sits — rather than that the call
+    returned. A plot function that silently drops half its data returns an
+    axis just as happily as one that does not.
+    """
+
+    @pytest.fixture
+    def md(self):
+        from pymatgen.core import Lattice, Structure
+        cells = [Structure(Lattice.cubic(a), [s] * 4,
+                           [[0, 0, 0], [0, .5, .5], [.5, 0, .5], [.5, .5, 0]])
+                 for s, a in (("Cu", 3.61), ("Al", 4.05), ("Ni", 3.52),
+                              ("Au", 4.08))]
+        out = mv.data.from_structures(cells)
+        mv.pp.describe(out)
+        mv.calc.energy(out, level="emt")
+        return out
+
+    @pytest.fixture
+    def band_object(self):
+        import pandas as pd
+        from anndata import AnnData
+        n_points, n_bands = 60, 5
+        X = np.vstack([np.cos(np.linspace(0, 3, n_points)) * k - 1.0
+                       for k in range(1, n_bands + 1)])
+        obs = pd.DataFrame(
+            {"material": pd.Categorical(["Cu"] * 3 + ["Al"] * 2),
+             "band_index": [0, 1, 2, 0, 1]},
+            index=[f"b{i}" for i in range(n_bands)])
+        var = pd.DataFrame({"path_fraction": np.linspace(0, 1, n_points)},
+                           index=[str(i) for i in range(n_points)])
+        return AnnData(X=X, obs=obs, var=var)
+
+    # --- scatter -------------------------------------------------------
+
+    def test_scatter_draws_every_row(self, md):
+        ax = mv.pl.scatter(md, "volume", "energy_emt")
+        assert len(ax.collections[0].get_offsets()) == md.n_obs
+
+    def test_scatter_puts_the_columns_on_the_axes(self, md):
+        ax = mv.pl.scatter(md, "volume", "energy_emt")
+        assert ax.get_xlabel() == "volume"
+        assert ax.get_ylabel() == "energy_emt"
+
+    def test_a_numeric_colour_gets_a_colourbar(self, md):
+        ax = mv.pl.scatter(md, "volume", "energy_emt", color="energy_emt")
+        assert len(ax.figure.axes) > 1, "no colourbar was added"
+
+    def test_a_categorical_colour_gets_a_legend(self, md):
+        ax = mv.pl.scatter(md, "volume", "energy_emt", color="formula")
+        assert len(ax.get_legend().get_texts()) == md.n_obs
+
+    def test_too_many_categories_is_refused(self, md):
+        md.obs["many"] = [f"g{i}" for i in range(md.n_obs)]
+        big = mv.data.from_structures(mv.structures(md) * 4)
+        big.obs["x"] = np.arange(big.n_obs, dtype=float)
+        big.obs["y"] = np.arange(big.n_obs, dtype=float)
+        big.obs["many"] = [f"g{i}" for i in range(big.n_obs)]
+        with pytest.raises(ValueError, match="legend nobody can read"):
+            mv.pl.scatter(big, "x", "y", color="many")
+
+    def test_annotating_a_crowd_is_refused(self, md):
+        big = mv.data.from_structures(mv.structures(md) * 20)
+        big.obs["x"] = np.arange(big.n_obs, dtype=float)
+        big.obs["y"] = np.arange(big.n_obs, dtype=float)
+        big.obs["name"] = [str(i) for i in range(big.n_obs)]
+        with pytest.raises(ValueError, match="on top of one another"):
+            mv.pl.scatter(big, "x", "y", annotate="name")
+
+    def test_scatter_names_a_missing_column(self, md):
+        with pytest.raises(ValueError, match="absent"):
+            mv.pl.scatter(md, "volume", "not_a_column")
+
+    def test_scatter_works_on_the_sites_axis(self, md):
+        """It only asks for obs columns, which is why it works on any axis."""
+        sites = mv.multi.sites(md)
+        sites.obs["a"] = np.arange(sites.n_obs, dtype=float)
+        sites.obs["b"] = np.arange(sites.n_obs, dtype=float) ** 2
+        ax = mv.pl.scatter(sites, "a", "b")
+        assert len(ax.collections[0].get_offsets()) == sites.n_obs
+
+    # --- bands ---------------------------------------------------------
+
+    def test_bands_draws_one_line_per_band(self, band_object):
+        ax = mv.pl.bands(band_object)
+        assert ax._matverse_n_bands == band_object.n_obs
+
+    def test_the_fermi_level_is_drawn_at_zero(self, band_object):
+        ax = mv.pl.bands(band_object)
+        dashed = [ln for ln in ax.lines if ln.get_linestyle() == "--"]
+        assert len(dashed) == 1
+        assert dashed[0].get_ydata()[0] == pytest.approx(0.0)
+
+    def test_the_fermi_line_can_be_turned_off(self, band_object):
+        ax = mv.pl.bands(band_object, highlight_fermi=False)
+        assert not [ln for ln in ax.lines if ln.get_linestyle() == "--"]
+
+    def test_selecting_a_material_draws_only_its_bands(self, band_object):
+        ax = mv.pl.bands(band_object, materials=["Cu"])
+        assert ax._matverse_n_bands == 3
+
+    def test_an_unknown_material_is_named(self, band_object):
+        with pytest.raises(ValueError, match="no bands for"):
+            mv.pl.bands(band_object, materials=["Fe"])
+
+    def test_high_symmetry_labels_land_on_the_ticks(self, band_object):
+        ax = mv.pl.bands(band_object,
+                         labels={0.0: "G", 0.5: "X", 1.0: "L"})
+        assert [t.get_text() for t in ax.get_xticklabels()] == ["G", "X", "L"]
+
+    def test_a_non_bands_object_is_refused(self, md):
+        with pytest.raises(ValueError, match="not a bands object"):
+            mv.pl.bands(md)
+
+    # --- distribution --------------------------------------------------
+
+    def test_distribution_uses_the_bins_asked_for(self, md):
+        ax = mv.pl.distribution(md, "volume", bins=12)
+        assert len(ax.patches) == 12
+
+    def test_non_finite_values_are_dropped_and_counted(self, md):
+        """A column that is half NaN otherwise makes a histogram that looks
+        like a narrow distribution rather than a missing one."""
+        md.obs["patchy"] = [1.0, np.nan, 3.0, np.nan]
+        ax = mv.pl.distribution(md, "patchy")
+        assert ax._matverse_dropped == 2
+        assert "non-finite" in ax.get_xlabel()
+
+    def test_groups_share_their_bins(self, md):
+        """Two histograms on different edges are two pictures, not a
+        comparison."""
+        ax = mv.pl.distribution(md, "volume", by="formula", bins=10)
+        edges = {round(float(p.get_x()), 9) for p in ax.patches}
+        assert len(edges) == 10, "the groups were binned separately"
+
+    def test_an_all_nan_column_is_refused(self, md):
+        md.obs["empty"] = [np.nan] * md.n_obs
+        with pytest.raises(ValueError, match="no finite value"):
+            mv.pl.distribution(md, "empty")
+
+    def test_too_many_groups_is_refused(self, md):
+        big = mv.data.from_structures(mv.structures(md) * 3)
+        big.obs["v"] = np.arange(big.n_obs, dtype=float)
+        big.obs["many"] = [f"g{i}" for i in range(big.n_obs)]
+        with pytest.raises(ValueError, match="hides all of them"):
+            mv.pl.distribution(big, "v", by="many")
+
+    # --- bar -----------------------------------------------------------
+
+    def test_bar_draws_one_per_category(self, md):
+        ax = mv.pl.scatter(md, "formula", "energy_emt", kind="bar")
+        assert len(ax.patches) == md.n_obs
+
+    def test_bar_heights_are_the_data(self, md):
+        ax = mv.pl.scatter(md, "formula", "energy_emt", kind="bar")
+        heights = sorted(p.get_height() for p in ax.patches)
+        assert np.allclose(heights, sorted(md.obs["energy_emt"]))
+
+    def test_bar_colours_by_a_categorical_column(self, md):
+        """Three tutorials wanted exactly this — blue for the ones that
+        passed, grey for the rest — and hand-drew it because color= did
+        nothing on the bar branch."""
+        md.obs["passes"] = [True, False, True, False]
+        ax = mv.pl.scatter(md, "formula", "energy_emt", kind="bar",
+                           color="passes")
+        shades = {tuple(np.round(p.get_facecolor(), 3)) for p in ax.patches}
+        assert len(shades) == 2
+        assert len(ax.get_legend().get_texts()) == 2
+
+    def test_a_bar_over_a_continuous_axis_is_refused(self, md):
+        """That plot is a histogram, and mv.pl.distribution draws it."""
+        with pytest.raises(ValueError, match="is numeric"):
+            mv.pl.scatter(md, "volume", "energy_emt", kind="bar")
+
+    def test_an_unknown_kind_is_refused(self, md):
+        with pytest.raises(ValueError, match="'scatter' or 'bar'"):
+            mv.pl.scatter(md, "formula", "energy_emt", kind="violin")

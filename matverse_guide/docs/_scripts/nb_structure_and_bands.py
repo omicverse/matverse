@@ -335,16 +335,8 @@ matrix has to have a shared column axis before it can be a matrix. Read it as a
 path fraction and never as k."""),
 
     ("code", """\
-fig, ax = plt.subplots(figsize=(7.5, 4))
-fraction = bands.var["path_fraction"].to_numpy(dtype=float)
-for name, colour in zip(metals.obs_names, ("#4c72b0", "#c1121f")):
-    block = np.asarray(bands[bands.obs["material"] == str(name)].X, dtype=float)
-    for row in block:
-        ax.plot(fraction, row, color=colour, linewidth=0.9)
-ax.axhline(0, linestyle="--", color="#333", linewidth=0.9)
-ax.set_xlabel("fraction along the high-symmetry path")
-ax.set_ylabel("E - E$_F$ (eV)")
-ax.set_title("tight-binding bands: Cu (blue) and Al (red)")"""),
+ax = mv.pl.bands(bands)
+ax.set_title("tight-binding bands: both metals cross the Fermi level")"""),
 
     ("markdown", """\
 ## What the bands say

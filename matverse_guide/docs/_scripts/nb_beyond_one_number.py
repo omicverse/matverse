@@ -138,17 +138,28 @@ sites.obsm["forces_emt"].shape"""),
 sites.obs[["material", "element", "force_magnitude_emt"]].head(8).round(4)"""),
 
     ("code", """\
-import matplotlib.pyplot as plt
+import matplotlib.pyplot as plt      # later cells compose their own figures
 
-fig, ax = plt.subplots(figsize=(6.4, 3.6))
-for k, element in enumerate(sites.var_names):
-    values = sites.obs.loc[sites.obs["element"] == element,
-                           "force_magnitude_emt"]
-    ax.scatter(np.full(len(values), k) + np.linspace(-0.12, 0.12, len(values)),
-               values, s=22, alpha=0.8)
-ax.set_xticks(range(sites.n_vars), list(sites.var_names))
+ax = mv.pl.scatter(sites, "element", "force_magnitude_emt")
 ax.set_ylabel("|F| (eV/Å)")
 ax.set_title("one point per atom, 26 in total")"""),
+
+    ("markdown", """\
+One point per atom says which atoms are unrelaxed. The other question is what
+the spread looks like across the whole set, and a mean cannot answer it —
+twenty-six atoms averaging 0.05 eV/Å can be twenty-six relaxed atoms, or
+twenty-four relaxed atoms and two that are nowhere near:"""),
+
+    ("code", """\
+ax = mv.pl.distribution(sites, "force_magnitude_emt", by="element")
+ax.set_xlabel("|F| (eV/Å)")
+ax.set_title("the same numbers, as a distribution")"""),
+
+    ("markdown", """\
+Shared bins across the elements, which is the only way the two are being
+compared rather than merely drawn beside each other. Non-finite values are
+dropped and the count goes in the axis label, so a column that is half missing
+cannot pass as a narrow distribution."""),
 
     ("markdown", """\
 Twenty-six points where the material axis has room for seven — which is the

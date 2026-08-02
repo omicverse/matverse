@@ -476,6 +476,20 @@ def cases(tmp):
     # so it is what the probe has to use for that claim to be exercised at all.
     from pymatgen.core import Lattice, Structure
     _fcc = [[0, 0, 0], [0, .5, .5], [.5, 0, .5], [.5, .5, 0]]
+    def model_bands():
+        """A minimal bands object, for mv.pl.bands."""
+        import pandas as pd
+        from anndata import AnnData
+        n_points, n_bands = 20, 3
+        X = np.vstack([np.cos(np.linspace(0, 3, n_points)) * k
+                       for k in range(1, n_bands + 1)])
+        return AnnData(
+            X=X,
+            obs=pd.DataFrame({"material": pd.Categorical(["Cu"] * n_bands)},
+                             index=[f"b{i}" for i in range(n_bands)]),
+            var=pd.DataFrame({"path_fraction": np.linspace(0, 1, n_points)},
+                             index=[str(i) for i in range(n_points)]))
+
     def model_dos():
         """A projected DOS built in memory, for mv.elec.xps."""
         from pymatgen.electronic_structure.core import Orbital, Spin
@@ -885,6 +899,9 @@ def cases(tmp):
         (mv.pl.hull, hulled, (), {"level": "emt"}),
         (mv.pl.parity, two_levels, ("energy_per_atom", "emt", "emt2"), {}),
         (mv.pl.pareto, pareto_ready, ("volume", "density"), {}),
+        (mv.pl.scatter, described, ("volume", "nsites"), {}),
+        (mv.pl.distribution, described, ("volume",), {}),
+        (mv.pl.bands, model_bands, (), {}),
         (mv.pl.embedding, embedded, (), {"use_rep": "X_pca"}),
         (mv.pl.spectra, patterned, ("xrd",), {}),
         (mv.pl.provenance, described, (), {}),

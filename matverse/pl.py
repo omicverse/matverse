@@ -806,3 +806,356 @@ def provenance(md: AnnData, ax=None):
 
 __all__ = ["set_style", "structure", "periodic_table", "rank_elements_groups", "hull",
            "parity", "pareto", "embedding", "spectra", "provenance"]
+
+
+@register_function(
+    aliases=["scatter", "plot", "xy plot", "two columns", "scatter plot",
+             "plot one against another", "bar chart"],
+    category="pl",
+    description="Scatter any two obs columns, optionally coloured by a third "
+                "and grouped by a categorical one.",
+    requires={"obs": ["{x}", "{y}"]},
+    examples=["mv.pl.scatter(md, 'volume', 'bulk_modulus_emt')",
+              "mv.pl.scatter(md, 'nsites', 'energy_emt', color='formula')",
+              "mv.pl.scatter(sites, 'coordination_number', 'force_emt')"],
+    related=["mv.pl.pareto", "mv.pl.embedding", "mv.pl.hull",
+             "mv.pl.distribution"],
+    notes="The plot there was no function for. mv.pl.pareto draws two "
+          "objectives with a front, mv.pl.embedding draws a projection, "
+          "mv.pl.hull draws one particular pair — and the ordinary case of "
+          "one column against another had to be hand-drawn, which is why "
+          "matverse's own tutorials reached for matplotlib more often than "
+          "for mv.pl.\\n\\n"
+          "Works on any axis, because it only asks for obs columns: the "
+          "material axis, the sites axis from mv.multi.sites, a facets object "
+          "from mv.surf.slabs. That is the point of the columns being on obs "
+          "in the first place.\\n\\n"
+          "color= takes a numeric column and draws a colourbar, or a "
+          "categorical one and draws a legend, deciding by dtype rather than "
+          "by an argument. Passing a categorical column with more than a "
+          "dozen levels makes an unreadable legend and says so.\\n\\n"
+          "kind='bar' draws the same pair as bars, for the case where each "
+          "category has one value — a bulk modulus per material, an area "
+          "fraction per facet. It refuses a numeric x, because a bar chart "
+          "over a continuous axis is a histogram and mv.pl.distribution "
+          "draws those.\\n\\n"
+          "A categorical x is laid out at integers and jittered, so one "
+          "value per element or per facet is the same call rather than a "
+          "different function — and coincident points stay visible instead "
+          "of stacking into one.\n\n"
+          "annotate= labels each point with a column, which is what makes a "
+          "twenty-material screen readable and a two-thousand-material one "
+          "unusable; it refuses above fifty points rather than drawing them "
+          "on top of each other.",
+)
+def scatter(md: AnnData, x: str, y: str, color: str | None = None,
+            size: str | None = None, annotate: str | None = None,
+            kind: str = "scatter", log_x: bool = False, log_y: bool = False,
+            cmap: str = "viridis", ax=None):
+    """Scatter two obs columns. Returns the axis."""
+    if kind not in ("scatter", "bar"):
+        raise ValueError(f"kind must be 'scatter' or 'bar', got {kind!r}")
+    for column in (x, y):
+        if column not in md.obs:
+            raise ValueError(f"obs[{column!r}] absent; the columns on this "
+                             f"object are {sorted(md.obs.columns)[:8]}...")
+    for column in (color, size, annotate):
+        if column is not None and column not in md.obs:
+            raise ValueError(f"obs[{column!r}] absent")
+
+    # A categorical abscissa is the commonest case after a numeric one - one
+    # value per element, per facet, per space group - and it is the same plot
+    # with the categories laid out at integers and jittered so coincident
+    # points are visible rather than one point.
+    categories = None
+    raw_x = md.obs[x]
+    if raw_x.dtype.kind in "ifu":
+        X = raw_x.to_numpy(dtype=float)
+    else:
+        categories = list(dict.fromkeys(map(str, raw_x)))
+        position = {name: index for index, name in enumerate(categories)}
+        X = np.array([position[str(v)] for v in raw_x], dtype=float)
+        counts: dict[float, int] = {}
+        jitter = np.zeros(len(X))
+        for index, value in enumerate(X):
+            seen = counts.get(value, 0)
+            counts[value] = seen + 1
+            jitter[index] = seen
+        for value, total in counts.items():
+            mask = X == value
+            if total > 1:
+                jitter[mask] = np.linspace(-0.18, 0.18, total)
+            else:
+                jitter[mask] = 0.0
+        X = X + jitter
+
+    Y = md.obs[y].to_numpy(dtype=float)
+    ax = _axis(ax)
+
+    marker_size = 36.0
+    if size is not None:
+        raw = md.obs[size].to_numpy(dtype=float)
+        finite = np.isfinite(raw)
+        if finite.any() and np.nanmax(raw) > np.nanmin(raw):
+            spread = (raw - np.nanmin(raw)) / (np.nanmax(raw) - np.nanmin(raw))
+            marker_size = 18.0 + 120.0 * np.nan_to_num(spread)
+
+    if kind == "bar":
+        if categories is None:
+            raise ValueError(
+                f"kind='bar' needs a categorical x; obs[{x!r}] is numeric. "
+                f"A bar chart over a continuous axis is a histogram — "
+                f"mv.pl.distribution draws that.")
+        heights = np.zeros(len(categories))
+        slot = np.zeros(len(categories), dtype=int)
+        for index, value in enumerate(md.obs[x].astype(str)):
+            heights[categories.index(value)] = Y[index]
+            slot[categories.index(value)] = index
+
+        colours = "#4c72b0"
+        if color is not None:
+            values = md.obs[color]
+            if values.dtype.kind in "ifu" and values.nunique() > 2:
+                raise ValueError(
+                    f"kind='bar' colours by a categorical column; "
+                    f"obs[{color!r}] is numeric. Use kind='scatter' for a "
+                    f"colourbar.")
+            labels = np.asarray(values.astype(str))[slot]
+            groups = list(dict.fromkeys(labels))
+            palette = _plt().get_cmap("tab10")
+            lookup = {g: palette(i % 10) for i, g in enumerate(groups)}
+            colours = [lookup[g] for g in labels]
+
+        ax.bar(range(len(categories)), heights, color=colours,
+               edgecolor="white", linewidth=0.6)
+        if color is not None:
+            from matplotlib.patches import Patch
+            ax.legend(handles=[Patch(facecolor=lookup[g], label=g)
+                               for g in groups], frameon=False, fontsize=8)
+        ax.set_xticks(range(len(categories)))
+        rotate = max(len(c) for c in categories) > 4
+        ax.set_xticklabels(categories, rotation=45 if rotate else 0,
+                           ha="right" if rotate else "center")
+        ax.set_xlabel(x)
+        ax.set_ylabel(y)
+        if log_y:
+            ax.set_yscale("log")
+        for spine in ("top", "right"):
+            ax.spines[spine].set_visible(False)
+        return ax
+
+    if color is None:
+        ax.scatter(X, Y, s=marker_size, c="#4c72b0", edgecolors="white",
+                   linewidths=0.4)
+    else:
+        values = md.obs[color]
+        numeric = values.dtype.kind in "ifu"
+        if numeric:
+            drawn = ax.scatter(X, Y, s=marker_size,
+                               c=values.to_numpy(dtype=float), cmap=cmap,
+                               edgecolors="white", linewidths=0.4)
+            bar = ax.figure.colorbar(drawn, ax=ax, pad=0.02)
+            bar.set_label(color, fontsize=9)
+            bar.outline.set_visible(False)
+        else:
+            groups = list(dict.fromkeys(map(str, values)))
+            if len(groups) > 12:
+                raise ValueError(
+                    f"obs[{color!r}] has {len(groups)} distinct values, which "
+                    f"makes a legend nobody can read. Colour by a numeric "
+                    f"column, or group the categories first.")
+            palette = _plt().get_cmap("tab10")
+            labels = np.asarray(list(map(str, values)))
+            for index, group in enumerate(groups):
+                mask = labels == group
+                sizes = (marker_size if np.isscalar(marker_size)
+                         else marker_size[mask])
+                ax.scatter(X[mask], Y[mask], s=sizes, label=group,
+                           color=palette(index % 10), edgecolors="white",
+                           linewidths=0.4)
+            ax.legend(frameon=False, fontsize=8)
+
+    if annotate is not None:
+        if md.n_obs > 50:
+            raise ValueError(
+                f"annotate= on {md.n_obs} points draws labels on top of one "
+                f"another. Subset the object first, or leave it off.")
+        for xi, yi, text in zip(X, Y, md.obs[annotate].astype(str)):
+            if np.isfinite(xi) and np.isfinite(yi):
+                ax.annotate(text, (xi, yi), fontsize=7,
+                            xytext=(3, 3), textcoords="offset points")
+
+    if categories is not None:
+        ax.set_xticks(range(len(categories)))
+        ax.set_xticklabels(categories, rotation=45 if
+                           max(len(c) for c in categories) > 4 else 0,
+                           ha="right" if max(len(c) for c in categories) > 4
+                           else "center")
+        if log_x:
+            raise ValueError(f"obs[{x!r}] is categorical; a log scale on it "
+                             f"would be meaningless")
+    elif log_x:
+        ax.set_xscale("log")
+    if log_y:
+        ax.set_yscale("log")
+    ax.set_xlabel(x)
+    ax.set_ylabel(y)
+    for spine in ("top", "right"):
+        ax.spines[spine].set_visible(False)
+    return ax
+
+
+@register_function(
+    aliases=["band structure plot", "plot bands", "band diagram",
+             "electronic structure plot"],
+    category="pl",
+    description="Draw a band structure along its path, with the Fermi level "
+                "marked and one colour per material.",
+    requires={"var": ["path_fraction"], "obs": ["material"]},
+    prerequisites=["mv.elec.bands"],
+    examples=["mv.pl.bands(bands)",
+              "mv.pl.bands(bands, materials=['Cu'], labels={0: 'Γ', 1: 'X'})"],
+    related=["mv.elec.bands", "mv.elec.band_features", "mv.pl.spectra"],
+    notes="A band structure is not a spectrum and mv.pl.spectra will not do "
+          "it: the rows are bands rather than materials, they all share one "
+          "abscissa, and the Fermi level is a line the reader needs.\\n\\n"
+          "**The abscissa is the fraction along each material's own path**, "
+          "not a wavevector. Two materials with different k-point counts are "
+          "resampled onto one axis so the object can be a matrix at all, "
+          "which means the horizontal position is comparable between "
+          "materials only in the sense that both ran the same sequence of "
+          "high-symmetry points. Read it as a path fraction and never as k.\\n\\n"
+          "Energies are relative to the Fermi level, which is where "
+          "mv.elec.bands puts them, so the line at zero is the Fermi level "
+          "and needs no argument.\\n\\n"
+          "labels= takes {path_fraction: name} and draws the high-symmetry "
+          "ticks. It is an argument rather than something read off the "
+          "object because mv.elec.bands does not keep the labels — the path "
+          "came from whatever produced the band structure.",
+)
+def bands(bands_obj: AnnData, materials=None, labels: dict | None = None,
+          highlight_fermi: bool = True, energy_range=None, ax=None):
+    """Band structure along the path. Returns the axis."""
+    if "path_fraction" not in bands_obj.var:
+        raise ValueError("var['path_fraction'] absent; this is not a bands "
+                         "object — build one with mv.elec.bands")
+    if "material" not in bands_obj.obs:
+        raise ValueError("obs['material'] absent; this is not a bands object")
+
+    fraction = bands_obj.var["path_fraction"].to_numpy(dtype=float)
+    names = list(dict.fromkeys(map(str, bands_obj.obs["material"])))
+    if materials is not None:
+        wanted = [str(m) for m in materials]
+        missing = sorted(set(wanted) - set(names))
+        if missing:
+            raise ValueError(f"no bands for {missing}; this object has "
+                             f"{names}")
+        names = wanted
+
+    ax = _axis(ax)
+    palette = ("#4c72b0", "#c1121f", "#2a9d8f", "#e9c46a", "#8e44ad",
+               "#d35400")
+    drawn = 0
+    for index, name in enumerate(names):
+        block = bands_obj[
+            np.asarray(bands_obj.obs["material"]).astype(str) == name]
+        values = np.asarray(block.X, dtype=float)
+        colour = palette[index % len(palette)]
+        for row_index, row in enumerate(values):
+            ax.plot(fraction, row, color=colour, linewidth=0.9,
+                    label=name if row_index == 0 else None)
+            drawn += 1
+
+    if highlight_fermi:
+        ax.axhline(0.0, linestyle="--", color="#333333", linewidth=0.9)
+    if labels:
+        positions = sorted(labels)
+        ax.set_xticks(positions)
+        ax.set_xticklabels([labels[p] for p in positions])
+        for position in positions:
+            ax.axvline(position, color="#cccccc", linewidth=0.6, zorder=0)
+    if energy_range is not None:
+        ax.set_ylim(*energy_range)
+
+    ax.set_xlim(float(fraction.min()), float(fraction.max()))
+    ax.set_xlabel("fraction along the high-symmetry path"
+                  if not labels else "")
+    ax.set_ylabel("E − E$_F$ (eV)")
+    if len(names) > 1:
+        ax.legend(frameon=False, fontsize=8)
+    for spine in ("top", "right"):
+        ax.spines[spine].set_visible(False)
+    ax._matverse_n_bands = drawn
+    return ax
+
+
+@register_function(
+    aliases=["distribution", "histogram", "hist", "spread of a column",
+             "how are they distributed"],
+    category="pl",
+    description="Histogram of one obs column, optionally split by a "
+                "categorical one.",
+    requires={"obs": ["{column}"]},
+    examples=["mv.pl.distribution(sites, 'force_emt')",
+              "mv.pl.distribution(md, 'e_above_hull_emt', by='crystal_system')"],
+    related=["mv.pl.scatter", "mv.pl.periodic_table", "mv.pl.spectra"],
+    notes="A mean is not a distribution, and the difference is usually the "
+          "result. Twenty-six atoms with a mean force of 0.05 eV/Å can be "
+          "twenty-six relaxed atoms or twenty-four relaxed atoms and two that "
+          "are nowhere near, and a screen that ranks on the mean cannot tell "
+          "you which.\\n\\n"
+          "Works on any axis: the material axis, the sites axis, a facets or "
+          "fragments object. Non-finite values are dropped and counted, "
+          "because a column that is half NaN makes a histogram that looks "
+          "like a narrow distribution rather than a missing one.\\n\\n"
+          "by= overlays one histogram per category on shared bins, which is "
+          "the comparison worth making — the same bins, or the two "
+          "distributions are not being compared.",
+)
+def distribution(md: AnnData, column: str, by: str | None = None,
+                 bins: int = 30, log_x: bool = False, ax=None):
+    """Histogram of one obs column. Returns the axis."""
+    if column not in md.obs:
+        raise ValueError(f"obs[{column!r}] absent; this object has "
+                         f"{sorted(md.obs.columns)[:8]}...")
+    if by is not None and by not in md.obs:
+        raise ValueError(f"obs[{by!r}] absent")
+
+    values = md.obs[column].to_numpy(dtype=float)
+    finite = np.isfinite(values)
+    dropped = int((~finite).sum())
+    if not finite.any():
+        raise ValueError(f"obs[{column!r}] has no finite value to bin")
+
+    ax = _axis(ax)
+    # Shared edges, always: two histograms on different bins are two pictures,
+    # not a comparison.
+    edges = np.histogram_bin_edges(values[finite], bins=bins)
+
+    if by is None:
+        ax.hist(values[finite], bins=edges, color="#4c72b0",
+                edgecolor="white", linewidth=0.5)
+    else:
+        labels = np.asarray(md.obs[by].astype(str))
+        groups = list(dict.fromkeys(labels[finite]))
+        if len(groups) > 8:
+            raise ValueError(
+                f"obs[{by!r}] has {len(groups)} categories; overlaying that "
+                f"many histograms hides all of them. Group them first.")
+        palette = _plt().get_cmap("tab10")
+        for index, group in enumerate(groups):
+            mask = finite & (labels == group)
+            ax.hist(values[mask], bins=edges, alpha=0.55, label=group,
+                    color=palette(index % 10), edgecolor="white",
+                    linewidth=0.4)
+        ax.legend(frameon=False, fontsize=8)
+
+    if log_x:
+        ax.set_xscale("log")
+    ax.set_xlabel(column
+                  + (f"  ({dropped} non-finite dropped)" if dropped else ""))
+    ax.set_ylabel("count")
+    for spine in ("top", "right"):
+        ax.spines[spine].set_visible(False)
+    ax._matverse_dropped = dropped
+    return ax

@@ -308,8 +308,7 @@ mv.tl.novelty(md, reference=known)
 md.obs[["formula", "novelty_distance", "nearest_reference"]].round(3)"""),
 
     ("code", """\
-fig, ax = plt.subplots(figsize=(6.4, 3.4))
-ax.bar(md.obs["formula"], md.obs["novelty_distance"], color="#4c72b0")
+ax = mv.pl.scatter(md, "formula", "novelty_distance")
 ax.set_ylabel("distance to nearest known")
 ax.set_title("novelty in composition space")"""),
 

@@ -390,12 +390,8 @@ md.uns["screens"]["passes"]"""),
 md.obs[["formula", "e_above_hull_emt", "density", "passes"]].round(4)"""),
 
     ("code", """\
-import matplotlib.pyplot as plt
-
-fig, ax = plt.subplots(figsize=(7, 3.6))
-passes = md.obs["passes"].to_numpy(dtype=bool)
-ax.bar(md.obs["formula"], md.obs["e_above_hull_emt"],
-       color=np.where(passes, "#2b7bba", "#cccccc"))
+ax = mv.pl.scatter(md, "formula", "e_above_hull_emt", kind="bar",
+                   color="passes")
 ax.axhline(0.12, linestyle="--", linewidth=0.9, color="#c1121f")
 ax.set_ylabel("E above hull (eV/atom)")
 ax.set_title("blue passed both criteria; the line is only one of them")"""),
