@@ -110,10 +110,16 @@ def batched_available() -> dict:
                   "cuda": bool(torch.cuda.is_available()),
                   "devices": int(torch.cuda.device_count())}
     except ImportError as exc:
-        return {"torch_sim": False, "reason": str(exc),
-                "install": "torch-sim-atomistic needs Python >= 3.11; "
-                           "matverse's own floor is 3.10, so this is an "
-                           "environment decision rather than a dependency"}
+        engine = {"torch_sim": False, "reason": str(exc),
+                  "install": "torch-sim-atomistic needs Python >= 3.11; "
+                             "matverse's own floor is 3.10, so this is an "
+                             "environment decision rather than a dependency"}
+    # 'models' is always here, whether or not the engine imports. Registering
+    # is a promise about a name, and dropping the registrations from the
+    # report when the engine is absent both contradicts this function's own
+    # description and changes the shape of what it returns, so a caller that
+    # read ['models'] worked on a machine with TorchSim and raised KeyError on
+    # one without.
     return {**engine,
             "models": {name: dict(meta) for name, (_, meta) in
                        _BATCHED.items()}}
