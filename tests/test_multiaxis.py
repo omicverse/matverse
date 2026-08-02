@@ -517,3 +517,107 @@ class TestExperimentalHull:
                               unit="kJ/mol", level="janaf")
         assert "janaf" in mv.levels_used(iron_oxides)
         assert iron_oxides.uns["levels"]["janaf"]["kind"] == "experiment"
+
+
+class TestFittedCorrections:
+    """The fit is checked by injecting a known offset and requiring it back.
+
+    That is possible only because the convention was established from the
+    source rather than guessed: `exp energy` is a formation energy per formula
+    unit, and the regression divides both residual and coefficients by the
+    atoms in that formula, so a correction comes out per atom of the species.
+    Two earlier attempts with the wrong convention gave factors of 0.26 and
+    8 that no reading explained.
+    """
+
+    COMPOUNDS = [("Fe2O3", 3, 2), ("TiO2", 2, 1), ("MgO", 1, 1),
+                 ("Al2O3", 3, 2), ("ZnO", 1, 1), ("CaO", 1, 1)]
+    ELEMENTS = ["Fe", "Ti", "Mg", "Al", "Zn", "Ca", "O2"]
+
+    @staticmethod
+    def _cell(formula):
+        from pymatgen.core import Composition, Lattice, Structure
+        composition = Composition(formula)
+        symbols = [str(element) for element in composition.elements
+                   for _ in range(int(composition[element]))]
+        return Structure(Lattice.cubic(10.0), symbols,
+                         [[i / len(symbols), 0, 0]
+                          for i in range(len(symbols))])
+
+    @classmethod
+    def _dataset(cls, offset, with_elements=True):
+        names = [f for f, _, _ in cls.COMPOUNDS]
+        computed = [-3.0 * n_o - 2.0 * n_m for _, n_o, n_m in cls.COMPOUNDS]
+        measured = [c + offset * n_o
+                    for c, (_, n_o, _) in zip(computed, cls.COMPOUNDS)]
+        if with_elements:
+            names = names + cls.ELEMENTS
+            computed = computed + [0.0] * len(cls.ELEMENTS)
+            measured = measured + [np.nan] * len(cls.ELEMENTS)
+        md = mv.data.from_structures([cls._cell(n) for n in names])
+        md.obs_names = names
+        md.obs["energy_pbe"] = computed
+        md.obs["e_above_hull_pbe"] = [0.0] * len(names)
+        md.obs["dHf"] = measured
+        return md
+
+    @staticmethod
+    def _fit(md):
+        mv.thermo.fit_corrections(md, "dHf", level="pbe", max_error=5.0,
+                                  allow_unstable=True)
+        return md.uns["fitted_corrections"]["pbe"]["corrections"]["oxide"]
+
+    def test_a_known_offset_comes_back(self):
+        for offset in (0.0, -0.45, 0.30):
+            value, _error = self._fit(self._dataset(offset))
+            assert value == pytest.approx(offset, abs=1e-3), offset
+
+    def test_the_error_bar_is_returned_with_it(self):
+        _value, error = self._fit(self._dataset(-0.45))
+        assert error > 0.0
+
+    def test_the_corrected_energy_is_deposited(self):
+        md = self._dataset(-0.45)
+        self._fit(md)
+        raw = md.obs["energy_pbe"].to_numpy(dtype=float)
+        corrected = md.obs["energy_corrected_pbe"].to_numpy(dtype=float)
+        applied = md.obs["correction_pbe"].to_numpy(dtype=float)
+        assert np.allclose(corrected, raw + applied)
+        # Fe2O3 has three oxygens, so it moves by three times the correction
+        index = list(md.obs_names).index("Fe2O3")
+        assert applied[index] == pytest.approx(3 * -0.45, abs=1e-2)
+
+    def test_elements_are_not_corrected(self):
+        md = self._dataset(-0.45)
+        self._fit(md)
+        applied = md.obs["correction_pbe"]
+        for element in ("Fe", "Ti", "Mg"):
+            assert float(applied[element]) == pytest.approx(0.0, abs=1e-9)
+
+    def test_missing_elemental_references_are_refused(self):
+        """A formation energy is measured against the elements. Without them
+        every correction would be shifted by an unknown constant."""
+        md = self._dataset(-0.45, with_elements=False)
+        with pytest.raises(ValueError, match="elemental reference"):
+            mv.thermo.fit_corrections(md, "dHf", level="pbe", max_error=5.0,
+                                      allow_unstable=True)
+
+    def test_a_missing_hull_says_what_to_run(self):
+        md = self._dataset(-0.45)
+        del md.obs["e_above_hull_pbe"]
+        with pytest.raises(ValueError, match="mv.thermo.hull"):
+            mv.thermo.fit_corrections(md, "dHf", level="pbe")
+
+    def test_one_compound_is_not_a_regression(self):
+        md = self._dataset(-0.45)
+        keep = [n for n in md.obs_names if n not in {"TiO2", "MgO", "Al2O3",
+                                                     "ZnO", "CaO"}]
+        with pytest.raises(ValueError, match="a regression needs"):
+            mv.thermo.fit_corrections(md[keep].copy(), "dHf", level="pbe",
+                                      max_error=5.0, allow_unstable=True)
+
+    def test_it_says_these_are_not_the_materials_project_numbers(self):
+        md = self._dataset(-0.45)
+        self._fit(md)
+        note = md.uns["fitted_corrections"]["pbe"]["note"]
+        assert "MP2020" in note and "does not transfer" in note

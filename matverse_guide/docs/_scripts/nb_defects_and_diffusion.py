@@ -163,6 +163,15 @@ synthesis conditions rather than a constant. `mv.thermo.chempot_limits` reports
 the range the phase diagram allows."""),
 
     ("code", """\
+mv.thermo.chempot_limits(copper, level="emt")"""),
+
+    ("markdown", """\
+An elemental solid has no window — copper in equilibrium with copper fixes its
+own chemical potential, so the range is a point. The number below uses that
+point; in a compound it would be a range, and where you sit in it is the
+difference between growing under a metal-rich or an anion-rich atmosphere."""),
+
+    ("code", """\
 mu_cu = float(copper.obs["energy_per_atom_emt"].iloc[0])
 n_host = int(copper.obs["nsites"].iloc[0]) * 8
 e_host = float(copper.obs["energy_per_atom_emt"].iloc[0]) * n_host
@@ -581,6 +590,107 @@ where it started and hand you a barrier for a hop that did not happen.
 These come from `MVLCINEBEndPointSet`, the VTST-tested settings in
 `pymatgen-analysis-diffusion`. Write the inputs, run them wherever you run VASP,
 and `mv.dft.read_outputs` brings the energies back onto the same rows."""),
+
+    ("markdown", """\
+## Finding a defect somebody else made
+
+`mv.pp.defects` puts defects where it chooses and remembers. The other
+direction is commoner: a relaxed supercell arrives from someone else's
+calculation, the defect is wherever it ended up, and the neighbours have moved
+in around it. Subtracting site lists does not work — they are ordered
+differently and everything has shifted.
+
+`mv.pp.locate_defect` finds it from the local environment instead:"""),
+
+    ("code", """\
+# 3x3x3, not 2x2x2: the descriptor this uses has a 5 A cutoff, and a cell
+# shorter than 10 A lets every site see the defect through its own periodic
+# images. matverse warns when that happens, because the answer is wrong
+# without looking wrong.
+perfect = mv.structures(copper, "input")[0].copy()
+perfect.make_supercell([3, 3, 3])
+damaged = perfect.copy()
+removed_at = perfect[13].frac_coords
+damaged.remove_sites([13])
+
+# reverse the site order, as a foreign file might well arrive
+from pymatgen.core import Structure
+shuffled = Structure.from_sites(list(damaged.sites)[::-1])
+
+hunt = mv.data.from_structures([shuffled])
+try:
+    mv.pp.locate_defect(hunt, host=mv.data.from_structures([perfect]))
+    result = hunt.obs[["defect_a", "defect_b", "defect_c",
+                       "defect_nearest_site"]].round(4)
+    print("removed at:", removed_at.round(4))
+except ImportError as exc:
+    result = str(exc)[:200]      # dscribe is an optional extra
+result"""),
+
+    ("markdown", """\
+The vacancy comes back at the coordinates it was made at, from a cell whose
+sites are in the opposite order.
+
+```{warning}
+**Use a big enough supercell.** The descriptor underneath has a hard-coded 5 Å
+cutoff, so a cell shorter than 10 Å along any axis lets every site see the
+defect through its own periodic images — none looks distinctly perturbed, and
+the position comes back wrong without anything looking wrong. 2×2×2 fcc copper
+misses by 3.5 Å. matverse warns when the cell is too small; 3×3×3 and larger are
+exact.
+
+Needs **dscribe**, which imports `sparse`, which imports `numba`, which requires
+numpy below 2.5. On a newer numpy the install resolves and the import does not,
+so the cell above catches that rather than failing the tutorial.
+```"""),
+
+    ("markdown", """\
+## The curve a charge state leaves behind
+
+When a defect changes charge, its neighbours move to a new equilibrium. The
+energy along that displacement is the configuration-coordinate curve, and two
+numbers come off it: the **curvature** gives an effective phonon frequency, and
+the height at the *other* state's geometry gives the **relaxation energy** —
+what gets dumped into the lattice when the charge changes.
+
+Those two are exactly what the capture coefficient below needs, and nothing in
+matverse produced them until now:"""),
+
+    ("code", """\
+import numpy as np
+
+# stand-in for energies computed along an interpolation between two relaxed
+# charge states; Q is mass-weighted, in amu^(1/2) angstrom
+Q = np.linspace(-2.0, 2.0, 21)
+curvature, offset = 0.6, 1.5
+
+curve = mv.data.from_structures(mv.structures(copper, "input") * len(Q))
+curve.obs["Q"] = Q
+curve.obs["energy_pbe"] = 0.5 * curvature * (Q - offset) ** 2
+
+mv.prop.configuration_coordinate(curve, coordinate="Q", level="pbe")
+curve.uns["configuration_coordinate"]["pbe"]"""),
+
+    ("markdown", """\
+The frequency is $\\hbar\\sqrt{c}$ with the mass-weighted units carried
+through — 0.050 eV here, about 400 cm⁻¹, an ordinary optical phonon. The
+relaxation energy is $\\tfrac{1}{2}c\\,\\Delta Q^2$, which for this offset is
+0.675 eV.
+
+**Huang–Rhys** is the ratio: how many phonons the relaxation is worth. Above
+about five, a one-dimensional harmonic picture is carrying more than it should,
+and anything computed from it is order-of-magnitude.
+
+```{note}
+Mass-weighting is not optional. The same displacement of a hydrogen and of a
+bismuth are not the same coordinate, and an unweighted fit returns a number that
+is not a frequency.
+
+Fitted here rather than wrapped: pymatgen's `HarmonicDefect` takes the frequency
+as an *input* rather than fitting it, and the fit lives in a private helper
+reachable only through `from_vaspruns`. The test suite checks this agrees with
+`HarmonicDefect.omega_eV` to 1e-7.
+```"""),
 
     ("markdown", """\
 ## Is it a killer?

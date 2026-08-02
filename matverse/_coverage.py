@@ -145,6 +145,17 @@ WRAPPED: Dict[str, List[str]] = {
     "analysis.quasirrho": ["mv.mol.quasirrho"],
     "analysis.xps": ["mv.elec.xps"],
     "analysis.defects.recombination": ["mv.prop.capture"],
+    "analysis.ferroelectricity.polarization": ["mv.prop.polarization"],
+    "analysis.piezo_sensitivity": ["mv.prop.piezo_from_dfpt"],
+    "analysis.lobster_env": ["mv.env.lobster"],
+    "analysis.magnetism.heisenberg": ["mv.mag.exchange"],
+    "analysis.functional_groups": ["mv.mol.functional_groups"],
+    "analysis.compatibility.correction_calculator":
+        ["mv.thermo.fit_corrections"],
+    "analysis.chemenv.coordination_environments.voronoi":
+        ["mv.env.voronoi"],
+    "analysis.defects.finder": ["mv.pp.locate_defect"],
+    "electronic_structure.boltztrap2": ["mv.elec.transport"],
     "analysis.defects.corrections.freysoldt":
         ["mv.thermo.defect_formation"],
     "analysis.diffusion.aimd.clustering": ["mv.md.sites"],
@@ -261,6 +272,44 @@ def equivalents(module: str) -> frozenset:
 # ---------------------------------------------------------------- NATIVE
 #: Capability present in matverse, implemented without pymatgen's module.
 NATIVE: Dict[str, str] = {
+    "symmetry.maggroups":
+        "mv.mag.symmetry computes what the database is for without naming a "
+        "group: how many of the non-magnetic parent's operations survive "
+        "once the moments are applied as axial vectors, each tried with and "
+        "without time reversal. pymatgen ships all 1651 magnetic space "
+        "groups and MagSymmOp.operate_magmom to apply them, but no analyser "
+        "that reads a group off a structure - so the quantity is computed "
+        "and the label is not claimed. What is deliberately not reported is "
+        "ferromagnet against antiferromagnet: that is a statement about the "
+        "group type, and a count of primed operations is not it, since a "
+        "collinear ferromagnet picks up primed operations from rotations "
+        "that reverse its axis.",
+    "analysis.bond_dissociation":
+        "mv.mol.dissociation computes the bond dissociation energy directly "
+        "- the energies of the fragments minus the energy of the molecule - "
+        "on top of mv.mol.fragments, which already breaks the bonds. "
+        "BondDissociationEnergies wraps the same arithmetic around a Q-Chem "
+        "workflow and its own fragmenter; there is nothing in it matverse "
+        "cannot do with a calculator it already has, and doing it natively "
+        "keeps the fragment traceable to the bond.",
+    "analysis.fragmenter":
+        "mv.mol.fragments already does this, breaking every acyclic bond "
+        "through networkx rather than through openbabel. Checked against "
+        "Fragmenter on ethanol: the unique fragments agree exactly - CH3, "
+        "CH3O, C2H5, C2H5O, OH, H. The difference is that Fragmenter "
+        "deduplicates by graph isomorphism and can open rings at greater "
+        "depth, while matverse keeps one row per cut, which is what makes "
+        "the fragment traceable to the bond it came from.",
+    "analysis.defects.ccd":
+        "mv.prop.configuration_coordinate fits the harmonic frequency and "
+        "the relaxation energy from energies along a distortion, which is "
+        "what a configuration-coordinate diagram is for and what "
+        "mv.prop.capture needs. Not a wrapper: HarmonicDefect takes the "
+        "frequency as an input rather than fitting it, and the fit lives in "
+        "a private helper reachable only through from_vaspruns. The result "
+        "is checked against HarmonicDefect.omega_eV to 1e-7 in the tests. "
+        "What stays out of reach is the rest of that module - get_elph_me "
+        "and the dielectric function need WSWQ and Waveder from real runs.",
     "analysis.diffusion.neb.full_path_mapper":
         "mv.neb.hops enumerates the symmetry-distinct hops directly, which "
         "is what MigrationGraph is used for - knowing which barriers are "
@@ -454,121 +503,46 @@ INTERNAL_MARKERS = (
 #: — but they are not "nobody got to it", and the distinction is the difference
 #: between a backlog and a wish.
 BLOCKED: Dict[str, str] = {
-    "analysis.lobster_env":
-        "matverse reads external first-principles output as a matter of "
-        "course - mv.dft.read_outputs, mv.dft.read_dos, mv.elec.read_bands "
-        "and mv.elec.cohp all take a directory of runs - so this is not "
-        "blocked by what matverse is. It is blocked by verification: "
-        "LobsterNeighbors needs ICOHPLIST and CHARGE files from a LOBSTER "
-        "run. mv.elec.cohp already reads ICOHPLIST from a directory, so the "
-        "route in exists; what is missing is a real LOBSTER output "
-        "directory to verify against.",
-    "analysis.ferroelectricity.polarization":
-        "matverse reads external first-principles output as a matter of "
-        "course - mv.dft.read_outputs, mv.dft.read_dos, mv.elec.read_bands "
-        "and mv.elec.cohp all take a directory of runs - so this is not "
-        "blocked by what matverse is. It is blocked by verification: "
-        "Polarization.from_outcars_and_structures wants the Berry-phase "
-        "output of a sequence of VASP runs along a distortion path. Reading "
-        "them is mv.dft.read_outputs' job; the missing piece is such a "
-        "sequence to test on.",
-    "analysis.piezo_sensitivity":
-        "matverse reads external first-principles output as a matter of "
-        "course - mv.dft.read_outputs, mv.dft.read_dos, mv.elec.read_bands "
-        "and mv.elec.cohp all take a directory of runs - so this is not "
-        "blocked by what matverse is. It is blocked by verification: it "
-        "needs Born effective charges and force constants from a DFPT run, "
-        "which is a vasprun matverse could parse - but not one that exists "
-        "here.",
+    "electronic_structure.boltztrap":
+        "the BoltzTraP 1 Fortran binary, which is not on conda-forge - "
+        "checked - and is distributed from its author's site behind a "
+        "registration. It is also superseded: BoltzTraP2 does the same job, "
+        "is packaged, and is wrapped by mv.elec.transport. This is the one "
+        "gap here that would be worth leaving open even if the binary "
+        "appeared.",
     "analysis.topological.spillage":
-        "matverse reads external first-principles output as a matter of "
-        "course - mv.dft.read_outputs, mv.dft.read_dos, mv.elec.read_bands "
-        "and mv.elec.cohp all take a directory of runs - so this is not "
-        "blocked by what matverse is. It is blocked by verification: "
-        "SOCSpillage compares two WAVECARs, with and without spin-orbit "
-        "coupling. Those are large binary files from two real runs and "
-        "there are none here.",
+        "SOCSpillage stores two paths and overlap_so_spinpol opens both "
+        "with Wavecar. There is no way in: pymatgen reads WAVECAR and does "
+        "not write one, and the spillage is an overlap of the plane-wave "
+        "coefficients themselves rather than of band energies, so "
+        "fabricating the file would mean fabricating wavefunctions. Two "
+        "real runs of the same cell, one with LSORBIT and one without, are "
+        "the only input this takes.",
     "analysis.defects.corrections.kumagai":
-        "matverse reads external first-principles output as a matter of "
-        "course - mv.dft.read_outputs, mv.dft.read_dos, mv.elec.read_bands "
-        "and mv.elec.cohp all take a directory of runs - so this is not "
-        "blocked by what matverse is. It is blocked by verification: it "
-        "needs the atomic site potentials from the OUTCARs of the defective "
-        "and pristine supercells. None here.",
-    "analysis.defects.ccd":
-        "matverse reads external first-principles output as a matter of "
-        "course - mv.dft.read_outputs, mv.dft.read_dos, mv.elec.read_bands "
-        "and mv.elec.cohp all take a directory of runs - so this is not "
-        "blocked by what matverse is. It is blocked by verification: a "
-        "configuration-coordinate diagram needs the potential energy "
-        "surfaces of two charge states along a distortion, from real runs.",
-    "analysis.excitation":
-        "matverse reads external first-principles output as a matter of "
-        "course - mv.dft.read_outputs, mv.dft.read_dos, mv.elec.read_bands "
-        "and mv.elec.cohp all take a directory of runs - so this is not "
-        "blocked by what matverse is. It is blocked by verification: an "
-        "excitation spectrum comes from a TD-DFT or BSE run; the parser is "
-        "the easy half and the run is the missing one.",
-    "analysis.bond_dissociation":
-        "needs openbabel, and specifically its pybel bindings, which "
-        "pymatgen imports as `from openbabel import openbabel, pybel`. "
-        "openbabel-wheel 3.1.1.23 does now ship a cp312 manylinux wheel - "
-        "the older note here said there was none, which was out of date - "
-        "but installing it is not enough: several format plugins need "
-        "libXrender.so.1, absent on this system, and pybel builds its "
-        "format table by parsing GetSupportedInputFormat() with no "
-        "tolerance for a plugin that failed to load, so it dies on a "
-        "ValueError and takes BabelMolAdaptor with it. Verified: openbabel "
-        "imports, pybel does not.",
-    "analysis.fragmenter":
-        "needs openbabel's pybel bindings - see analysis.bond_dissociation "
-        "for what actually fails and why installing the wheel does not fix "
-        "it",
-    "analysis.functional_groups":
-        "needs openbabel's pybel bindings - see analysis.bond_dissociation. "
-        "FunctionalGroupExtractor itself is pure structure analysis and "
-        "would be the cheapest of the three to wrap if pybel ever imports "
-        "here",
-    "analysis.defects.finder":
-        "DefectSiteFinder needs dscribe, and dscribe needs numba - not "
-        "directly, but through `sparse`, which it imports at module scope. "
-        "Verified rather than assumed: with dscribe 2.1.2 on the path, "
-        "`from dscribe.descriptors import SOAP` raises ModuleNotFoundError: "
-        "No module named 'numba'. The numba version pin is what makes this "
-        "expensive; installing it for one module would move the whole "
-        "environment.",
-    "analysis.chemenv.coordination_environments.voronoi":
-        "the Voronoi construction ChemEnv runs before it fits a "
-        "polyhedron. Confirmed by runtime check to be loaded and executed "
-        "during a mv.env.chemenv call, but pymatgen imports it lazily "
-        "inside the finder, so there is no import chain from matverse to "
-        "it and no entry point to wrap - only compute_structure_environments",
-    "analysis.magnetism.heisenberg":
-        "fitting exchange couplings needs spin-polarised energies, and no "
-        "calculator matverse ships is spin-polarised, so nothing here can "
-        "verify the result.",
-    "symmetry.maggroups":
-        "a lookup table with no derivation. The database holds all 1651 "
-        "magnetic space groups and MagneticSpaceGroup takes a BNS or OG "
-        "label, but pymatgen ships no analyser that determines a "
-        "structure's magnetic space group from its moments - there is no "
-        "MagneticSpaceGroupAnalyzer beside SpacegroupAnalyzer, so there is "
-        "no route from a structure to a label.",
-    "analysis.compatibility.correction_calculator":
-        "fits a correction scheme rather than applying one. "
-        "compute_corrections needs experimental formation enthalpies paired "
-        "with calculated entries for the same compounds, and pymatgen ships "
-        "no such data file - the module references none. Applying the "
-        "result is mv.thermo.corrections, wrapped.",
-    "electronic_structure.boltztrap": "needs the BoltzTraP binary",
-    "electronic_structure.boltztrap2":
-        "BoltzTraP2 links against netCDF and does not build here; "
-        "mv.elec.transport already reports the install command",
+        "the install is not the blocker after all. pip cannot place "
+        "pydefect here - its scikit-image dependency ships manylinux_2_28 "
+        "wheels and this node runs glibc 2.17 - but conda-forge builds for "
+        "the older glibc and installs it cleanly, which was checked rather "
+        "than assumed. With pydefect present get_efnv_correction imports "
+        "and runs. What stops it is the data: it maps each defect site onto "
+        "a perfect one and reads a site potential for both, and those "
+        "potentials come from the OUTCARs of two real runs. Fabricated "
+        "potentials get several layers into pydefect's site matching before "
+        "failing, and had they not, the correction they produced would have "
+        "been unverifiable against anything. Supply two real supercell runs "
+        "and this becomes reachable on any machine with conda.",
 }
 
 
 #: Individual modules that are plumbing despite not matching a marker.
 INTERNAL = {
+    # 603 characters: a Spectrum subclass that sets two axis labels and
+    # calls super().__init__. No computation to wrap. The contrast worth
+    # keeping in mind is analysis.xps, which also subclasses Spectrum but
+    # carries from_dos and its cross-section weighting - that one was
+    # worth wrapping and is (mv.elec.xps). This is a type, not a
+    # capability, in the same way transformation_abc is.
+    "analysis.excitation",
     # A convenience namespace, not an API. Its own docstring says it
     # "imports the key classes from both vasp_input and vasp_output ... to
     # retain backwards compatibility"; matverse imports io.vasp.outputs and

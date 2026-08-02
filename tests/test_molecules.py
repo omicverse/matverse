@@ -564,3 +564,192 @@ class TestQuasiRRHO:
         for column in ("entropy_quasirrho", "entropy_harmonic",
                        "free_energy_quasirrho", "enthalpy_correction"):
             assert md.obs[column].dtype.kind == "f", column
+
+
+def _has_openbabel() -> bool:
+    """openbabel's bindings, which also need libXrender at runtime.
+
+    Importing `openbabel.openbabel` succeeds without it; `pybel` is what
+    fails, and pymatgen imports both, so this checks the pair.
+    """
+    try:
+        from openbabel import openbabel, pybel  # noqa: F401
+    except Exception:
+        return False
+    return True
+
+
+@pytest.mark.skipif(not _has_openbabel(),
+                    reason="openbabel bindings absent (needs openbabel-wheel "
+                           "and libXrender)")
+class TestFunctionalGroups:
+    """Ethanol and dimethyl ether are both C2H6O and are not the same
+    molecule, which is the whole reason to ask this question of a structure
+    rather than of a formula."""
+
+    @staticmethod
+    def _ethanol():
+        from pymatgen.core import Molecule
+        return Molecule(
+            ["C", "C", "O", "H", "H", "H", "H", "H", "H"],
+            [[-1.1, 0.2, 0.0], [0.2, -0.5, 0.0], [1.3, 0.4, 0.0],
+             [-1.0, 1.3, 0.0], [-1.7, -0.1, 0.9], [-1.7, -0.1, -0.9],
+             [0.3, -1.2, 0.9], [0.3, -1.2, -0.9], [2.1, -0.1, 0.0]])
+
+    @staticmethod
+    def _water():
+        from pymatgen.core import Molecule
+        return Molecule(["O", "H", "H"],
+                        [[0, 0, 0.117], [0, 0.757, -0.469],
+                         [0, -0.757, -0.469]])
+
+    def test_ethanol_has_a_hydroxyl(self):
+        md = mv.mol.from_molecules([self._ethanol()])
+        mv.mol.functional_groups(md)
+        assert "[OH]" in md.obs["functional_groups"].iloc[0]
+
+    def test_ethanol_has_a_methyl(self):
+        md = mv.mol.from_molecules([self._ethanol()])
+        mv.mol.functional_groups(md)
+        assert "[CH3]" in md.obs["functional_groups"].iloc[0]
+
+    def test_the_column_is_a_string_a_screen_can_filter_on(self):
+        """Semicolon-separated and sorted, so `contains('[OH]')` works without
+        unpacking anything."""
+        md = mv.mol.from_molecules([self._ethanol(), self._water()])
+        mv.mol.functional_groups(md)
+        column = md.obs["functional_groups"]
+        # Not a dtype assertion: pandas 3 gives this StringDtype and pandas 2
+        # gives object, and what matters is that it behaves like text.
+        assert all(isinstance(v, str) for v in column)
+        with_oh = column.str.contains(r"\[OH\]", regex=True)
+        assert bool(with_oh.iloc[0])
+
+    def test_the_counts_are_kept_where_a_dict_belongs(self):
+        md = mv.mol.from_molecules([self._ethanol()])
+        mv.mol.functional_groups(md)
+        counts = md.uns["functional_groups"]["default"]["counts"][0]
+        assert counts["[OH]"] == 1
+        assert sum(counts.values()) == \
+            int(md.obs["n_functional_groups"].iloc[0])
+
+    def test_two_molecules_get_two_answers(self):
+        md = mv.mol.from_molecules([self._ethanol(), self._water()])
+        md.obs_names = ["ethanol", "water"]
+        mv.mol.functional_groups(md)
+        assert md.obs["functional_groups"]["ethanol"] != \
+            md.obs["functional_groups"]["water"]
+
+    def test_total_failure_raises_rather_than_leaving_blanks(self,
+                                                             monkeypatch):
+        """openbabel does not fail at import — pymatgen imports OpenBabelNN
+        regardless and the failure surfaces per molecule. Without a check,
+        a missing libXrender gives a column of empty strings and no
+        complaint."""
+        import pymatgen.analysis.graphs as graphs
+
+        def explode(*args, **kwargs):
+            raise RuntimeError("BabelMolAdaptor requires openbabel")
+
+        monkeypatch.setattr(graphs.MoleculeGraph, "from_local_env_strategy",
+                            staticmethod(explode))
+        md = mv.mol.from_molecules([self._ethanol()])
+        with pytest.raises(ImportError, match="libXrender"):
+            mv.mol.functional_groups(md)
+
+    def test_a_key_added_keeps_two_runs_apart(self):
+        md = mv.mol.from_molecules([self._ethanol()])
+        mv.mol.functional_groups(md, key_added="strict")
+        mv.mol.functional_groups(md, heteroatoms_only=False, key_added="loose")
+        assert "functional_groups_strict" in md.obs
+        assert "functional_groups_loose" in md.obs
+        assert md.uns["functional_groups"]["loose"]["heteroatoms_only"] is False
+
+
+class TestBondDissociation:
+    """BDE is arithmetic on top of two energies, so the tests use energies
+    chosen to make the answer exact rather than a calculator whose accuracy on
+    radicals would be the thing under test."""
+
+    @staticmethod
+    def _ethanol():
+        from pymatgen.core import Molecule
+        return Molecule(
+            ["C", "C", "O", "H", "H", "H", "H", "H", "H"],
+            [[-1.1, 0.2, 0.0], [0.2, -0.5, 0.0], [1.3, 0.4, 0.0],
+             [-1.0, 1.3, 0.0], [-1.7, -0.1, 0.9], [-1.7, -0.1, -0.9],
+             [0.3, -1.2, 0.9], [0.3, -1.2, -0.9], [2.1, -0.1, 0.0]])
+
+    @classmethod
+    def _prepared(cls, whole=-100.0, per_atom=-10.0):
+        md = mv.mol.from_molecules([cls._ethanol()])
+        md.obs_names = ["ethanol"]
+        frags = mv.mol.fragments(md, depth=1)
+        md.obs["energy_x"] = [whole]
+        frags.obs["energy_x"] = [per_atom * n
+                                 for n in frags.obs["fragment_size"]]
+        return md, frags
+
+    def test_the_energy_is_pieces_minus_whole(self):
+        """Every cut of ethanol leaves nine atoms between the fragments, so at
+        a fixed energy per atom every bond must come out the same, and equal
+        to (9 * per_atom) - whole."""
+        md, frags = self._prepared(whole=-100.0, per_atom=-10.0)
+        bde = mv.mol.dissociation(frags, md, level="x")
+        values = bde.obs["bond_dissociation_energy_x"].to_numpy(dtype=float)
+        assert np.allclose(values, 9 * -10.0 - (-100.0))
+
+    def test_there_is_one_row_per_bond(self):
+        """Ethanol has eight acyclic bonds and they are all named."""
+        md, frags = self._prepared()
+        bde = mv.mol.dissociation(frags, md, level="x")
+        assert bde.n_obs == 8
+        assert len(set(bde.obs["broken_bond"])) == 8
+        assert (bde.obs["n_fragments"] == 2).all()
+
+    def test_a_stronger_bond_costs_more(self):
+        """Make one fragment pair unusually stable and its bond becomes the
+        cheapest to break — the ordering is what this is used for."""
+        md, frags = self._prepared()
+        target = frags.obs["broken_bond"].iloc[0]
+        mask = (frags.obs["broken_bond"] == target).to_numpy()
+        energies = frags.obs["energy_x"].to_numpy(dtype=float).copy()
+        energies[mask] -= 5.0
+        frags.obs["energy_x"] = energies
+        bde = mv.mol.dissociation(frags, md, level="x")
+        cheapest = bde.obs.loc[
+            bde.obs["bond_dissociation_energy_x"].idxmin(), "broken_bond"]
+        assert cheapest == target
+
+    def test_rows_point_back_at_the_molecule(self):
+        md, frags = self._prepared()
+        bde = mv.mol.dissociation(frags, md, level="x")
+        assert set(bde.obs["parent"]) == {"ethanol"}
+
+    def test_a_missing_fragment_energy_is_recorded(self):
+        md, frags = self._prepared()
+        energies = frags.obs["energy_x"].to_numpy(dtype=float).copy()
+        energies[0] = np.nan
+        frags.obs["energy_x"] = energies
+        bde = mv.mol.dissociation(frags, md, level="x")
+        assert np.isnan(bde.obs["bond_dissociation_energy_x"]).any()
+        assert bde.uns["dissociation"]["errors"]
+
+    def test_the_molecule_energy_is_required(self):
+        md, frags = self._prepared()
+        del md.obs["energy_x"]
+        with pytest.raises(ValueError, match="the whole is what the pieces"):
+            mv.mol.dissociation(frags, md, level="x")
+
+    def test_the_fragment_energy_is_required(self):
+        md, frags = self._prepared()
+        del frags.obs["energy_x"]
+        with pytest.raises(ValueError, match="mv.calc.energy"):
+            mv.mol.dissociation(frags, md, level="x")
+
+    def test_the_radical_caveat_is_recorded(self):
+        """Fragments are radicals and most methods are worse on those than on
+        the closed-shell molecule. Saying so beside the number is the point."""
+        md, frags = self._prepared()
+        bde = mv.mol.dissociation(frags, md, level="x")
+        assert "radicals" in bde.uns["dissociation"]["caveat"]

@@ -111,11 +111,8 @@ group contains no improper operation. All four here have a mirror plane, so
 none has an enantiomer."""),
 
     ("code", """\
-import matplotlib.pyplot as plt
-
-fig, ax = plt.subplots(figsize=(6, 3.4))
-ax.bar(md.obs["formula"], md.obs["symmetry_order"],
-       color=["#4c72b0" if p else "#cccccc" for p in md.obs["can_be_polar"]])
+ax = mv.pl.scatter(md, "formula", "symmetry_order", kind="bar",
+                   color="can_be_polar")
 ax.set_ylabel("order of the point group")
 ax.set_title("blue can be polar; grey is forbidden by symmetry")"""),
 
@@ -357,6 +354,104 @@ Which you want depends on whether conformers are the thing you are
 deduplicating or the thing you are studying. That is why it is a `dispatch`
 rather than a default: the registry entry names both routes, so an agent
 choosing between them can see that the choice exists."""),
+
+    ("markdown", """\
+## Which bond breaks first
+
+The bond dissociation energy is the energy of the pieces minus the energy of the
+whole. It decides which bond in a battery electrolyte oxidises first and which
+C–H a combustion mechanism abstracts, and `mv.mol.fragments` has already done
+the breaking — what is left is arithmetic on two energies:"""),
+
+    ("code", """\
+from pymatgen.core import Molecule
+
+alcohol = Molecule(
+    ["C", "C", "O", "H", "H", "H", "H", "H", "H"],
+    [[-1.1, 0.2, 0.0], [0.2, -0.5, 0.0], [1.3, 0.4, 0.0], [-1.0, 1.3, 0.0],
+     [-1.7, -0.1, 0.9], [-1.7, -0.1, -0.9], [0.3, -1.2, 0.9],
+     [0.3, -1.2, -0.9], [2.1, -0.1, 0.0]])
+
+whole = mv.mol.from_molecules([alcohol])
+whole.obs_names = ["ethanol"]
+pieces = mv.mol.fragments(whole, depth=1)
+
+# stand-in energies: a real screen would put a calculator here
+whole.obs["energy_x"] = [-100.0]
+pieces.obs["energy_x"] = [-10.0 * n for n in pieces.obs["fragment_size"]]
+
+bde = mv.mol.dissociation(pieces, whole, level="x")
+bde.obs[["broken_bond", "bond_dissociation_energy_x", "n_fragments"]]"""),
+
+    ("markdown", """\
+Eight bonds, one row each, every one named. With the placeholder energies above
+they all come out equal, which is the point of choosing them that way — every
+cut of ethanol leaves nine atoms between the fragments, so at a fixed energy per
+atom the arithmetic has to give the same answer eight times. Put a real
+calculator in and the spread appears.
+
+```{warning}
+**The fragments are radicals**, and that is where the accuracy goes. A radical
+has an unpaired electron, and a method that is fine for closed-shell molecules
+can be badly wrong for one — universal potentials especially, since they are
+trained mostly on closed-shell equilibrium structures. Read the *ordering* of
+bonds within a molecule as the useful output; treat the absolute numbers as
+indicative unless the level was chosen for open shells.
+
+Geometries are used as they are, so this is the **vertical** dissociation
+energy. Relax the fragments first for the adiabatic one; the two differing is
+the fragment relaxation energy, which is information rather than a problem.
+```"""),
+
+    ("markdown", """\
+## What is actually on the molecule
+
+A formula does not say what a molecule does. C₂H₆O is ethanol or dimethyl
+ether depending on where the oxygen sits, and those behave nothing alike. A
+screen over candidate molecules almost always wants *"the ones with a
+carboxylic acid"* rather than *"the ones with two carbons"*.
+
+`mv.mol.functional_groups` walks out from the heteroatoms and reports what it
+finds:"""),
+
+    ("code", """\
+from pymatgen.core import Molecule
+
+ethanol = Molecule(
+    ["C", "C", "O", "H", "H", "H", "H", "H", "H"],
+    [[-1.1, 0.2, 0.0], [0.2, -0.5, 0.0], [1.3, 0.4, 0.0], [-1.0, 1.3, 0.0],
+     [-1.7, -0.1, 0.9], [-1.7, -0.1, -0.9], [0.3, -1.2, 0.9],
+     [0.3, -1.2, -0.9], [2.1, -0.1, 0.0]])
+water = Molecule(["O", "H", "H"],
+                 [[0, 0, 0.117], [0, 0.757, -0.469], [0, -0.757, -0.469]])
+
+groups = mv.mol.from_molecules([ethanol, water])
+groups.obs_names = ["ethanol", "water"]
+
+try:
+    mv.mol.functional_groups(groups)
+    result = groups.obs[["functional_groups", "n_functional_groups"]]
+except ImportError as exc:
+    result = str(exc)[:200]      # openbabel is an optional extra
+result"""),
+
+    ("markdown", """\
+Ethanol comes back as `[CH3];[OH]` — a methyl and a hydroxyl, which is what it
+is. The column is a sorted, semicolon-separated **string** on purpose, so it
+can go straight into `mv.screen.filter` with a `contains` and be read without
+unpacking anything. The counts per group live in `uns`, where a dict belongs.
+
+```{warning}
+This needs openbabel's Python bindings, and openbabel needs **libXrender** at
+runtime. `pip install openbabel-wheel` gets the bindings; without libXrender
+they fail to import with a `ValueError` raised from openbabel's format table —
+an error that names neither openbabel nor the missing library, and costs an
+afternoon to trace.
+
+`conda install -c conda-forge xorg-libxrender`, or your distribution's
+`libxrender1`, fixes it. The error matverse raises says all of this, which is
+the only reason it is worth writing down here.
+```"""),
 
     ("markdown", """\
 ## Free energies, and the mode you trust least

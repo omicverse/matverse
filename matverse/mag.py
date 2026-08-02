@@ -454,3 +454,218 @@ def jahn_teller(md: AnnData, source: str = "input", guess_spin: bool = False,
     md.uns["jahn_teller"] = {"source": source, "guess_spin": bool(guess_spin),
                              "n_failed": int(failed), "per_material": detail}
     record(md, "mag.jahn_teller", source=source, guess_spin=guess_spin)
+
+
+@register_function(
+    aliases=["exchange", "exchange coupling", "heisenberg", "curie "
+             "temperature", "neel temperature", "ordering temperature",
+             "magnetic coupling", "J"],
+    category="mag",
+    description="Fit Heisenberg exchange couplings to the energies of "
+                "different magnetic orderings, and estimate the ordering "
+                "temperature from them.",
+    requires={"obs": ["energy_{level}"], "structures": ["{source}"]},
+    produces={"obs": ["exchange_{level}", "ordering_temperature_{level}"],
+              "uns": ["exchange"]},
+    prerequisites=["mv.mag.orderings", "mv.calc.energy"],
+    examples=["mv.mag.exchange(orderings, level='pbe')",
+              "mv.mag.exchange(orderings, level='pbe', cutoff=5.0)"],
+    related=["mv.mag.orderings", "mv.mag.ground_state", "mv.mag.describe"],
+    notes="Which ordering is lowest tells you whether a material is a "
+          "ferromagnet or an antiferromagnet. It does not tell you how far "
+          "above room temperature it stays one, and that is usually the "
+          "question. Mapping the energies onto a Heisenberg Hamiltonian gives "
+          "the exchange couplings, and a mean-field estimate of the ordering "
+          "temperature follows from them.\\n\\n"
+          "**Read the temperature as an upper bound.** Mean-field theory "
+          "ignores the fluctuations that destroy order, so it overestimates "
+          "Curie and Neel temperatures systematically, often by a third to a "
+          "half. It is useful for ranking candidates and for saying 'not "
+          "anywhere near room temperature'; it is not a prediction of a "
+          "measurement.\\n\\n"
+          "Needs several orderings — one energy cannot determine a coupling — "
+          "and they must be genuinely different arrangements of the same "
+          "cell, which is what mv.mag.orderings produces. The couplings come "
+          "back in meV under pymatgen's own convention, which counts per site "
+          "rather than per bond; the ratio between two materials is "
+          "convention-free and the absolute value is not.\\n\\n"
+          "This is only worth running on energies from a spin-polarised "
+          "calculation. A potential that does not distinguish spin gives the "
+          "same energy for every ordering, the fit is then degenerate, and "
+          "the failure is recorded rather than dressed up as a small "
+          "coupling.",
+)
+def exchange(md: AnnData, level: str = "pbe", source: str = "input",
+             cutoff: float = 0.0, tol: float = 0.02,
+             key_added: str | None = None) -> None:
+    """Heisenberg couplings and an ordering temperature. Deposits ``None``."""
+    from pymatgen.analysis.magnetism.heisenberg import HeisenbergMapper
+
+    energy_key = f"energy_{level}"
+    if energy_key not in md.obs:
+        raise ValueError(f"obs[{energy_key!r}] absent; run "
+                         f"mv.calc.energy(orderings, level={level!r}) first")
+    if md.n_obs < 2:
+        raise ValueError(f"exchange needs at least two orderings to compare, "
+                         f"got {md.n_obs}; one energy cannot determine a "
+                         f"coupling")
+
+    energies = md.obs[energy_key].to_numpy(dtype=float)
+    cells = structures(md, source)
+    finite = np.isfinite(energies)
+    if finite.sum() < 2:
+        raise ValueError(f"only {int(finite.sum())} of {md.n_obs} orderings "
+                         f"have a finite {energy_key}")
+
+    name = key_added or level
+    spread = float(np.nanmax(energies) - np.nanmin(energies))
+    couplings, temperature, error = {}, np.nan, ""
+
+    if spread < 1e-9:
+        error = (f"every ordering has the same energy to within {spread:.2e} "
+                 f"eV, so the Heisenberg fit is degenerate — this is what a "
+                 f"calculator that does not distinguish spin produces")
+    else:
+        try:
+            mapper = HeisenbergMapper(
+                [cells[i] for i in np.flatnonzero(finite)],
+                [float(e) for e in energies[finite]],
+                cutoff=float(cutoff), tol=float(tol))
+            couplings = {str(k): float(v)
+                         for k, v in mapper.get_exchange().items()}
+            if couplings:
+                temperature = float(
+                    mapper.get_mft_temperature(list(couplings.values())[0]))
+        except Exception as exc:
+            error = f"{type(exc).__name__}: {exc}"
+
+    primary = (float(list(couplings.values())[0]) if couplings else np.nan)
+    md.obs[f"exchange_{name}"] = np.full(md.n_obs, primary)
+    md.obs[f"ordering_temperature_{name}"] = np.full(md.n_obs, temperature)
+    md.uns.setdefault("exchange", {})[name] = {
+        "couplings": couplings, "unit": "meV",
+        "convention": "pymatgen's, counted per site rather than per bond",
+        "ordering_temperature": temperature,
+        "temperature_note": "mean-field, an upper bound — fluctuations are "
+                            "ignored and it overestimates systematically",
+        "energy_spread": spread, "n_orderings": int(finite.sum()),
+        "error": error or None,
+    }
+    if error:
+        import warnings as _warnings
+        _warnings.warn(f"mv.mag.exchange could not fit couplings: {error}",
+                       stacklevel=2)
+    record(md, "mag.exchange", level=level, cutoff=float(cutoff),
+           key_added=name)
+
+
+@register_function(
+    aliases=["magnetic symmetry", "magnetic space group", "time reversal",
+             "how symmetric is the ordering", "magnetic point group",
+             "compensated"],
+    category="mag",
+    description="How much of a structure's symmetry survives once its "
+                "magnetic moments are taken into account, and whether time "
+                "reversal is among the operations that survive.",
+    requires={"structures": ["{source}"]},
+    produces={"obs": ["magnetic_symmetry_order", "parent_symmetry_order",
+                      "magnetic_symmetry_fraction"]},
+    prerequisites=["mv.mag.orderings"],
+    examples=["mv.mag.symmetry(orderings)",
+              "mv.mag.symmetry(orderings, magmom='magmom')"],
+    related=["mv.mag.orderings", "mv.mag.describe", "mv.pp.symmetry"],
+    notes="Putting moments on a lattice breaks some of its symmetry and "
+          "keeps the rest, and which is which is what a magnetic space group "
+          "records. pymatgen ships the database of all 1651 of them but no "
+          "analyser that reads one off a structure — there is no "
+          "MagneticSpaceGroupAnalyzer beside SpacegroupAnalyzer — so this "
+          "computes the underlying quantity instead of naming it.\\n\\n"
+          "Each operation of the non-magnetic parent group is applied to the "
+          "moments as the axial vectors they are, once as-is and once "
+          "combined with time reversal. An operation survives if either "
+          "version maps the arrangement onto itself.\\n\\n"
+          "obs['time_reversal_symmetric'] is the useful flag. Reversing every "
+          "moment gives back the same arrangement exactly when the structure "
+          "is compensated — an antiferromagnet, or something with no moments "
+          "at all. A ferromagnet is never time-reversal symmetric, whatever "
+          "its lattice looks like, so this separates the two without "
+          "reference to a net moment.\\n\\n"
+          "obs['magnetic_symmetry_fraction'] is what survived over what there "
+          "was. One means the moments cost nothing; a small number means the "
+          "ordering has broken most of the crystal's symmetry, which is when "
+          "to expect anisotropy, and when two orderings with the same energy "
+          "are not the same state.\\n\\n"
+          "Collinear or not, the moments are read from the 'magmom' site "
+          "property, where mv.mag.orderings leaves them.",
+)
+def symmetry(md: AnnData, source: str = "input", magmom: str = "magmom",
+             symprec: float = 0.1, tol: float = 1e-3) -> None:
+    """Magnetic symmetry retained by each ordering. Deposits ``None``."""
+    from pymatgen.core.operations import MagSymmOp
+    from pymatgen.electronic_structure.core import Magmom
+    from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
+
+    kept = np.full(md.n_obs, np.nan)
+    parent = np.full(md.n_obs, np.nan)
+    failed: list[str] = []
+
+    for row, structure in enumerate(structures(md, source)):
+        raw = structure.site_properties.get(magmom)
+        if raw is None:
+            failed.append(f"row {row}: no site property {magmom!r}")
+            continue
+        moments = np.array([np.array(Magmom(m).global_moment, dtype=float)
+                            for m in raw])
+
+        try:
+            # Strip the moments before asking for the parent group, or
+            # SpacegroupAnalyzer treats them as a site property and returns the
+            # magnetic symmetry already reduced - which would make the
+            # fraction below identically one.
+            bare = structure.copy()
+            bare.remove_site_property(magmom)
+            operations = SpacegroupAnalyzer(
+                bare, symprec=symprec).get_symmetry_operations()
+        except Exception as exc:
+            failed.append(f"row {row}: {type(exc).__name__}: {exc}")
+            continue
+        parent[row] = len(operations)
+
+        frac = np.array(structure.frac_coords, dtype=float)
+        survivors = 0
+        for operation in operations:
+            moved = operation.operate_multi(frac) % 1.0
+            # Where each site went. A site maps to whichever original site
+            # sits at the same place; if none does, the operation is not a
+            # symmetry of the positions and cannot be one of the moments.
+            delta = frac[None, :, :] - moved[:, None, :]
+            delta -= np.round(delta)
+            distance = np.linalg.norm(delta, axis=2)
+            partner = np.argmin(distance, axis=1)
+            if distance[np.arange(len(frac)), partner].max() > symprec:
+                continue
+            for reversal in (1, -1):
+                magnetic = MagSymmOp.from_rotation_and_translation_and_time_reversal(
+                    operation.rotation_matrix, operation.translation_vector,
+                    time_reversal=reversal)
+                turned = np.array(
+                    [np.array(magnetic.operate_magmom(Magmom(m)).global_moment,
+                              dtype=float) for m in moments])
+                if np.abs(turned - moments[partner]).max() < tol:
+                    survivors += 1
+                    break
+        kept[row] = survivors
+
+    with np.errstate(invalid="ignore", divide="ignore"):
+        fraction = kept / parent
+
+    md.obs["magnetic_symmetry_order"] = kept
+    md.obs["parent_symmetry_order"] = parent
+    md.obs["magnetic_symmetry_fraction"] = fraction
+    md.uns.setdefault("magnetic_symmetry", {})["settings"] = {
+        "symprec": float(symprec), "tol": float(tol),
+        "magmom_property": magmom, "errors": failed,
+        "note": "operations of the non-magnetic parent group, each tried with "
+                "and without time reversal",
+    }
+    record(md, "mag.symmetry", source=source, symprec=float(symprec))

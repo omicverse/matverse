@@ -138,17 +138,28 @@ sites.obsm["forces_emt"].shape"""),
 sites.obs[["material", "element", "force_magnitude_emt"]].head(8).round(4)"""),
 
     ("code", """\
-import matplotlib.pyplot as plt
+import matplotlib.pyplot as plt      # later cells compose their own figures
 
-fig, ax = plt.subplots(figsize=(6.4, 3.6))
-for k, element in enumerate(sites.var_names):
-    values = sites.obs.loc[sites.obs["element"] == element,
-                           "force_magnitude_emt"]
-    ax.scatter(np.full(len(values), k) + np.linspace(-0.12, 0.12, len(values)),
-               values, s=22, alpha=0.8)
-ax.set_xticks(range(sites.n_vars), list(sites.var_names))
+ax = mv.pl.scatter(sites, "element", "force_magnitude_emt")
 ax.set_ylabel("|F| (eV/Å)")
 ax.set_title("one point per atom, 26 in total")"""),
+
+    ("markdown", """\
+One point per atom says which atoms are unrelaxed. The other question is what
+the spread looks like across the whole set, and a mean cannot answer it —
+twenty-six atoms averaging 0.05 eV/Å can be twenty-six relaxed atoms, or
+twenty-four relaxed atoms and two that are nowhere near:"""),
+
+    ("code", """\
+ax = mv.pl.distribution(sites, "force_magnitude_emt", by="element")
+ax.set_xlabel("|F| (eV/Å)")
+ax.set_title("the same numbers, as a distribution")"""),
+
+    ("markdown", """\
+Shared bins across the elements, which is the only way the two are being
+compared rather than merely drawn beside each other. Non-finite values are
+dropped and the count goes in the axis label, so a column that is half missing
+cannot pass as a narrow distribution."""),
 
     ("markdown", """\
 Twenty-six points where the material axis has room for seven — which is the
@@ -205,14 +216,20 @@ sites.uns["rank_elements_groups"]["True"][
 That is `rank_genes_groups` answering "which elements sit in the highest-force
 environments", and it needed no new function.
 
-### One object, if you want one
+### One object, if you want one"""),
 
-```python
-mdata = mv.multi.to_mudata(md, sites)     # needs matverse[multi]
-```
+    ("code", """\
+try:
+    mdata = mv.multi.to_mudata(md, sites)
+    result = mdata
+except ImportError as exc:
+    result = str(exc)[:160]        # needs matverse[multi]
+result"""),
 
+    ("markdown", """\
 Optional throughout. matverse's operations take `AnnData`, and the sites object
-is useful without ever being assembled."""),
+is useful without ever being assembled — the MuData is for when you want the
+two axes travelling as one file."""),
 
     ("code", """\
 mv.prop.tem(md, r_max=1.2, step=0.02)
@@ -719,6 +736,194 @@ considers hosts with 2 distinct species; this library has [4]".
 ```{seealso}
 [Models and campaigns](models_and_campaigns.ipynb) covers the other half:
 predicting what you have not computed, and choosing what to compute next.
+```"""),
+
+    ("markdown", """\
+## Why a material is piezoelectric, not just how much
+
+`mv.prop.piezoelectric` above took a tensor somebody else computed.
+`mv.prop.piezo_from_dfpt` builds it from the three things a DFPT run produces:
+
+$$e = Z^{*} \\cdot \\mathrm{pinv}(-\\Phi) \\cdot \\Lambda$$
+
+Born effective charges, the inverse force-constant matrix, and the internal
+strain tensor. Keeping them apart is what tells you *why* a material responds,
+which the finished tensor cannot."""),
+
+    ("code", """\
+from pymatgen.core import Lattice, Structure
+
+cell = Structure(Lattice.cubic(4.0), ["Ba", "Ti", "O", "O"],
+                 [[0, 0, 0], [.5, .5, .5], [.5, .5, 0], [.5, 0, .5]])
+candidates = mv.data.from_structures([cell] * 3)
+candidates.obs_names = ["baseline", "twice the Born charges", "twice as stiff"]
+
+rng = np.random.RandomState(0)
+n = len(cell)
+force = rng.randn(n * 3, n * 3)
+force = (force + force.T) / 2
+fcm = np.reshape(force, (n, 3, n, 3)).swapaxes(1, 2)
+bec, ist = rng.randn(n, 3, 3), rng.randn(n, 3, 3, 3)
+
+mv.prop.piezo_from_dfpt(candidates,
+                        [bec, 2 * bec, bec], ist, [fcm, fcm, 2 * fcm])
+candidates.obs[["piezo_max_dfpt", "piezo_norm_dfpt"]].round(3)"""),
+
+    ("markdown", """\
+Doubling the Born charges doubles the response. Doubling the force constants
+halves it. Both are exact — they fall straight out of the expression — and
+together they are the trade-off that decides real materials: **a soft lattice
+with ordinary Born charges beats a stiff one with large charges.**
+
+That is invisible in a single piezoelectric coefficient and obvious here, which
+is the reason to compute the tensor from its parts rather than to receive it.
+
+```{note}
+All three are arguments, one set per row or one shared: Born charges
+`(n_sites, 3, 3)`, internal strain `(n_sites, 3, 3, 3)`, force constants
+`(n_sites, n_sites, 3, 3)`. They come from density functional perturbation
+theory, which matverse does not run.
+
+The pseudo-inverse drops the three translational modes — their eigenvalues are
+zero and their inverse is not — and `rcond` sets where that cut falls.
+```"""),
+
+    ("markdown", """\
+## The polarization that is not a number
+
+Polarization is only defined **modulo a quantum** — one lattice vector of charge
+per cell. A Berry-phase calculation does not return the polarization; it returns
+one representative of an infinite set. Along a switching path the values come
+back scattered across branches, and subtracting the first from the last gives an
+answer wrong by an arbitrary multiple of the quantum.
+
+This is the single most common way a computed ferroelectric polarization gets
+reported wrongly, and it is invisible: the number looks perfectly reasonable.
+
+Here is a path whose true polarization rises smoothly from 0 to 30 μC/cm², with
+a random multiple of the quantum added to each point — which is exactly what a
+real calculation hands you:"""),
+
+    ("code", """\
+from pymatgen.core import Lattice, Structure
+
+a, n = 4.0, 7
+path = mv.data.from_structures([
+    Structure(Lattice.cubic(a), ["Ba", "Ti", "O", "O", "O"],
+              [[0, 0, 0], [.5, .5, .5 + x], [.5, .5, 0], [.5, 0, .5],
+               [0, .5, .5]])
+    for x in np.linspace(0.0, 0.04, n)])
+
+true_path = np.linspace(0.0, 30.0, n)
+quantum = 100.136
+scattered = true_path + quantum * np.random.RandomState(0).randint(-2, 3, n)
+
+p_elec = np.zeros((n, 3))
+p_elec[:, 2] = scattered * a ** 3 / 1602.1766208
+
+print("what the calculation returns:", scattered.round(1))"""),
+
+    ("markdown", """\
+Nothing about that sequence looks like a smooth ferroelectric switching path.
+Subtract the ends and you get 130.1 − 200.3 = −70 μC/cm², which is not the
+answer.
+
+`mv.prop.polarization` puts every point back on one branch by following the
+smallest step from its predecessor:"""),
+
+    ("code", """\
+import warnings
+
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore")     # the path is coarse; see the note
+    mv.prop.polarization(path, p_elec, np.zeros((n, 3)))
+
+print("reconstructed:", np.abs(path.obs["polarization_c"].to_numpy()).round(2))
+print("true path    :", true_path.round(2))
+path.uns["polarization"]["polarization"]["spontaneous_norm"]"""),
+
+    ("markdown", """\
+The smooth path, recovered exactly, and a spontaneous polarization of
+30 μC/cm² instead of −70.
+
+```{warning}
+`uns['polarization'][...]['fraction_of_quantum']` is worth reading every time.
+If the spontaneous polarization is a sizeable fraction of the quantum, then
+consecutive images moved far enough that "nearest branch" is a **guess** rather
+than a reading, and matverse warns — as it does above, where 30 against a
+quantum of 100 is 0.3. The fix is more images along the path, not a better
+algorithm.
+
+**The rows are a path, in order**, from the centrosymmetric reference to the
+polar structure. This is the one function here that reads the dataset as a
+sequence rather than as a set, so row order is part of the input. The
+Berry-phase terms themselves are arguments, as VASP reports them.
+```"""),
+
+    ("markdown", """\
+## Corrections of your own
+
+`mv.thermo.corrections` applies the Materials Project's. Those are calibrated to
+PBE+U at MP's cutoffs and pseudopotentials, and they **do not transfer** — not to
+r2SCAN, not to a different pseudopotential set, not to a machine-learned
+potential. The moment you leave MP's settings you need your own, and deriving
+them is a regression of measured against computed formation energies.
+
+Here is a set of oxides where a −0.45 eV per oxygen error has been put in
+deliberately, so the fit has a known right answer:"""),
+
+    ("code", """\
+from pymatgen.core import Composition, Lattice, Structure
+
+def stand_in(formula):
+    comp = Composition(formula)
+    syms = [str(e) for e in comp.elements for _ in range(int(comp[e]))]
+    return Structure(Lattice.cubic(10.0), syms,
+                     [[i / len(syms), 0, 0] for i in range(len(syms))])
+
+oxides = [("Fe2O3", 3, 2), ("TiO2", 2, 1), ("MgO", 1, 1),
+          ("Al2O3", 3, 2), ("ZnO", 1, 1), ("CaO", 1, 1)]
+elements = ["Fe", "Ti", "Mg", "Al", "Zn", "Ca", "O2"]
+names = [f for f, _, _ in oxides] + elements
+
+calib = mv.data.from_structures([stand_in(n) for n in names])
+calib.obs_names = names
+calib.obs["energy_pbe"] = ([-3.0 * o - 2.0 * m for _, o, m in oxides]
+                           + [0.0] * len(elements))
+calib.obs["e_above_hull_pbe"] = [0.0] * len(names)
+# measured = computed, minus 0.45 eV for every oxygen
+calib.obs["dHf"] = ([-3.0 * o - 2.0 * m - 0.45 * o for _, o, m in oxides]
+                    + [float("nan")] * len(elements))
+
+mv.thermo.fit_corrections(calib, "dHf", level="pbe",
+                          max_error=5.0, allow_unstable=True)
+calib.uns["fitted_corrections"]["pbe"]["corrections"]"""),
+
+    ("markdown", """\
+**−0.45 eV per oxygen, recovered to four decimals**, with an error bar beside
+it. The corrected energies are deposited too, so Fe₂O₃ moves by three times the
+correction and the elements do not move at all:"""),
+
+    ("code", """\
+calib.obs.loc[["Fe2O3", "MgO", "Fe"],
+              ["energy_pbe", "correction_pbe", "energy_corrected_pbe"]]"""),
+
+    ("markdown", """\
+```{warning}
+**The measured column is a formation energy per formula unit**, not per atom.
+Getting that wrong rescales every correction by the formula size and fails
+silently — the fit still converges and still reports a small error bar. This
+convention was read out of pymatgen's source rather than guessed; two earlier
+attempts at inferring it from the outputs gave factors of 0.26 and 8 that
+nothing explained.
+
+The elements have to be rows of the dataset at the same level of theory,
+because that is what a formation energy is measured against. matverse refuses
+rather than assuming, since an elemental energy from a different functional
+would shift every correction by an unknown constant.
+
+And six compounds is six compounds. MP2020 used thousands; the error bar
+returned here is doing real work.
 ```"""),
 
     ("markdown", """\

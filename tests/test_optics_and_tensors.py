@@ -394,3 +394,181 @@ class TestEnergyCorrections:
         mv.pp.describe(md)
         with pytest.raises(ValueError, match="nothing to correct"):
             mv.thermo.corrections(md, level="pbe")
+
+
+class TestPolarization:
+    """The test is branch reconstruction, because that is the whole job.
+
+    A Berry-phase calculation returns polarization modulo a quantum, so the
+    values along a switching path come back scattered. Feeding in a known
+    smooth path with a random multiple of the quantum added to each point, and
+    requiring the smooth path back, checks the one thing that is easy to get
+    wrong and impossible to notice.
+    """
+
+    A = 4.0
+    QUANTUM = 100.136          # uC/cm^2 for this cell, from the lattice
+
+    @classmethod
+    def _path(cls, n=7):
+        from pymatgen.core import Lattice, Structure
+        cells = [Structure(Lattice.cubic(cls.A),
+                           ["Ba", "Ti", "O", "O", "O"],
+                           [[0, 0, 0], [.5, .5, .5 + x], [.5, .5, 0],
+                            [.5, 0, .5], [0, .5, .5]])
+                 for x in np.linspace(0.0, 0.04, n)]
+        return mv.data.from_structures(cells)
+
+    @classmethod
+    def _as_p_elec(cls, values):
+        """uC/cm^2 along c into the e*angstrom vectors Polarization wants."""
+        scale = cls.A ** 3 / 1602.1766208
+        out = np.zeros((len(values), 3))
+        out[:, 2] = np.asarray(values, dtype=float) * scale
+        return out
+
+    def test_the_branch_is_reconstructed_from_scattered_input(self):
+        n = 7
+        md = self._path(n)
+        smooth = np.linspace(0.0, 30.0, n)
+        rng = np.random.RandomState(0)
+        folded = smooth + self.QUANTUM * rng.randint(-2, 3, n)
+        assert np.abs(folded - smooth).max() > self.QUANTUM, \
+            "the input must actually be scattered or this tests nothing"
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            mv.prop.polarization(md, self._as_p_elec(folded), np.zeros((n, 3)))
+        recovered = md.obs["polarization_c"].to_numpy()
+        # pymatgen carries the electronic term with the opposite sign.
+        # atol=1e-3, because the conversion constant this test uses to turn
+        # uC/cm^2 into e*angstrom is a rounded one — the reconstruction itself
+        # is recovering values scattered over +/-200 to within a thousandth.
+        assert np.allclose(np.abs(recovered), smooth, atol=1e-3)
+
+    def test_the_spontaneous_polarization_is_the_end_to_end_change(self):
+        n = 7
+        md = self._path(n)
+        smooth = np.linspace(0.0, 30.0, n)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            mv.prop.polarization(md, self._as_p_elec(smooth), np.zeros((n, 3)))
+        record = md.uns["polarization"]["polarization"]
+        assert record["spontaneous_norm"] == pytest.approx(30.0, abs=1e-6)
+        assert record["unit"] == "uC/cm^2"
+
+    def test_a_path_that_does_not_move_is_not_polar(self):
+        n = 5
+        md = self._path(n)
+        mv.prop.polarization(md, np.zeros((n, 3)), np.zeros((n, 3)))
+        assert md.uns["polarization"]["polarization"]["spontaneous_norm"] == \
+            pytest.approx(0.0, abs=1e-9)
+
+    def test_a_coarse_path_is_warned_about(self):
+        """When the change is a sizeable fraction of the quantum, 'nearest
+        branch' is a guess. Saying so is the difference between a reading and
+        a number."""
+        n = 4
+        md = self._path(n)
+        big = np.linspace(0.0, 60.0, n)
+        with pytest.warns(UserWarning, match="quantum"):
+            mv.prop.polarization(md, self._as_p_elec(big), np.zeros((n, 3)))
+        assert md.uns["polarization"]["polarization"]["fraction_of_quantum"] \
+            > 0.25
+
+    def test_a_fine_path_passes_quietly(self):
+        n = 9
+        md = self._path(n)
+        small = np.linspace(0.0, 5.0, n)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", UserWarning)
+            mv.prop.polarization(md, self._as_p_elec(small),
+                                 np.zeros((n, 3)))
+
+    def test_one_structure_is_not_a_path(self):
+        md = self._path(1)
+        with pytest.raises(ValueError, match="at least two structures"):
+            mv.prop.polarization(md, np.zeros((1, 3)), np.zeros((1, 3)))
+
+    def test_the_shapes_must_match_the_rows(self):
+        md = self._path(5)
+        with pytest.raises(ValueError, match="one vector"):
+            mv.prop.polarization(md, np.zeros((3, 3)), np.zeros((5, 3)))
+
+    def test_the_quantum_is_recorded_beside_the_answer(self):
+        n = 7
+        md = self._path(n)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            mv.prop.polarization(md, self._as_p_elec(np.linspace(0, 30, n)),
+                                 np.zeros((n, 3)))
+        record = md.uns["polarization"]["polarization"]
+        assert record["quantum"][2] == pytest.approx(self.QUANTUM, rel=1e-3)
+        assert record["n_images"] == n
+
+
+class TestPiezoFromDFPT:
+    """e = Z* . pinv(-Phi) . Lambda is exactly linear in two of its three
+    inputs and exactly inverse in the third, so those scalings are the test —
+    they hold for any inputs and do not depend on a reference material."""
+
+    @staticmethod
+    def _system(n_rows=1):
+        from pymatgen.core import Lattice, Structure
+        st = Structure(Lattice.cubic(4.0), ["Ba", "Ti", "O", "O"],
+                       [[0, 0, 0], [.5, .5, .5], [.5, .5, 0], [.5, 0, .5]])
+        md = mv.data.from_structures([st] * n_rows)
+        rng = np.random.RandomState(0)
+        n = len(st)
+        force = rng.randn(n * 3, n * 3)
+        force = (force + force.T) / 2
+        return md, (rng.randn(n, 3, 3), rng.randn(n, 3, 3, 3),
+                    np.reshape(force, (n, 3, n, 3)).swapaxes(1, 2))
+
+    def test_it_is_linear_in_the_born_charges(self):
+        md, (bec, ist, fcm) = self._system(2)
+        mv.prop.piezo_from_dfpt(md, [bec, 2 * bec], ist, fcm)
+        r = md.obs["piezo_norm_dfpt"].to_numpy()
+        assert r[1] / r[0] == pytest.approx(2.0, rel=1e-9)
+
+    def test_it_is_linear_in_the_internal_strain(self):
+        md, (bec, ist, fcm) = self._system(2)
+        mv.prop.piezo_from_dfpt(md, bec, [ist, 2 * ist], fcm)
+        r = md.obs["piezo_norm_dfpt"].to_numpy()
+        assert r[1] / r[0] == pytest.approx(2.0, rel=1e-9)
+
+    def test_a_stiffer_lattice_responds_less(self):
+        """Inverse in the force constants — which is the trade-off that makes
+        a soft material with ordinary Born charges beat a stiff one with large
+        ones, and the reason to look at the parts rather than the total."""
+        md, (bec, ist, fcm) = self._system(2)
+        mv.prop.piezo_from_dfpt(md, bec, ist, [fcm, 2 * fcm])
+        r = md.obs["piezo_norm_dfpt"].to_numpy()
+        assert r[1] / r[0] == pytest.approx(0.5, rel=1e-9)
+
+    def test_no_born_charges_means_no_response(self):
+        md, (bec, ist, fcm) = self._system()
+        mv.prop.piezo_from_dfpt(md, np.zeros_like(bec), ist, fcm)
+        assert float(md.obs["piezo_norm_dfpt"].iloc[0]) == \
+            pytest.approx(0.0, abs=1e-12)
+
+    def test_the_full_tensor_is_kept(self):
+        md, (bec, ist, fcm) = self._system()
+        mv.prop.piezo_from_dfpt(md, bec, ist, fcm)
+        tensor = np.asarray(
+            md.uns["piezo_from_dfpt"]["dfpt"]["tensors"][0], dtype=float)
+        assert tensor.shape == (3, 3, 3)
+        assert float(np.abs(tensor).max()) == \
+            pytest.approx(float(md.obs["piezo_max_dfpt"].iloc[0]), rel=1e-12)
+
+    def test_a_wrong_shape_is_reported_not_crashed_on(self):
+        md, (bec, ist, fcm) = self._system()
+        mv.prop.piezo_from_dfpt(md, np.zeros((2, 3, 3)), ist, fcm)
+        assert np.isnan(float(md.obs["piezo_norm_dfpt"].iloc[0]))
+        assert any("born charges are" in e
+                   for e in md.uns["piezo_from_dfpt"]["dfpt"]["errors"])
+
+    def test_the_level_records_where_the_tensors_came_from(self):
+        md, (bec, ist, fcm) = self._system()
+        mv.prop.piezo_from_dfpt(md, bec, ist, fcm, level="mydfpt")
+        assert "mydfpt" in mv.levels_used(md)
+        assert "DFPT" in md.uns["levels"]["mydfpt"]["note"]

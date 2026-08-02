@@ -1001,3 +1001,103 @@ def symmetry(md: AnnData, source: str = "input", symprec: float = 0.01) -> None:
     md.uns["symmetry"] = {"source": source, "symprec": float(symprec),
                           "n_failed": len(failures), "failures": failures[:10]}
     record(md, "pp.symmetry", source=source, symprec=symprec)
+
+
+@register_function(
+    aliases=["locate defect", "find defect", "where is the defect",
+             "defect position", "defect site finder"],
+    category="pp",
+    description="Find where the defect is in a structure someone else made, "
+                "by comparing it against the pristine cell.",
+    requires={"structures": ["{source}"]},
+    produces={"obs": ["defect_a", "defect_b", "defect_c",
+                      "defect_nearest_site"]},
+    prerequisites=[],
+    examples=["mv.pp.locate_defect(defective, host=perfect)",
+              "mv.pp.locate_defect(md, host=md, source='relaxed_pbe')"],
+    related=["mv.pp.defects", "mv.thermo.defect_formation"],
+    notes="mv.pp.defects makes defects and knows where it put them. This is "
+          "for the other direction: a relaxed supercell from someone else's "
+          "calculation, where the defect is wherever it ended up and the "
+          "neighbours have moved in around it.\\n\\n"
+          "The position is found from the local environment rather than from "
+          "the site list, so it works when the defect has relaxed away from "
+          "the ideal site and when the two cells are ordered differently — "
+          "which is the case that makes subtracting site lists useless.\\n\\n"
+          "obs['defect_a'/'b'/'c'] are fractional coordinates in the "
+          "defective cell, and obs['defect_nearest_site'] the index of the "
+          "closest remaining atom, which is what you want for cutting a "
+          "cluster around it.\\n\\n"
+          "**Needs dscribe**, and dscribe imports sparse, which imports "
+          "numba, which requires numpy below 2.5. On a newer numpy the import "
+          "fails and this says so rather than returning nothing.",
+)
+def locate_defect(md: AnnData, host: AnnData, source: str = "input",
+                  host_source: str = "input",
+                  key_added: str | None = None) -> None:
+    """Locate the defect in each structure. Deposits; returns ``None``."""
+    try:
+        from dscribe.descriptors import SOAP  # noqa: F401
+        from pymatgen.analysis.defects.finder import DefectSiteFinder
+    except Exception as exc:                               # pragma: no cover
+        raise ImportError(
+            f"mv.pp.locate_defect needs pymatgen-analysis-defects and "
+            f"dscribe. dscribe imports sparse, which imports numba, which "
+            f"requires numpy < 2.5 — on a newer numpy the install resolves "
+            f"and the import does not. ({exc})") from exc
+
+    #: DefectSiteFinder hard-codes SOAP(r_cut=5). A cell shorter than twice
+    #: that lets every site see the defect through its own periodic images, so
+    #: none looks distinctly perturbed and the answer is confidently wrong.
+    #: 2x2x2 fcc copper - 7.22 A - misses by 3.5 A without complaint.
+    soap_cutoff = 5.0
+
+    hosts = list(structures(host, host_source))
+    if len(hosts) not in (1, md.n_obs):
+        raise ValueError(f"host has {len(hosts)} structures for {md.n_obs} "
+                         f"defective ones; give one host or one per row")
+
+    suffix = f"_{key_added}" if key_added else ""
+    position = np.full((md.n_obs, 3), np.nan)
+    nearest = np.full(md.n_obs, -1, dtype=int)
+    failed: list[str] = []
+    cramped: list[str] = []
+    finder = DefectSiteFinder()
+
+    for row, structure in enumerate(structures(md, source)):
+        pristine = hosts[0] if len(hosts) == 1 else hosts[row]
+        try:
+            found = np.asarray(finder.get_defect_fpos(structure, pristine),
+                               dtype=float) % 1.0
+        except Exception as exc:
+            failed.append(f"row {row}: {type(exc).__name__}: {exc}")
+            continue
+        shortest = float(min(structure.lattice.abc))
+        if shortest < 2.0 * soap_cutoff:
+            cramped.append(f"{md.obs_names[row]} ({shortest:.2f} A)")
+        position[row] = found
+        delta = np.asarray(structure.frac_coords, dtype=float) - found
+        delta -= np.round(delta)
+        cartesian = delta @ np.asarray(structure.lattice.matrix, dtype=float)
+        nearest[row] = int(np.argmin(np.linalg.norm(cartesian, axis=1)))
+
+    if cramped:
+        import warnings as _warnings
+        _warnings.warn(
+            f"{len(cramped)} cell(s) are shorter than {2 * soap_cutoff:.0f} A "
+            f"along some axis, and the descriptor this uses has a 5 A cutoff. "
+            f"Every site then sees the defect through the periodic images, no "
+            f"site looks distinctly perturbed, and the position returned is "
+            f"wrong without being flagged — 2x2x2 fcc copper misses by 3.5 A. "
+            f"Use a larger supercell. First: {cramped[0]}", stacklevel=2)
+
+    for index, axis in enumerate("abc"):
+        md.obs[f"defect_{axis}{suffix}"] = position[:, index]
+    md.obs[f"defect_nearest_site{suffix}"] = nearest
+    md.uns.setdefault("locate_defect", {})[key_added or "default"] = {
+        "source": source, "host_source": host_source,
+        "n_hosts": len(hosts), "errors": failed,
+        "note": "position found from the local environment, so it survives "
+                "relaxation and a different site ordering",
+    }
+    record(md, "pp.locate_defect", source=source, key_added=key_added)

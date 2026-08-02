@@ -51,6 +51,15 @@ UNPROBEABLE: dict[str, str] = {
     "mv.elec.cohp": "parses ICOHPLIST.lobster from a real LOBSTER run",
     "mv.feat.matminer": "matminer is not installed in this environment",
     "mv.feat.soap": "dscribe is not installed in this environment",
+    "mv.pp.locate_defect":
+        "needs dscribe, which imports sparse, which imports numba, "
+        "which requires numpy < 2.5; this environment has 2.5.1",
+    "mv.elec.transport":
+        "needs BoltzTraP2, which conda-forge carries only to a py310 build; "
+        "absent in this environment",
+    "mv.mol.functional_groups":
+        "needs openbabel's Python bindings, which additionally need "
+        "libXrender at runtime; neither is present in this environment",
     "mv.feat.embed": "needs a registered third-party embedding model",
     "mv.utils.submit": "would submit a real job to the scheduler",
     "mv.disorder.sqs": "needs ATAT's mcsqs on PATH, which is not installed",
@@ -467,6 +476,20 @@ def cases(tmp):
     # so it is what the probe has to use for that claim to be exercised at all.
     from pymatgen.core import Lattice, Structure
     _fcc = [[0, 0, 0], [0, .5, .5], [.5, 0, .5], [.5, .5, 0]]
+    def model_bands():
+        """A minimal bands object, for mv.pl.bands."""
+        import pandas as pd
+        from anndata import AnnData
+        n_points, n_bands = 20, 3
+        X = np.vstack([np.cos(np.linspace(0, 3, n_points)) * k
+                       for k in range(1, n_bands + 1)])
+        return AnnData(
+            X=X,
+            obs=pd.DataFrame({"material": pd.Categorical(["Cu"] * n_bands)},
+                             index=[f"b{i}" for i in range(n_bands)]),
+            var=pd.DataFrame({"path_fraction": np.linspace(0, 1, n_points)},
+                             index=[str(i) for i in range(n_points)]))
+
     def model_dos():
         """A projected DOS built in memory, for mv.elec.xps."""
         from pymatgen.electronic_structure.core import Orbital, Spin
@@ -477,6 +500,97 @@ def cases(tmp):
         return [CompleteDos(
             cell, Dos(0.0, energies, {Spin.up: peak}),
             {site: {Orbital.dxy: {Spin.up: peak}} for site in cell})]
+
+    def distortion_curve():
+        """A harmonic energy curve along a mass-weighted coordinate."""
+        cell = mv.structures(one_metal(), "input")[0]
+        Q = np.linspace(-2.0, 2.0, 9)
+        out = mv.data.from_structures([cell] * len(Q))
+        out.obs["Q"] = Q
+        out.obs["energy_pbe"] = 0.5 * 0.6 * Q ** 2
+        return out
+
+    def spin_orderings():
+        """Two bcc iron orderings with energies, for mv.mag.exchange."""
+        def cell(moments):
+            st = Structure(Lattice.cubic(2.87), ["Fe", "Fe"],
+                           [[0, 0, 0], [.5, .5, .5]])
+            st.add_site_property("magmom", list(moments))
+            return st
+        out = mv.data.from_structures([cell([1.0, 1.0]), cell([1.0, -1.0])])
+        out.obs["energy_pbe"] = [-0.08, 0.08]
+        return out
+
+    def rocksalt_icohp():
+        """An IcohpCollection over one_metal's own neighbours."""
+        from pymatgen.electronic_structure.cohp import IcohpCollection
+        from pymatgen.electronic_structure.core import Spin
+        cell = mv.structures(one_metal(), "input")[0]
+        L, A1, A2, LEN, TR, N, IC = [], [], [], [], [], [], []
+        k = 0
+        for i, site in enumerate(cell):
+            for nb in cell.get_neighbors(site, 3.0):
+                if nb.index <= i:
+                    continue
+                k += 1
+                L.append(str(k))
+                A1.append(f"{site.specie.symbol}{i + 1}")
+                A2.append(f"{nb.specie.symbol}{nb.index + 1}")
+                LEN.append(float(nb.nn_distance))
+                TR.append(tuple(int(v) for v in nb.image))
+                N.append(1)
+                IC.append({Spin.up: -2.5})
+        return IcohpCollection(L, A1, A2, LEN, TR, N, IC, False)
+
+    def dfpt_tensors():
+        """Born charges, internal strain and force constants for one_metal."""
+        n = len(mv.structures(one_metal(), "input")[0])
+        rng = np.random.RandomState(0)
+        force = rng.randn(n * 3, n * 3)
+        force = (force + force.T) / 2
+        return (rng.randn(n, 3, 3), rng.randn(n, 3, 3, 3),
+                np.reshape(force, (n, 3, n, 3)).swapaxes(1, 2))
+
+    def oxide_calibration():
+        """Oxides plus their elemental references, for fit_corrections."""
+        from pymatgen.core import Composition
+        rows = [("Fe2O3", 3, 2), ("TiO2", 2, 1), ("MgO", 1, 1),
+                ("Al2O3", 3, 2), ("ZnO", 1, 1), ("CaO", 1, 1)]
+        elements = ["Fe", "Ti", "Mg", "Al", "Zn", "Ca", "O2"]
+
+        def cell(formula):
+            comp = Composition(formula)
+            syms = [str(e) for e in comp.elements
+                    for _ in range(int(comp[e]))]
+            return Structure(Lattice.cubic(10.0), syms,
+                             [[i / len(syms), 0, 0] for i in range(len(syms))])
+
+        names = [f for f, _, _ in rows] + elements
+        out = mv.data.from_structures([cell(n) for n in names])
+        out.obs_names = names
+        out.obs["energy_pbe"] = ([-3.0 * o - 2.0 * m for _, o, m in rows]
+                                 + [0.0] * len(elements))
+        out.obs["e_above_hull_pbe"] = [0.0] * len(names)
+        out.obs["dHf"] = ([-3.0 * o - 2.0 * m - 0.45 * o for _, o, m in rows]
+                          + [float("nan")] * len(elements))
+        return out
+
+    def ethanol_whole():
+        from pymatgen.core import Molecule
+        out = mv.mol.from_molecules([Molecule(
+            ["C", "C", "O", "H", "H", "H", "H", "H", "H"],
+            [[-1.1, 0.2, 0.0], [0.2, -0.5, 0.0], [1.3, 0.4, 0.0],
+             [-1.0, 1.3, 0.0], [-1.7, -0.1, 0.9], [-1.7, -0.1, -0.9],
+             [0.3, -1.2, 0.9], [0.3, -1.2, -0.9], [2.1, -0.1, 0.0]])])
+        out.obs_names = ["ethanol"]
+        out.obs["energy_x"] = [-100.0]
+        return out
+
+    def ethanol_fragments():
+        whole = ethanol_whole()
+        frags = mv.mol.fragments(whole, depth=1)
+        frags.obs["energy_x"] = [-10.0 * n for n in frags.obs["fragment_size"]]
+        return frags
 
     def water_with_energy():
         """One molecule with a total energy, for mv.mol.quasirrho."""
@@ -674,6 +788,22 @@ def cases(tmp):
         (mv.neb.hops, one_metal, ("Cu",), {"returns": "new"}),
 
         (mv.disorder.sro, one_metal, (), {}),
+        (mv.mag.symmetry, spin_orderings, (), {}),
+        (mv.env.voronoi, one_metal,
+         (mv.multi.sites(one_metal()),), {}),
+        (mv.thermo.fit_corrections, oxide_calibration, ("dHf",),
+         {"level": "pbe", "max_error": 5.0, "allow_unstable": True}),
+        (mv.mol.dissociation, ethanol_fragments,
+         (ethanol_whole(),), {"level": "x", "returns": "new"}),
+        (mv.prop.configuration_coordinate, distortion_curve,
+         (), {"coordinate": "Q", "level": "pbe"}),
+        (mv.mag.exchange, spin_orderings, (), {"level": "pbe",
+                                             "cutoff": 3.0}),
+        (mv.env.lobster, one_metal, (mv.multi.sites(one_metal()),
+                                     [rocksalt_icohp()]), {}),
+        (mv.prop.piezo_from_dfpt, one_metal, dfpt_tensors(), {}),
+        (mv.prop.polarization, two_metals,
+         (np.zeros((2, 3)), np.zeros((2, 3))), {}),
         (mv.prop.capture, one_metal, (), 
          {"dQ": 1.0, "dE": 1.0, "omega_i": 0.02, "omega_f": 0.02,
           "coupling": 1e-3}),
@@ -705,8 +835,7 @@ def cases(tmp):
         (mv.elec.bands, two_metals, (band_structures(metals),),
          {"level": "tb", "n_points": 60, "returns": "new"}),
         (mv.elec.band_features, bands.copy, (metals,), {"level": "tb"}),
-        (mv.elec.transport, metals.copy, (bands,), {"level": "tb"}),
-        (mv.elec.dos_fingerprint, with_dos, (), {"level": "tb"}),
+                (mv.elec.dos_fingerprint, with_dos, (), {"level": "tb"}),
 
         # mv.mag
         (mv.mag.jahn_teller, perovskites, (), {}),
@@ -770,6 +899,9 @@ def cases(tmp):
         (mv.pl.hull, hulled, (), {"level": "emt"}),
         (mv.pl.parity, two_levels, ("energy_per_atom", "emt", "emt2"), {}),
         (mv.pl.pareto, pareto_ready, ("volume", "density"), {}),
+        (mv.pl.scatter, described, ("volume", "nsites"), {}),
+        (mv.pl.distribution, described, ("volume",), {}),
+        (mv.pl.bands, model_bands, (), {}),
         (mv.pl.embedding, embedded, (), {"use_rep": "X_pca"}),
         (mv.pl.spectra, patterned, ("xrd",), {}),
         (mv.pl.provenance, described, (), {}),

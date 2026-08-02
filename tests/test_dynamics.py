@@ -170,6 +170,60 @@ class TestBatchedEngine:
         if not report["torch_sim"]:
             assert "3.11" in report["install"]
 
+    def test_the_report_has_the_same_keys_either_way(self):
+        """It used to drop 'models' when the engine was absent, so code that
+        read it worked on a machine with TorchSim and raised KeyError on one
+        without. CI found that; no local environment could have, because both
+        of ours have TorchSim installed."""
+        import sys
+
+        class Block:
+            def find_spec(self, name, path=None, target=None):
+                if name == "torch_sim" or name.startswith("torch_sim."):
+                    raise ModuleNotFoundError(f"No module named {name!r}",
+                                              name=name)
+                return None
+
+        blocker = Block()
+        sys.meta_path.insert(0, blocker)
+        try:
+            for module in [m for m in sys.modules if m.startswith("torch_sim")]:
+                del sys.modules[module]
+            without = mv.md.batched_available()
+        finally:
+            sys.meta_path.remove(blocker)
+        assert "models" in without, "the registrations vanished with the engine"
+        assert without["torch_sim"] is False
+
+    def test_a_registration_survives_a_missing_engine(self):
+        """Registering is a promise about a name; the factory is not called
+        until something runs at that level, so the registration is real even
+        where the engine is not."""
+        import sys
+
+        def factory():
+            import torch_sim as ts
+            return ts.integrate
+
+        mv.md.register_batched("promised", factory, method="demo",
+                               license="none")
+
+        class Block:
+            def find_spec(self, name, path=None, target=None):
+                if name == "torch_sim" or name.startswith("torch_sim."):
+                    raise ModuleNotFoundError(name, name=name)
+                return None
+
+        blocker = Block()
+        sys.meta_path.insert(0, blocker)
+        try:
+            for module in [m for m in sys.modules if m.startswith("torch_sim")]:
+                del sys.modules[module]
+            report = mv.md.batched_available()
+        finally:
+            sys.meta_path.remove(blocker)
+        assert "promised" in report["models"]
+
     def test_a_batch_integrates_in_one_call(self, model, batch):
         import warnings
         with warnings.catch_warnings():

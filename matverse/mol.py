@@ -567,7 +567,7 @@ def match(md: AnnData, source: str = "input", tolerance: float = 0.1,
 
 
 __all__ = ["BOND_STRATEGIES", "from_molecules", "point_group", "bonds",
-           "quasirrho",
+           "quasirrho", "functional_groups", "dissociation",
            "bond_lengths",
            "descriptors", "fragments", "match"]
 
@@ -773,3 +773,206 @@ def quasirrho(md: AnnData, frequencies, energy: str, source: str = "input",
     }
     record(md, "mol.quasirrho", energy=energy, temperature=float(temperature),
            cutoff=float(cutoff), key_added=name or None)
+
+
+@register_function(
+    aliases=["functional groups", "moieties", "substituents", "what groups",
+             "hydroxyl", "carbonyl", "chemical groups"],
+    category="mol",
+    description="Identify the functional groups in each molecule and count "
+                "them, so a set of candidates can be filtered on chemistry "
+                "rather than on formula.",
+    requires={"structures": ["{source}"]},
+    produces={"obs": ["functional_groups", "n_functional_groups"],
+              "uns": ["functional_groups"]},
+    prerequisites=["mv.mol.from_molecules"],
+    examples=["mv.mol.functional_groups(md)",
+              "mv.mol.functional_groups(md, heteroatoms_only=False)"],
+    related=["mv.mol.bonds", "mv.mol.descriptors", "mv.mol.fragments"],
+    notes="A formula does not say what a molecule does. C2H6O is ethanol or "
+          "dimethyl ether depending on where the oxygen sits, and a screen "
+          "over candidate molecules usually wants 'the ones with a carboxylic "
+          "acid' rather than 'the ones with two carbons'.\\n\\n"
+          "obs['functional_groups'] is a sorted, semicolon-separated list of "
+          "the groups found, which is a string so it can be filtered on with "
+          "mv.screen.filter and read without unpacking anything. The counts "
+          "per group go to uns, one entry per row, where a dict belongs.\\n\\n"
+          "Groups are found by walking out from heteroatoms and from carbons "
+          "in unusual bonding, which is what pymatgen's "
+          "FunctionalGroupExtractor does; heteroatoms_only=False also returns "
+          "plain alkyl fragments, which is noisier and occasionally what you "
+          "want.\\n\\n"
+          "**Needs openbabel**, and openbabel needs libXrender at runtime — "
+          "every one of its format plugins links against it through cairo, "
+          "and without it the Python bindings fail to import with a "
+          "ValueError from the format table rather than anything that names "
+          "the missing library. `conda install -c conda-forge xorg-libxrender` "
+          "or your distribution's libXrender package fixes it; the error "
+          "raised here says so, because the failure otherwise costs an "
+          "afternoon.",
+)
+def functional_groups(md: AnnData, source: str = "input",
+                      heteroatoms_only: bool = True,
+                      key_added: str | None = None) -> None:
+    """Functional groups per molecule. Deposits; returns ``None``."""
+    try:
+        from pymatgen.analysis.functional_groups import (
+            FunctionalGroupExtractor)
+        from pymatgen.analysis.graphs import MoleculeGraph
+        from pymatgen.analysis.local_env import OpenBabelNN
+    except ImportError as exc:                             # pragma: no cover
+        raise ImportError(
+            f"mv.mol.functional_groups needs openbabel with its Python "
+            f"bindings. `pip install openbabel-wheel` provides them, and they "
+            f"additionally need libXrender at runtime - without it the import "
+            f"fails with an unrelated-looking ValueError. Get it with `conda "
+            f"install -c conda-forge xorg-libxrender` or your distribution's "
+            f"libXrender package. ({exc})") from exc
+
+    suffix = f"_{key_added}" if key_added else ""
+    listed, totals, failed = [], [], []
+    per_row: list = []
+
+    for row, molecule in enumerate(structures(md, source)):
+        try:
+            graph = MoleculeGraph.from_local_env_strategy(molecule,
+                                                          OpenBabelNN())
+            extractor = FunctionalGroupExtractor(graph)
+            found = extractor.get_all_functional_groups(
+                catch_basic=heteroatoms_only)
+            summary = extractor.categorize_functional_groups(found)
+        except Exception as exc:
+            failed.append(f"row {row}: {type(exc).__name__}: {exc}")
+            listed.append("")
+            totals.append(0)
+            per_row.append({})
+            continue
+
+        counts = {str(name): int(block.get("count", 0))
+                  for name, block in summary.items()}
+        listed.append(";".join(sorted(counts)))
+        totals.append(int(sum(counts.values())))
+        per_row.append(counts)
+
+    # openbabel does not fail at import - pymatgen's local_env imports
+    # OpenBabelNN whether or not the bindings work, and the failure surfaces
+    # per molecule inside BabelMolAdaptor. Without this, a missing libXrender
+    # produces a column of empty strings and no complaint, which is the worst
+    # of the three possible outcomes.
+    if failed and len(failed) == md.n_obs and any(
+            word in " ".join(failed).lower()
+            for word in ("babel", "openbabel")):
+        raise ImportError(
+            f"every molecule failed in openbabel. Its Python bindings need "
+            f"libXrender at runtime and fail without it — `conda install -c "
+            f"conda-forge xorg-libxrender`, or your distribution's "
+            f"libxrender1. First error: {failed[0]}")
+
+    md.obs[f"functional_groups{suffix}"] = listed
+    md.obs[f"n_functional_groups{suffix}"] = np.array(totals, dtype=int)
+    md.uns.setdefault("functional_groups", {})[key_added or "default"] = {
+        "counts": per_row,
+        "heteroatoms_only": bool(heteroatoms_only),
+        "errors": failed,
+    }
+    record(md, "mol.functional_groups", source=source,
+           heteroatoms_only=bool(heteroatoms_only), key_added=key_added)
+
+
+@register_function(
+    aliases=["dissociation", "bond dissociation energy", "bde",
+             "how strong is the bond", "breaking energy", "weakest bond"],
+    category="mol",
+    description="Bond dissociation energy for every bond that was cut, from "
+                "the energies of the fragments and of the molecule they came "
+                "from.",
+    requires={"fragments.obs": ["energy_{level}", "parent", "broken_bond"],
+              "molecules.obs": ["energy_{level}"]},
+    prerequisites=["mv.mol.fragments", "mv.calc.energy"],
+    examples=["bde = mv.mol.dissociation(frags, molecules, level='mace-mpa')"],
+    related=["mv.mol.fragments", "mv.mol.functional_groups",
+             "mv.calc.energy"],
+    notes="The bond dissociation energy is the energy of the pieces minus the "
+          "energy of the whole: how much it costs to pull a bond apart. It is "
+          "the quantity that decides which bond in a battery electrolyte "
+          "oxidises first, and which C-H a combustion mechanism abstracts.\\n\\n"
+          "Returns rather than deposits, because one molecule gives one row "
+          "per bond — the same reason mv.mol.fragments does. "
+          "obs['broken_bond'] names the bond and obs['parent'] the molecule, "
+          "so the weakest bond in a molecule is a groupby away.\\n\\n"
+          "**The fragments are radicals**, and that is where the accuracy "
+          "goes. A radical has an unpaired electron, and a method that is "
+          "fine for closed-shell molecules can be badly wrong for one — "
+          "universal potentials in particular are trained mostly on "
+          "closed-shell equilibrium structures and have no reason to place a "
+          "radical correctly. Treat the *ordering* of bonds within a molecule "
+          "as the useful output and the absolute numbers as indicative unless "
+          "the level of theory was chosen for open shells.\\n\\n"
+          "Geometries are taken as they are. A fragment relaxes after the "
+          "bond breaks, and a dissociation energy from unrelaxed fragments is "
+          "the vertical one, higher than the adiabatic value by the "
+          "relaxation energy. Relax the fragments first with mv.calc.relax if "
+          "you want the adiabatic number, and the two differing is "
+          "information rather than a problem.",
+)
+def dissociation(fragments: AnnData, molecules: AnnData, level: str = "emt",
+                 key_added: str | None = None) -> AnnData:
+    """Bond dissociation energies. Returns a new object, one row per bond."""
+    import pandas as pd
+
+    from .data import from_structures
+
+    energy_key = f"energy_{level}"
+    if energy_key not in fragments.obs:
+        raise ValueError(f"obs[{energy_key!r}] absent on the fragments; run "
+                         f"mv.calc.energy(fragments, level={level!r}) first")
+    if energy_key not in molecules.obs:
+        raise ValueError(f"obs[{energy_key!r}] absent on the molecules; the "
+                         f"whole is what the pieces are measured against")
+    for column in ("parent", "broken_bond"):
+        if column not in fragments.obs:
+            raise ValueError(f"obs[{column!r}] absent; these did not come "
+                             f"from mv.mol.fragments")
+
+    whole = dict(zip(map(str, molecules.obs_names),
+                     molecules.obs[energy_key].to_numpy(dtype=float)))
+    frame = fragments.obs
+    pieces = frame[energy_key].to_numpy(dtype=float)
+    parents = frame["parent"].astype(str).to_numpy()
+    bonds = frame["broken_bond"].astype(str).to_numpy()
+    cells = structures(fragments, "input")
+
+    grouped: dict = {}
+    for row in range(fragments.n_obs):
+        grouped.setdefault((parents[row], bonds[row]),
+                           []).append((pieces[row], cells[row]))
+
+    built, rows, unmatched = [], [], []
+    for (parent, bond), members in grouped.items():
+        reference = whole.get(parent, np.nan)
+        energies = np.array([e for e, _ in members], dtype=float)
+        if not np.isfinite(reference) or not np.isfinite(energies).all():
+            unmatched.append(f"{parent} {bond}: missing an energy")
+            bde = np.nan
+        else:
+            bde = float(energies.sum() - reference)
+        # One row per bond, carrying the larger fragment so the row has a
+        # structure at all; the pieces themselves stay on the fragments axis.
+        built.append(max(members, key=lambda pair: len(pair[1]))[1])
+        rows.append({"parent": parent, "broken_bond": bond,
+                     f"bond_dissociation_energy_{level}": bde,
+                     "n_fragments": len(members)})
+
+    if not built:
+        raise ValueError("no bond had a complete set of fragment energies")
+
+    out = from_structures(built, pd.DataFrame(rows))
+    out.uns["dissociation"] = {
+        "level": level, "unit": "eV",
+        "n_parents": int(molecules.n_obs), "errors": unmatched,
+        "definition": "sum(E of fragments) - E(molecule)",
+        "caveat": "fragments are radicals and are taken as-is; relax them "
+                  "for the adiabatic energy rather than the vertical one",
+    }
+    record(out, "mol.dissociation", level=level, key_added=key_added)
+    return out

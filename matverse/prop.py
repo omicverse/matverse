@@ -1987,3 +1987,298 @@ def capture(md: AnnData, dQ, dE, omega_i, omega_f, coupling,
     }
     record(md, "prop.capture", kind=kind, temperature=float(temperature),
            key_added=name)
+
+
+@register_function(
+    aliases=["polarization", "ferroelectric", "spontaneous polarization",
+             "berry phase", "polarization quantum", "switching",
+             "same branch", "pyroelectric"],
+    category="prop",
+    description="Reconstruct the continuous polarization branch along a "
+                "distortion path and read off the spontaneous polarization.",
+    requires={"structures": ["{source}"]},
+    produces={"obs": ["polarization_a", "polarization_b", "polarization_c"],
+              "uns": ["polarization"]},
+    prerequisites=["mv.dft.read_outputs"],
+    examples=["mv.prop.polarization(md, p_elec, p_ion)",
+              "mv.prop.polarization(md, p_elec, p_ion, key_added='batio3')"],
+    related=["mv.prop.piezoelectric", "mv.prop.dielectric",
+             "mv.dft.read_outputs"],
+    notes="Polarization is only defined modulo a quantum — one lattice vector "
+          "of charge per cell — so a Berry-phase calculation does not return a "
+          "polarization, it returns one representative of an infinite set. "
+          "The numbers along a switching path come back scattered across "
+          "branches, and subtracting the first from the last gives an answer "
+          "that is wrong by an arbitrary multiple of the quantum. That is the "
+          "single most common way a computed ferroelectric polarization is "
+          "reported wrongly.\\n\\n"
+          "This puts every point back on one branch by following the smallest "
+          "step from its predecessor, and the spontaneous polarization is then "
+          "the honest difference between the ends. **The rows are a path, in "
+          "order**, from the centrosymmetric reference to the polar structure "
+          "— this is the one function here that reads the dataset as a "
+          "sequence rather than as a set, so the row order is part of the "
+          "input.\\n\\n"
+          "obs['polarization_a'/'b'/'c'] are the same-branch values in "
+          "uC/cm^2 along each lattice vector, and "
+          "uns['polarization'][...]['spontaneous'] the change from end to "
+          "end. uns also carries the quantum, which is worth reading: if the "
+          "spontaneous polarization is a sizeable fraction of it, the path was "
+          "too coarsely sampled to know which branch is right, and adding "
+          "images is the fix.\\n\\n"
+          "**The Berry-phase terms are arguments**, in e*angstrom per cell, as "
+          "VASP reports them — the electronic term from the dipole moment of "
+          "the wavefunctions and the ionic term from the point charges. "
+          "matverse does not compute them.",
+)
+def polarization(md: AnnData, p_elec, p_ion, source: str = "input",
+                 key_added: str | None = None) -> None:
+    """Same-branch polarization along a path. Deposits; returns ``None``."""
+    from pymatgen.analysis.ferroelectricity.polarization import Polarization
+
+    if md.n_obs < 2:
+        raise ValueError(f"a polarization path needs at least two structures, "
+                         f"got {md.n_obs}; the quantity is a change along a "
+                         f"path, not a property of one cell")
+    electronic = np.atleast_2d(np.asarray(p_elec, dtype=float))
+    ionic = np.atleast_2d(np.asarray(p_ion, dtype=float))
+    for array, label in ((electronic, "p_elec"), (ionic, "p_ion")):
+        if array.shape != (md.n_obs, 3):
+            raise ValueError(f"{label} must be ({md.n_obs}, 3) — one vector "
+                             f"per row — got {array.shape}")
+
+    cells = structures(md, source)
+    engine = Polarization(electronic.tolist(), ionic.tolist(), cells)
+    branch = np.asarray(
+        engine.get_same_branch_polarization_data(convert_to_muC_per_cm2=True),
+        dtype=float)
+    quanta = np.asarray(engine.get_lattice_quanta(), dtype=float)
+    change = np.asarray(engine.get_polarization_change(),
+                        dtype=float).ravel()
+
+    name = key_added or "polarization"
+    suffix = "" if key_added is None else f"_{key_added}"
+    for index, axis in enumerate("abc"):
+        md.obs[f"polarization_{axis}{suffix}"] = branch[:, index]
+
+    magnitude = float(np.linalg.norm(change))
+    # A spontaneous polarization that is a large fraction of the quantum means
+    # consecutive points moved far enough that "nearest branch" is a guess.
+    typical = float(np.median(quanta))
+    md.uns.setdefault("polarization", {})[name] = {
+        "spontaneous": change.tolist(),
+        "spontaneous_norm": magnitude,
+        "unit": "uC/cm^2",
+        "quantum": quanta[0].tolist(),
+        "fraction_of_quantum": magnitude / typical if typical else float("nan"),
+        "n_images": int(md.n_obs),
+        "note": "rows were read as an ordered path from the first to the last",
+    }
+    if typical and magnitude > 0.25 * typical:
+        import warnings as _warnings
+        _warnings.warn(
+            f"the spontaneous polarization is {magnitude:.1f} uC/cm^2 against "
+            f"a quantum of {typical:.1f}, so consecutive images are far apart "
+            f"on the branch and the reconstruction is a guess rather than a "
+            f"reading. Add images along the path.", stacklevel=2)
+    record(md, "prop.polarization", source=source, n_images=int(md.n_obs),
+           key_added=key_added)
+
+
+@register_function(
+    aliases=["piezo from dfpt", "piezoelectric from born charges",
+             "compute piezoelectric", "born charges", "internal strain",
+             "force constants", "piezo tensor"],
+    category="prop",
+    description="Build the piezoelectric tensor from its parts — Born "
+                "effective charges, internal strain and force constants — "
+                "rather than taking a finished tensor.",
+    requires={"structures": ["{source}"]},
+    produces={"obs": ["piezo_max_{level}", "piezo_norm_{level}"],
+              "uns": ["piezo_from_dfpt"], "levels": ["{level}"]},
+    prerequisites=["mv.dft.read_outputs"],
+    examples=["mv.prop.piezo_from_dfpt(md, born, internal_strain, "
+              "force_constants, level='dfpt')"],
+    related=["mv.prop.piezoelectric", "mv.prop.dielectric",
+             "mv.prop.polarization", "mv.prop.elastic"],
+    notes="mv.prop.piezoelectric takes a piezoelectric tensor someone else "
+          "computed. This one computes it, from the three things a DFPT run "
+          "produces: e = Z* . K . L, where Z* are the Born effective charges, "
+          "L the internal strain tensor and K the pseudo-inverse of the force "
+          "constant matrix.\\n\\n"
+          "Reading the parts separately is what tells you *why* a material is "
+          "or is not piezoelectric, which the finished tensor cannot. The "
+          "response is exactly linear in the Born charges and in the internal "
+          "strain, and exactly inverse in the force constants — so a soft "
+          "material with ordinary Born charges out-performs a stiff one with "
+          "large charges, and that trade-off is visible here and invisible in "
+          "a single number.\\n\\n"
+          "obs['piezo_max'] is the largest single component in C/m^2, which "
+          "is the number a screen sorts on, and the full 3x3x3 tensor per row "
+          "goes to uns because it does not fit the obs axis.\\n\\n"
+          "**All three are arguments**, one set per row: Born charges shaped "
+          "(n_sites, 3, 3), internal strain (n_sites, 3, 3, 3) and force "
+          "constants (n_sites, n_sites, 3, 3). They come from density "
+          "functional perturbation theory, which matverse does not run.\\n\\n"
+          "The pseudo-inverse drops the three translational modes, whose "
+          "eigenvalues are zero and whose inverse is not. rcond sets where "
+          "that cut falls; the default follows pymatgen's.",
+)
+def piezo_from_dfpt(md: AnnData, born, internal_strain, force_constants,
+                    level: str = "dfpt", source: str = "input",
+                    rcond: float = 1e-4) -> None:
+    """Piezoelectric tensor from Born charges and force constants."""
+    try:
+        from pymatgen.analysis.piezo_sensitivity import get_piezo
+    except ImportError as exc:                             # pragma: no cover
+        raise ImportError(
+            f"mv.prop.piezo_from_dfpt needs pymatgen's piezo_sensitivity "
+            f"module. ({exc})") from exc
+
+    def per_row(value, label):
+        """One set for everyone, or one each."""
+        if isinstance(value, (list, tuple)) and len(value) == md.n_obs \
+                and not isinstance(value[0], (int, float)):
+            return [np.asarray(v, dtype=float) for v in value]
+        array = np.asarray(value, dtype=float)
+        return [array] * md.n_obs
+
+    becs = per_row(born, "born")
+    ists = per_row(internal_strain, "internal_strain")
+    fcms = per_row(force_constants, "force_constants")
+
+    tensors, largest, norms, failed = [], [], [], []
+    for row, structure in enumerate(structures(md, source)):
+        n_sites = len(structure)
+        try:
+            if becs[row].shape != (n_sites, 3, 3):
+                raise ValueError(
+                    f"born charges are {becs[row].shape}, expected "
+                    f"({n_sites}, 3, 3) for a cell with {n_sites} sites")
+            tensor = np.asarray(get_piezo(becs[row], ists[row], fcms[row],
+                                          rcond=float(rcond)), dtype=float)
+        except Exception as exc:
+            failed.append(f"row {row}: {type(exc).__name__}: {exc}")
+            tensors.append(None)
+            largest.append(np.nan)
+            norms.append(np.nan)
+            continue
+        tensors.append(tensor.tolist())
+        largest.append(float(np.abs(tensor).max()))
+        norms.append(float(np.linalg.norm(tensor)))
+
+    md.obs[f"piezo_max_{level}"] = np.array(largest, dtype=float)
+    md.obs[f"piezo_norm_{level}"] = np.array(norms, dtype=float)
+    set_level(md, level, kind="derived",
+              method="piezoelectric tensor from Born charges, internal strain "
+                     "and force constants",
+              note="the level of theory is whatever produced the DFPT tensors")
+    md.uns.setdefault("piezo_from_dfpt", {})[level] = {
+        "unit": "C/m^2", "rcond": float(rcond),
+        "tensors": tensors, "errors": failed,
+        "definition": "e = Z* . pinv(-Phi) . Lambda",
+    }
+    record(md, "prop.piezo_from_dfpt", level=level, source=source,
+           rcond=float(rcond))
+
+
+#: hbar * sqrt(1 eV / (amu angstrom^2)), in eV — the constant that turns the
+#: curvature of a mass-weighted energy surface into a phonon energy.
+_CURVATURE_TO_EV = 0.0646541380
+
+
+@register_function(
+    aliases=["configuration coordinate", "ccd", "franck-condon",
+             "relaxation energy", "huang-rhys", "harmonic frequency",
+             "distortion curve"],
+    category="prop",
+    description="Fit a harmonic frequency and a relaxation energy to the "
+                "energy of a structure along a distortion.",
+    requires={"obs": ["energy_{level}", "{coordinate}"]},
+    produces={"obs": ["cc_frequency_{level}", "cc_relaxation_{level}",
+                      "cc_huang_rhys_{level}"]},
+    prerequisites=["mv.calc.energy"],
+    examples=["mv.prop.configuration_coordinate(md, coordinate='Q', "
+              "level='pbe')"],
+    related=["mv.prop.capture", "mv.thermo.defect_formation",
+             "mv.prop.phonon"],
+    notes="A defect that changes charge state pulls its neighbours to a new "
+          "equilibrium, and the energy along that distortion is the "
+          "configuration-coordinate curve. Two numbers come off it and both "
+          "matter: the curvature gives the effective phonon frequency, and "
+          "the height of the curve at the *other* state's geometry gives the "
+          "relaxation energy — how much is dissipated into the lattice when "
+          "the charge changes.\\n\\n"
+          "Those two are what mv.prop.capture needs and nothing in matverse "
+          "produced before, so this closes that loop: relax two charge "
+          "states, interpolate between them, compute the energies, fit here, "
+          "and hand the frequency to a capture coefficient.\\n\\n"
+          "obs['cc_huang_rhys'] is the relaxation energy divided by the "
+          "phonon energy, the number of phonons emitted. Above about five the "
+          "one-dimensional harmonic picture is being asked to carry more than "
+          "it can, and the capture rates that follow should be read as "
+          "order-of-magnitude.\\n\\n"
+          "**The coordinate is a column**, in amu^(1/2) angstrom, so the "
+          "frequency comes out in eV. Mass-weighting matters: the same "
+          "displacement of a hydrogen and of a bismuth are not the same "
+          "coordinate, and an unweighted fit gives a frequency that is not "
+          "one.\\n\\n"
+          "Fitted here rather than through "
+          "pymatgen.analysis.defects.ccd, whose HarmonicDefect takes the "
+          "frequency as an input rather than fitting it — the fit lives in a "
+          "private helper reachable only through from_vaspruns. The result is "
+          "checked against HarmonicDefect.omega_eV in the tests.",
+)
+def configuration_coordinate(md: AnnData, coordinate: str = "Q",
+                             level: str = "emt",
+                             key_added: str | None = None) -> None:
+    """Harmonic frequency and relaxation energy along a distortion."""
+    energy_key = f"energy_{level}"
+    for column, what in ((energy_key, f"run mv.calc.energy(md, level="
+                                      f"{level!r})"),
+                         (coordinate, "the mass-weighted distortion "
+                                      "coordinate, in amu^(1/2) angstrom")):
+        if column not in md.obs:
+            raise ValueError(f"obs[{column!r}] absent; {what}")
+
+    Q = md.obs[coordinate].to_numpy(dtype=float)
+    E = md.obs[energy_key].to_numpy(dtype=float)
+    good = np.isfinite(Q) & np.isfinite(E)
+    if good.sum() < 3:
+        raise ValueError(f"a parabola needs three points; {int(good.sum())} "
+                         f"of {md.n_obs} rows have both a coordinate and an "
+                         f"energy")
+
+    # A plain quadratic least squares. The curve is harmonic by assumption -
+    # that is what makes the frequency meaningful - so anything fancier would
+    # be fitting the deviation from the model rather than the model.
+    a, b, c = np.polyfit(Q[good], E[good], 2)
+    if a <= 0:
+        raise ValueError(f"the fitted curvature is {a:.3e}, not positive, so "
+                         f"this distortion is not a minimum and has no "
+                         f"harmonic frequency")
+
+    curvature = 2.0 * a                      # d^2E/dQ^2
+    frequency = _CURVATURE_TO_EV * np.sqrt(curvature)
+    q_min = -b / (2.0 * a)
+    relaxation = float(np.polyval([a, b, c], 0.0)
+                       - np.polyval([a, b, c], q_min))
+    huang_rhys = relaxation / frequency if frequency > 0 else np.nan
+
+    name = key_added or level
+    md.obs[f"cc_frequency_{name}"] = np.full(md.n_obs, float(frequency))
+    md.obs[f"cc_relaxation_{name}"] = np.full(md.n_obs, relaxation)
+    md.obs[f"cc_huang_rhys_{name}"] = np.full(md.n_obs, float(huang_rhys))
+    md.uns.setdefault("configuration_coordinate", {})[name] = {
+        "frequency_eV": float(frequency),
+        "relaxation_energy_eV": relaxation,
+        "huang_rhys": float(huang_rhys),
+        "curvature": float(curvature),
+        "minimum_at": float(q_min),
+        "n_points": int(good.sum()),
+        "coordinate_unit": "amu^(1/2) angstrom",
+        "note": ("Huang-Rhys above about five strains the one-dimensional "
+                 "harmonic picture; read what follows as order-of-magnitude"),
+    }
+    record(md, "prop.configuration_coordinate", coordinate=coordinate,
+           level=level, key_added=name)

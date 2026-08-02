@@ -729,3 +729,122 @@ class TestAlloyPairs:
                       [[0, 0, 0], [0, .5, .5], [.5, 0, .5], [.5, .5, 0]])])
         with pytest.raises(ValueError, match="forms an alloy system"):
             mv.gen.alloy_pairs(md)
+
+
+def _has_dscribe() -> bool:
+    """dscribe, which imports sparse, which imports numba, which needs
+    numpy < 2.5.
+
+    Importing DefectSiteFinder is not the test: the class imports fine and
+    raises from its constructor, the same trap openbabel sets. Import dscribe
+    itself.
+    """
+    try:
+        from dscribe.descriptors import SOAP  # noqa: F401
+    except Exception:
+        return False
+    return True
+
+
+@pytest.mark.skipif(not _has_dscribe(),
+                    reason="dscribe is unavailable (numba needs numpy < 2.5)")
+class TestLocateDefect:
+    """Put a vacancy somewhere known and require it back. The point of the
+    function is the case where subtracting site lists does not work — a
+    relaxed cell, or one ordered differently — so the tests cover those too."""
+
+    @staticmethod
+    def _perfect():
+        from pymatgen.core import Lattice, Structure
+        cell = Structure(Lattice.cubic(4.05), ["Al"] * 4,
+                         [[0, 0, 0], [0, .5, .5], [.5, 0, .5], [.5, .5, 0]])
+        cell.make_supercell([3, 3, 3])
+        return cell
+
+    @classmethod
+    def _with_vacancy(cls, indices):
+        perfect = cls._perfect()
+        cells, truth = [], []
+        for index in indices:
+            truth.append(np.array(perfect[index].frac_coords))
+            damaged = perfect.copy()
+            damaged.remove_sites([index])
+            cells.append(damaged)
+        return perfect, cells, truth
+
+    @staticmethod
+    def _error(found, truth, lattice):
+        delta = np.asarray(found) - np.asarray(truth)
+        delta -= np.round(delta)
+        return float(np.linalg.norm(delta @ np.asarray(lattice.matrix)))
+
+    def test_a_vacancy_is_found_where_it_was_made(self):
+        perfect, cells, truth = self._with_vacancy([13, 40])
+        md = mv.data.from_structures(cells)
+        mv.pp.locate_defect(md, host=mv.data.from_structures([perfect]))
+        found = md.obs[["defect_a", "defect_b", "defect_c"]].to_numpy(float)
+        for row in range(len(cells)):
+            assert self._error(found[row], truth[row], perfect.lattice) < 1e-6
+
+    def test_it_survives_a_reordered_cell(self):
+        """Subtracting site lists fails here; the local environment does not
+        care what order the sites came in."""
+        perfect, cells, truth = self._with_vacancy([13])
+        from pymatgen.core import Structure
+        shuffled_sites = list(cells[0].sites)
+        shuffled_sites.reverse()
+        shuffled = Structure.from_sites(shuffled_sites)
+        md = mv.data.from_structures([shuffled])
+        mv.pp.locate_defect(md, host=mv.data.from_structures([perfect]))
+        found = md.obs[["defect_a", "defect_b", "defect_c"]].to_numpy(float)
+        assert self._error(found[0], truth[0], perfect.lattice) < 1e-6
+
+    def test_the_nearest_site_is_actually_nearest(self):
+        perfect, cells, _truth = self._with_vacancy([13])
+        md = mv.data.from_structures(cells)
+        mv.pp.locate_defect(md, host=mv.data.from_structures([perfect]))
+        index = int(md.obs["defect_nearest_site"].iloc[0])
+        position = md.obs[["defect_a", "defect_b", "defect_c"]].to_numpy(float)[0]
+        delta = np.asarray(cells[0].frac_coords) - position
+        delta -= np.round(delta)
+        distances = np.linalg.norm(delta @ np.asarray(cells[0].lattice.matrix),
+                                   axis=1)
+        assert index == int(np.argmin(distances))
+
+    def test_one_host_serves_every_row(self):
+        perfect, cells, _ = self._with_vacancy([13, 40, 66])
+        md = mv.data.from_structures(cells)
+        mv.pp.locate_defect(md, host=mv.data.from_structures([perfect]))
+        assert md.uns["locate_defect"]["default"]["n_hosts"] == 1
+        assert np.isfinite(md.obs[["defect_a", "defect_b",
+                                   "defect_c"]].to_numpy(float)).all()
+
+    def test_a_cramped_cell_is_warned_about(self):
+        """The descriptor has a hard 5 A cutoff. Below twice that, every site
+        sees the defect through the periodic images, no site looks distinctly
+        perturbed, and the position returned is wrong by angstroms without
+        anything in the output looking wrong. 2x2x2 fcc copper misses by 3.5."""
+        from pymatgen.core import Lattice, Structure
+        base = Structure(Lattice.cubic(3.61), ["Cu"] * 4,
+                         [[0, 0, 0], [0, .5, .5], [.5, 0, .5], [.5, .5, 0]])
+        small = base.copy()
+        small.make_supercell([2, 2, 2])
+        damaged = small.copy()
+        damaged.remove_sites([13])
+        md = mv.data.from_structures([damaged])
+        with pytest.warns(UserWarning, match="cutoff"):
+            mv.pp.locate_defect(md, host=mv.data.from_structures([small]))
+
+    def test_a_roomy_cell_passes_quietly(self):
+        perfect, cells, _ = self._with_vacancy([13])
+        md = mv.data.from_structures(cells)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", UserWarning)
+            mv.pp.locate_defect(md, host=mv.data.from_structures([perfect]))
+
+    def test_a_mismatched_host_count_is_refused(self):
+        perfect, cells, _ = self._with_vacancy([13, 40, 66])
+        md = mv.data.from_structures(cells)
+        two = mv.data.from_structures([perfect, perfect])
+        with pytest.raises(ValueError, match="one host or one per row"):
+            mv.pp.locate_defect(md, host=two)

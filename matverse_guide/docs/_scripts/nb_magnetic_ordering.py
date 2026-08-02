@@ -263,4 +263,125 @@ The answer also depends on the spin state, which is guessed only if you ask
 with `guess_spin=True`. A structure that already carries oxidation states from
 `mv.transform.oxidation_states` is used as given rather than re-assigned.
 ```"""),
+
+    ("markdown", """\
+## How far above room temperature does it stay a magnet?
+
+Which ordering is lowest says whether a material is a ferromagnet or an
+antiferromagnet. It says nothing about how hot it can get before it stops being
+one — and that is usually the question a screen is really asking.
+
+Mapping the ordering energies onto a Heisenberg Hamiltonian gives the exchange
+couplings, and a mean-field estimate of the ordering temperature follows:"""),
+
+    ("code", """\
+from pymatgen.core import Lattice, Structure
+
+def iron(moments):
+    st = Structure(Lattice.cubic(2.87), ["Fe", "Fe"],
+                   [[0, 0, 0], [.5, .5, .5]])
+    st.add_site_property("magmom", list(moments))
+    return st
+
+# stand-in for two spin-polarised total energies, 80 meV apart
+spins = mv.data.from_structures([iron([1.0, 1.0]), iron([1.0, -1.0])])
+spins.obs_names = ["ferromagnetic", "antiferromagnetic"]
+spins.obs["energy_pbe"] = [-0.08, 0.08]
+
+mv.mag.exchange(spins, level="pbe", cutoff=3.0)
+
+spins.obs[["energy_pbe", "exchange_pbe", "ordering_temperature_pbe"]].round(3)"""),
+
+    ("markdown", """\
+The ferromagnetic arrangement is lower, so the coupling is positive and the
+material orders ferromagnetically — and it does so up to roughly 620 K on this
+estimate.
+
+```{warning}
+**Read that temperature as an upper bound.** Mean-field theory ignores exactly
+the fluctuations that destroy magnetic order, so it overestimates Curie and Néel
+temperatures systematically — often by a third to a half. It is good for ranking
+candidates and for ruling things out ("nowhere near room temperature"); it is
+not a prediction of a measurement.
+
+The couplings come back in meV under pymatgen's convention, which counts per
+site rather than per bond. Ratios between materials are convention-free; the
+absolute number is not.
+```"""),
+
+    ("markdown", """\
+### When the fit has nothing to fit
+
+This only means anything for energies from a **spin-polarised** calculation. A
+potential that does not distinguish spin returns the same energy for every
+ordering, and the Heisenberg fit is then degenerate. matverse says so instead of
+reporting a small coupling:"""),
+
+    ("code", """\
+import warnings
+
+flat = spins.copy()
+flat.obs["energy_pbe"] = [-1.0, -1.0]      # what a spin-blind potential gives
+
+with warnings.catch_warnings(record=True) as caught:
+    warnings.simplefilter("always")
+    mv.mag.exchange(flat, level="pbe", cutoff=3.0)
+
+print(str(caught[-1].message)[:150])
+flat.uns["exchange"]["pbe"]["error"]"""),
+
+    ("markdown", """\
+A NaN and a stated reason, rather than a number near zero that would read as
+"weakly coupled" when it actually means "not calculated with spin"."""),
+
+    ("markdown", """\
+## What the moments cost in symmetry
+
+Putting moments on a lattice breaks some of its symmetry and leaves the rest.
+Which is which is what a magnetic space group records — and pymatgen ships all
+1651 of them but **no analyser that reads one off a structure**. There is no
+`MagneticSpaceGroupAnalyzer` beside `SpacegroupAnalyzer`.
+
+`mv.mag.symmetry` computes the underlying quantity instead of naming the group:
+every operation of the non-magnetic parent is applied to the moments as the
+axial vectors they are, once plainly and once with time reversal, and an
+operation survives if either version maps the arrangement onto itself."""),
+
+    ("code", """\
+from pymatgen.core import Lattice, Structure
+
+def iron_with(moments):
+    st = Structure(Lattice.cubic(2.87), ["Fe", "Fe"],
+                   [[0, 0, 0], [.5, .5, .5]])
+    st.add_site_property("magmom", list(moments))
+    return st
+
+arrangements = mv.data.from_structures([
+    iron_with([0.0, 0.0]), iron_with([2.2, 2.2]), iron_with([2.2, -2.2])])
+arrangements.obs_names = ["no moments", "ferromagnetic", "antiferromagnetic"]
+
+mv.mag.symmetry(arrangements)
+arrangements.obs[["parent_symmetry_order", "magnetic_symmetry_order",
+                  "magnetic_symmetry_fraction"]]"""),
+
+    ("markdown", """\
+bcc iron has **96** operations. With no moments all 96 survive. With any
+collinear ordering along *z*, only the **32** that leave that axis alone do —
+a third of the crystal's symmetry, gone, from adding a property that changes no
+atomic position.
+
+That fraction is worth having in a screen: one means the moments cost nothing,
+a small number means the ordering has broken most of the symmetry, and that is
+where to expect magnetic anisotropy and where two orderings at the same energy
+are not the same state.
+
+```{note}
+**Ferromagnet against antiferromagnet is deliberately not reported here.** The
+clean statement of that is whether the magnetic space group contains pure time
+reversal, and counting primed operations is not the same thing — a collinear
+ferromagnet has primed operations too, picked up from rotations that reverse
+its axis. Getting it right needs the group type, which needs the analyser that
+does not exist. `mv.mag.describe` gives the net moment, which answers the
+practical question without dressing itself up as a symmetry classification.
+```"""),
 ]
