@@ -48,6 +48,10 @@ alloys = ["pymatgen-analysis-alloys"]                # mv.gen.alloy_pairs
 # through cairo, and without it the bindings fail to import with a
 # ValueError from the format table rather than a missing-library error.
 molecules = ["openbabel-wheel"]
+# mv.prop.phonon(method='phonopy') and mv.prop.dispersion. seekpath is
+# separate from phonopy and is what supplies the high-symmetry path, so a
+# phonopy without it computes a density of states but no dispersion.
+phonons = ["phonopy", "seekpath"]
 defects = ["pymatgen-analysis-defects"]              # interstitial and antisite
                                                      # kinds of mv.pp.defects
 mp = ["mp-api>=0.46.2"]                              # Delta-table data products

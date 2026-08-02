@@ -423,10 +423,16 @@ NATIVE: Dict[str, str] = {
         "now applies from dielectric= alone. Only the potential-alignment "
         "half still needs a LOCPOT",
     "phonon.bandstructure":
-        "mv.prop.phonon builds the dynamical matrix from ASE displacements and "
-        "deposits frequencies on the grid convention, so pymatgen's phonon "
-        "containers are never constructed",
-    "phonon.dos": "see phonon.bandstructure",
+        "mv.prop.dispersion returns a bands-axis AnnData - one row per branch, "
+        "a normalised path coordinate for columns - which is the same layout "
+        "mv.elec.bands uses for electronic bands and what mv.pl.bands plots. "
+        "The force constants come from phonopy directly rather than through "
+        "pymatgen's phonopy bridge, so PhononBandStructureSymmLine is never "
+        "constructed",
+    "phonon.dos":
+        "mv.prop.phonon deposits the density of states on the shared grid "
+        "convention, from either a commensurate supercell or a phonopy "
+        "q-mesh, so CompletePhononDos is never constructed",
     "phonon.gruneisen":
         "mv.prop.quasiharmonic computes the Gruneisen parameter from an "
         "equation of state instead",

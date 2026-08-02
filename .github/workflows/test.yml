@@ -43,7 +43,7 @@ jobs:
           # matverse is claiming to cover — it read 100 modules against a floor
           # of 111 purely because half the add-ons were absent.
           sudo apt-get update -qq && sudo apt-get install -y -qq libxrender1
-          pip install -e ".[dev,analysis,plot,multi,diffusion,defects,alloys,molecules]"
+          pip install -e ".[dev,analysis,plot,multi,diffusion,defects,alloys,molecules,phonons]"
 
       - name: Show the environment the results belong to
         run: |
@@ -78,7 +78,7 @@ jobs:
           # docs build that silently skipped those cells would document a
           # matverse nobody runs.
           sudo apt-get update -qq && sudo apt-get install -y -qq libxrender1
-          pip install -e ".[diffusion,defects,alloys,molecules]"
+          pip install -e ".[diffusion,defects,alloys,molecules,phonons]"
           pip install -r matverse_guide/requirements.txt
 
       - name: Execute the tutorial notebooks

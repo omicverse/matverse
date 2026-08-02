@@ -1,0 +1,7 @@
+{
+  "obs_name": "0",
+  "preset": "neb-endpoint",
+  "source_variant": "hop_initial",
+  "reference": "PBE+U",
+  "matverse": "input directory; the obs_name is how read_outputs finds the row this belongs to"
+}

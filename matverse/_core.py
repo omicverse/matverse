@@ -169,6 +169,11 @@ def _element_frame(elements: list[str]) -> pd.DataFrame:
 
 #: Structures live in ``obsm[STRUCTURE_KEY]`` as a frame of JSON strings, one
 #: column per variant.
+#: Set on a bands object so functions can tell the axes apart. Lives here
+#: rather than in mv.elec because mv.prop.dispersion builds the same axis for
+#: phonons, and a convention two namespaces share is not one namespace's.
+AXIS_KEY = "matverse_axis"
+
 STRUCTURE_KEY = "structures"
 
 
@@ -521,5 +526,5 @@ __all__ = ["new", "structures", "deposit_structures", "variants", "require",
            "append_record", "records",
            "record", "provenance", "set_level", "level_info", "levels_used",
            "compare_levels", "check_commercial_use", "composition_matrix",
-           "deposit_grid", "grid_of", "CONTAINERS", "LEVEL_FIELDS",
+           "deposit_grid", "grid_of", "AXIS_KEY", "CONTAINERS", "LEVEL_FIELDS",
            "NONCOMMERCIAL_LICENSES", "STRUCTURE_KEY"]

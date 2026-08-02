@@ -758,6 +758,11 @@ def cases(tmp):
         (mv.prop.neutron, described, (),
          {"two_theta": (20.0, 60.0), "step": 1.0}),
         (mv.prop.tem, described, (), {"r_max": 1.0, "step": 0.05}),
+        # Returns a bands-axis object rather than depositing, like
+        # mv.elec.bands. Skipped by the probe if phonopy is absent.
+        (mv.prop.dispersion, relaxed_metal, (),
+         {"level": "emt", "source": "relaxed_emt", "supercell": (2, 2, 2),
+          "n_points": 40, "returns": "new"}),
         (mv.prop.quasiharmonic, relaxed_metal, (),
          {"level": "emt", "source": "relaxed_emt", "t_max": 500.0,
           "scales": [0.96, 0.98, 1.0, 1.02, 1.04]}),
