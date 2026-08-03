@@ -141,6 +141,37 @@ def mixture():
     ])
 
 
+def cu_au_parent():
+    """The disordered fcc primitive a cluster expansion is defined on."""
+    return mv.data.from_structures([_mixed({"Cu": 0.5, "Au": 0.5}, a=3.9)])
+
+
+def cu_au_training():
+    """Random decorations of that lattice, with energies to fit."""
+    from pymatgen.core import Structure
+    rng = np.random.default_rng(0)
+    prim = _mixed({"Cu": 0.5, "Au": 0.5}, a=3.9)
+    cells = []
+    for _ in range(24):
+        base = prim.copy()
+        base.make_supercell([(2, 2, 2), (1, 2, 3), (1, 1, 4)][rng.integers(3)])
+        n_cu = int(rng.integers(0, len(base) + 1))
+        species = ["Cu"] * n_cu + ["Au"] * (len(base) - n_cu)
+        rng.shuffle(species)
+        cells.append(Structure(base.lattice, species, base.frac_coords))
+    md = mv.data.from_structures(cells)
+    mv.calc.energy(md, level="emt")
+    return md
+
+
+def cu_au_fitted():
+    """A parent carrying a fitted expansion, for mv.disorder.monte_carlo."""
+    parent = cu_au_parent()
+    mv.disorder.cluster_expansion(cu_au_training(), parent=parent,
+                                  level="emt", cutoffs={2: 6.0, 3: 4.5})
+    return parent
+
+
 def olivine():
     md = mv.datasets.load("battery_cathodes")[:1].copy()
     mv.pp.describe(md)
@@ -793,6 +824,14 @@ def cases(tmp):
         (mv.neb.hops, one_metal, ("Cu",), {"returns": "new"}),
 
         (mv.disorder.sro, one_metal, (), {}),
+        (mv.disorder.cluster_expansion, cu_au_training, (),
+         {"parent": cu_au_parent(), "level": "emt",
+          "cutoffs": {2: 6.0, 3: 4.5}}),
+        # Few temperatures and short chains: the probe checks the contract,
+        # not the physics, and the physics is checked in test_disorder.py.
+        (mv.disorder.monte_carlo, cu_au_fitted, (),
+         {"level": "emt", "supercell": (2, 2, 2), "steps": 4000,
+          "temperatures": (300.0, 600.0, 900.0)}),
         (mv.mag.symmetry, spin_orderings, (), {}),
         (mv.env.voronoi, one_metal,
          (mv.multi.sites(one_metal()),), {}),

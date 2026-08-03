@@ -42,7 +42,9 @@ matminer = ["matminer"]
 cost = ["bibtexparser"]                               # mv.prop.cost price table
 diffusion = ["pymatgen-analysis-diffusion"]           # mv.md.rdf, mv.md.sites,
                                                      # mv.neb.percolation
-alloys = ["pymatgen-analysis-alloys"]                # mv.gen.alloy_pairs
+# mv.gen.alloy_pairs, plus mv.disorder.cluster_expansion and
+# mv.disorder.monte_carlo, which drive smol.
+alloys = ["pymatgen-analysis-alloys", "smol"]
 # mv.mol.functional_groups. openbabel additionally needs libXrender at
 # runtime, which pip cannot supply - every format plugin links against it
 # through cairo, and without it the bindings fail to import with a
