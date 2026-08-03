@@ -397,8 +397,64 @@ passes considerably more — 29 candidates against 16 on Ba–Ti–O. Neither is
 wrong; they answer slightly different questions, and a screen that does not say
 which it used is not reproducible.
 
-From here a candidate needs a structure before anything else can touch it, which
-is what `mv.gen.substitute` and structure prediction are for.
+## From a formula to a structure
+
+A candidate needs a structure before anything else can touch it.
+`mv.gen.from_symmetry` supplies one, by placing the atoms on Wyckoff positions
+of a chosen space group and randomising the free parameters that remain."""),
+
+    ("code", """\
+try:
+    candidates = mv.data.from_compositions(["BaTiO3", "SrTiO3"])
+    built = mv.gen.from_symmetry(candidates, space_groups=[221, 99], seed=0)
+    print(built.obs[["formula", "requested_space_group", "space_group",
+                     "space_group_symbol", "symmetry_as_requested",
+                     "nsites"]].to_string(index=False))
+except ImportError:
+    print("needs PyXtal; pip install matverse[generation]")"""),
+
+    ("markdown", """\
+```{warning}
+**The output is a starting geometry, not a structure.** The cell volume is
+estimated and the free coordinates are random, so bond lengths are only
+approximately right — generated BaTiO₃ in Pm-3m comes out near **5.06 Å against
+a measured 4.00**. Run `mv.calc.relax` before believing any energy and
+`mv.gen.validate` before believing the structure.
+```
+
+Two columns rather than one, and the second is the one that matters.
+`requested_space_group` is what PyXtal was asked for; `space_group` is what
+pymatgen finds in the structure that came back.
+
+They disagree **often**, not occasionally. Asking for 40 random space groups for
+TiO₂ gave 7 structures, and 5 of them came back at *higher* symmetry than
+requested — P-6 asked for, P6/mmm delivered — because with few atoms the random
+free parameters land on a special position. A generator that reported only the
+request would be reporting its input."""),
+
+    ("code", """\
+try:
+    many = mv.gen.from_symmetry(mv.data.from_compositions(["TiO2"]),
+                                per_composition=40, seed=1)
+    n_built = many.n_obs
+    n_failed = many.uns["from_symmetry"]["n_failed"]
+    disagreed = int((~many.obs["symmetry_as_requested"]).sum())
+    print(f"{n_built} built from 40 attempts, {n_failed} failed")
+    print(f"{disagreed} of {n_built} came back at a different symmetry")
+except ImportError:
+    print("needs PyXtal; pip install matverse[generation]")"""),
+
+    ("markdown", """\
+Note the other number: **33 of 40 attempts failed outright**, because a random
+space group usually cannot host a given composition at a given cell size. That
+is honest rather than hidden — a failure is a missing row plus a counted reason
+in `uns['from_symmetry']`, never a substituted structure — but it does mean
+passing `space_groups=` explicitly is both faster and more likely to give what
+you wanted.
+
+The result is an ordinary materials object, so `mv.pp.describe`, `mv.calc.relax`
+and everything else work on it unchanged. The funnel is now complete: elements →
+compositions → structures → energies.
 
 ```{seealso}
 [Beyond one number](beyond_one_number.ipynb) covers the results that are not a

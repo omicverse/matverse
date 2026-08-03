@@ -941,3 +941,94 @@ class TestCompositionEnumeration:
     def test_it_says_that_survival_is_not_a_prediction(self):
         found = mv.gen.compositions(["Ti", "O"], threshold=4)
         assert "not a prediction" in found.uns["compositions"]["note"]
+
+
+def _has_pyxtal() -> bool:
+    import importlib.util
+    return importlib.util.find_spec("pyxtal") is not None
+
+
+@pytest.mark.skipif(not _has_pyxtal(), reason="PyXtal is an optional extra")
+class TestSymmetryGeneration:
+    """Turning a composition into something a calculator can accept."""
+
+    @pytest.fixture(scope="class")
+    def built(self):
+        candidates = mv.data.from_compositions(["BaTiO3", "SrTiO3"])
+        return mv.gen.from_symmetry(candidates, space_groups=[221, 99],
+                                    per_composition=1, seed=0)
+
+    def test_it_produces_structures_for_each_composition(self, built):
+        assert built.n_obs == 4
+        assert len(mv.structures(built, "input")) == 4
+        assert set(built.obs["formula"]) == {"BaTiO3", "SrTiO3"}
+
+    def test_the_structures_have_the_composition_asked_for(self, built):
+        for structure, formula in zip(mv.structures(built, "input"),
+                                      built.obs["formula"]):
+            assert structure.composition.reduced_formula == formula
+
+    def test_the_symmetry_is_verified_not_assumed(self, built):
+        """obs['space_group'] is what pymatgen finds in the structure that
+        came back, not what pyxtal was asked for. Both are kept."""
+        assert "requested_space_group" in built.obs
+        assert "space_group" in built.obs
+        for row in built.obs.itertuples():
+            assert row.symmetry_as_requested == (
+                row.space_group == row.requested_space_group)
+
+    def test_the_verification_actually_catches_disagreements(self):
+        """A flag that is always True is untested. Random free parameters land
+        on special positions often: 40 random groups for TiO2 gave 7
+        structures, 5 of them at higher symmetry than requested."""
+        candidates = mv.data.from_compositions(["TiO2"])
+        built = mv.gen.from_symmetry(candidates, per_composition=40, seed=1)
+        disagreed = (~built.obs["symmetry_as_requested"]).sum()
+        assert disagreed > 0
+        # And the disagreement is upward — a special position adds symmetry.
+        rows = built.obs[~built.obs["symmetry_as_requested"]]
+        assert (rows["space_group"] > rows["requested_space_group"]).all()
+
+    def test_an_impossible_group_is_a_missing_row_not_a_substitute(self):
+        """Pnma cannot host BaTiO3 at five atoms. The row is absent and the
+        reason is counted, rather than a different structure appearing under
+        the name that was asked for."""
+        candidates = mv.data.from_compositions(["BaTiO3"])
+        with pytest.warns(RuntimeWarning, match="no structure"):
+            built = mv.gen.from_symmetry(candidates, space_groups=[221, 62],
+                                         seed=0)
+        assert built.n_obs == 1
+        assert int(built.obs["requested_space_group"].iloc[0]) == 221
+        assert built.uns["from_symmetry"]["n_failed"] == 1
+        assert "62" in built.uns["from_symmetry"]["errors"][0]
+
+    def test_the_composition_can_come_from_X_alone(self):
+        """No formula column: the composition matrix is the composition."""
+        candidates = mv.data.from_compositions(["BaTiO3"])
+        del candidates.obs["formula"]
+        built = mv.gen.from_symmetry(candidates, space_groups=[221], seed=0)
+        assert list(built.obs["formula"]) == ["BaTiO3"]
+
+    def test_the_output_is_an_ordinary_materials_object(self, built):
+        """It has to flow into the rest of matverse without special casing."""
+        out = built.copy()
+        mv.pp.describe(out)
+        assert np.isfinite(out.obs["density"]).all()
+
+    def test_it_says_the_geometry_is_only_a_starting_point(self, built):
+        """Generated BaTiO3 in Pm-3m comes out near 5.06 A against a measured
+        4.00, because the cell volume is estimated. Claiming otherwise would
+        be the dangerous part."""
+        assert "relax" in built.uns["from_symmetry"]["note"]
+
+    def test_a_bad_space_group_is_refused(self):
+        candidates = mv.data.from_compositions(["BaTiO3"])
+        with pytest.raises(ValueError, match="1..230"):
+            mv.gen.from_symmetry(candidates, space_groups=[999])
+
+    def test_the_seed_makes_it_reproducible(self):
+        candidates = mv.data.from_compositions(["BaTiO3"])
+        runs = [mv.gen.from_symmetry(candidates, space_groups=[221], seed=7)
+                for _ in range(2)]
+        first, second = (mv.structures(r, "input")[0] for r in runs)
+        assert first.lattice.abc == pytest.approx(second.lattice.abc)

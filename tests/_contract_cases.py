@@ -149,6 +149,10 @@ def two_elements():
     return ["Ti", "O"]
 
 
+def perovskite_candidates():
+    return mv.data.from_compositions(["BaTiO3", "SrTiO3"])
+
+
 def cu_au_parent():
     """The disordered fcc primitive a cluster expansion is defined on."""
     return mv.data.from_structures([_mixed({"Cu": 0.5, "Au": 0.5}, a=3.9)])
@@ -837,6 +841,8 @@ def cases(tmp):
         (mv.data.from_compositions, formulas, (), {"returns": "new"}),
         (mv.gen.compositions, two_elements, (),
          {"threshold": 4, "returns": "new"}),
+        (mv.gen.from_symmetry, perovskite_candidates, (),
+         {"space_groups": [221], "seed": 0, "returns": "new"}),
         (mv.disorder.cluster_expansion, cu_au_training, (),
          {"parent": cu_au_parent(), "level": "emt",
           "cutoffs": {2: 6.0, 3: 4.5}}),
