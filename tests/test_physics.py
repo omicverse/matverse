@@ -1168,10 +1168,18 @@ class TestPotentialAlignment:
 
     @classmethod
     def _potentials(cls, bulk, vacancy, shift):
+        """Built through Poscar rather than from a bare Structure.
+
+        pymatgen 2026 widened Locpot to accept either; 2025 and earlier take a
+        Poscar only, and passing a Structure fails with a confusing
+        'Structure has no attribute structure'. Poscar works on both, and the
+        3.10 leg of CI runs the older one.
+        """
+        from pymatgen.io.vasp.inputs import Poscar
         from pymatgen.io.vasp.outputs import Locpot
         flat = np.zeros((cls.GRID,) * 3)
-        return {"vac": Locpot(vacancy, {"total": flat + shift}),
-                "bulk": Locpot(bulk, {"total": flat})}
+        return {"vac": Locpot(Poscar(vacancy), {"total": flat + shift}),
+                "bulk": Locpot(Poscar(bulk), {"total": flat})}
 
     @classmethod
     def _energy(cls, charge, shift):
