@@ -13,6 +13,7 @@ import numpy as np
 import pytest
 
 import matverse as mv
+from matverse._core import grid_of
 
 warnings.filterwarnings("ignore")
 
@@ -242,3 +243,213 @@ class TestShortRangeOrder:
         mv.disorder.sro(b2, key_added="s1")
         assert "1 - P(B|A)" in b2.uns["sro"]["s1"]["definition"]
         assert b2.uns["sro"]["s1"]["shell"] == 1
+
+
+def _has_smol() -> bool:
+    import importlib.util
+    return importlib.util.find_spec("smol") is not None
+
+
+def _cu_au():
+    from pymatgen.core import Lattice, Structure
+    a = 3.9
+    return Structure(Lattice([[0, a / 2, a / 2], [a / 2, 0, a / 2],
+                              [a / 2, a / 2, 0]]),
+                     [{"Cu": 0.5, "Au": 0.5}], [[0, 0, 0]])
+
+
+def _training(shapes, count, seed=0):
+    """Random decorations of the fcc lattice, with EMT energies."""
+    from pymatgen.core import Structure
+    rng = np.random.default_rng(seed)
+    prim, cells = _cu_au(), []
+    for _ in range(count):
+        base = prim.copy()
+        base.make_supercell(list(shapes[rng.integers(len(shapes))]))
+        size = len(base)
+        n_cu = int(rng.integers(0, size + 1))
+        species = ["Cu"] * n_cu + ["Au"] * (size - n_cu)
+        rng.shuffle(species)
+        cells.append(Structure(base.lattice, species, base.frac_coords))
+    train = mv.data.from_structures(cells)
+    mv.calc.energy(train, level="emt")
+    return train
+
+
+@pytest.mark.skipif(not _has_smol(), reason="smol is an optional extra")
+class TestClusterExpansion:
+    @pytest.fixture(scope="class")
+    def fitted(self):
+        parent = mv.data.from_structures([_cu_au()])
+        parent.obs_names = ["CuAu"]
+        train = _training([(2, 2, 2), (1, 2, 3), (1, 1, 4), (2, 2, 3)], 60)
+        mv.disorder.cluster_expansion(train, parent=parent, level="emt",
+                                      cutoffs={2: 6.0, 3: 4.5})
+        return train, parent
+
+    def test_the_model_lands_on_the_parent_and_predictions_on_the_training_set(
+            self, fitted):
+        train, parent = fitted
+        assert "emt" in parent.uns["cluster_expansion"]
+        assert np.isfinite(train.obs["ce_energy_emt"]).all()
+        assert np.isfinite(train.obs["ce_residual_emt"]).all()
+
+    def test_the_residuals_are_the_difference_they_claim_to_be(self, fitted):
+        train, _ = fitted
+        stated = train.obs["ce_residual_emt"].to_numpy(dtype=float)
+        derived = (train.obs["ce_energy_emt"].to_numpy(dtype=float)
+                   - train.obs["energy_emt"].to_numpy(dtype=float))
+        assert stated == pytest.approx(derived, abs=1e-8)
+
+    def test_cross_validation_is_reported_and_is_the_larger_error(self, fitted):
+        """A fit whose CV error is not worse than its training error has
+        either been evaluated wrongly or is not a fit at all."""
+        info = fitted[1].uns["cluster_expansion"]["emt"]
+        assert np.isfinite(info["cv_rmse"])
+        assert info["units"] == "eV per primitive cell"
+        assert info["cv_rmse"] >= info["train_rmse"]
+
+    def test_a_single_supercell_shape_leaves_clusters_unidentified(self):
+        """Rank, not shape. Sixty structures for eight clusters looks
+        comfortable and is not: on one supercell shape the rank was six, so
+        two clusters had coefficients the data never determined. A shape-based
+        check reports this fit as fine."""
+        parent = mv.data.from_structures([_cu_au()])
+        train = _training([(2, 2, 2)], 60)
+        with pytest.warns(RuntimeWarning, match="rank"):
+            mv.disorder.cluster_expansion(train, parent=parent, level="emt",
+                                          cutoffs={2: 6.0, 3: 4.5})
+        info = parent.uns["cluster_expansion"]["emt"]
+        assert info["rank_deficient"] is True
+        assert info["rank"] < info["n_features"]
+        assert info["n_structures"] > info["n_features"]   # looks fine by shape
+
+    def test_varying_the_supercell_shape_is_what_fixes_it(self, fitted):
+        """The advice the warning gives, checked rather than asserted."""
+        info = fitted[1].uns["cluster_expansion"]["emt"]
+        assert info["rank_deficient"] is False
+        assert info["rank"] == info["n_features"]
+
+    def test_it_needs_energies(self):
+        parent = mv.data.from_structures([_cu_au()])
+        train = mv.data.from_structures([_cu_au()])
+        with pytest.raises(ValueError, match="mv.calc.energy"):
+            mv.disorder.cluster_expansion(train, parent=parent, level="emt")
+
+    def test_the_parent_must_be_one_structure(self):
+        parent = mv.data.from_structures([_cu_au(), _cu_au()])
+        train = _training([(2, 2, 2)], 4)
+        with pytest.raises(ValueError, match="single disordered"):
+            mv.disorder.cluster_expansion(train, parent=parent, level="emt")
+
+
+@pytest.mark.skipif(not _has_smol(), reason="smol is an optional extra")
+class TestMonteCarlo:
+    @pytest.fixture(scope="class")
+    def sampled(self):
+        parent = mv.data.from_structures([_cu_au()])
+        parent.obs_names = ["CuAu"]
+        train = _training([(2, 2, 2), (1, 2, 3), (1, 1, 4), (2, 2, 3)], 60)
+        mv.disorder.cluster_expansion(train, parent=parent, level="emt",
+                                      cutoffs={2: 6.0, 3: 4.5})
+        # 4x4x4 rather than 3x3x3, because 3x3x3 does not resolve the
+        # transition at all: its heat capacity is flat to within 20% and the
+        # apparent peak moves from 380 K to 260 K on lengthening the chains.
+        mv.disorder.monte_carlo(
+            parent, level="emt", supercell=(4, 4, 4), steps=120000,
+            temperatures=(200., 260., 320., 380., 440., 560., 700.))
+        return parent
+
+    def test_the_energy_rises_with_temperature(self, sampled):
+        """True of any canonical ensemble, whatever the Hamiltonian."""
+        energy = sampled.obsm["mc_energy_emt"][0]
+        assert np.all(np.diff(energy) > -1e-6)
+
+    def test_the_heat_capacity_is_never_negative(self, sampled):
+        """It is a variance over a positive number."""
+        assert (sampled.obsm["mc_heat_capacity_emt"][0] >= 0).all()
+
+    def test_acceptance_rises_with_temperature(self, sampled):
+        """A colder chain rejects more. If this inverted, the Metropolis
+        criterion would have the wrong sign."""
+        rate = np.asarray(
+            sampled.uns["monte_carlo"]["emt"]["acceptance"][0], dtype=float)
+        assert np.all(np.diff(rate) > -0.02)
+
+    def test_a_peak_inside_the_range_is_reported(self, sampled):
+        found = float(sampled.obs["order_disorder_temperature_emt"].iloc[0])
+        grid = grid_of(sampled, "mc_energy")
+        assert np.isfinite(found)
+        assert grid[0] < found < grid[-1]
+        assert not sampled.uns["monte_carlo"]["emt"]["unresolved_transitions"]
+
+    def test_the_peak_stands_well_above_the_baseline(self, sampled):
+        """What separates a transition from a noisy maximum. Six times the
+        baseline here; a cell too small to hold the ordered domain gives
+        1.1x."""
+        capacity = sampled.obsm["mc_heat_capacity_emt"][0]
+        assert capacity.max() / np.median(capacity) > 3.0
+
+    def test_a_flat_heat_capacity_is_refused(self):
+        """A flat array still has a maximum, and it is wherever the noise was
+        largest. At 3x3x3 that maximum moved 120 K on nothing but a longer
+        chain, so an interior peak on its own is not evidence of a
+        transition."""
+        parent = mv.data.from_structures([_cu_au()])
+        parent.obs_names = ["CuAu"]
+        train = _training([(2, 2, 2), (1, 2, 3), (1, 1, 4), (2, 2, 3)], 60)
+        mv.disorder.cluster_expansion(train, parent=parent, level="emt",
+                                      cutoffs={2: 6.0, 3: 4.5})
+        with pytest.warns(RuntimeWarning, match="flat"):
+            mv.disorder.monte_carlo(
+                parent, level="emt", supercell=(3, 3, 3), steps=40000,
+                temperatures=(200., 260., 320., 380., 440., 560., 700.))
+        assert np.isnan(
+            float(parent.obs["order_disorder_temperature_emt"].iloc[0]))
+        assert "flat" in \
+            parent.uns["monte_carlo"]["emt"]["unresolved_transitions"][0]
+
+    def test_a_peak_on_the_edge_is_refused(self):
+        """An edge maximum means the transition is outside the range, or the
+        coldest chains never equilibrated and their variance is the approach
+        to equilibrium. Indistinguishable from the variance alone, so the
+        column is NaN rather than the edge value."""
+        parent = mv.data.from_structures([_cu_au()])
+        parent.obs_names = ["CuAu"]
+        train = _training([(2, 2, 2), (1, 2, 3), (1, 1, 4), (2, 2, 3)], 60)
+        mv.disorder.cluster_expansion(train, parent=parent, level="emt",
+                                      cutoffs={2: 6.0, 3: 4.5})
+        with pytest.warns(RuntimeWarning, match="no transition"):
+            mv.disorder.monte_carlo(
+                parent, level="emt", supercell=(4, 4, 4), steps=60000,
+                min_prominence=1.0,
+                temperatures=(320., 380., 440., 560., 700.))
+        assert np.isnan(
+            float(parent.obs["order_disorder_temperature_emt"].iloc[0]))
+        assert parent.uns["monte_carlo"]["emt"]["unresolved_transitions"]
+
+    def test_threads_do_not_change_the_answer(self):
+        """threads=1 is a 620x speedup over smol's default on a 17-core node,
+        which is only worth taking if it is the same calculation."""
+        results = []
+        for threads in (1, 2):
+            parent = mv.data.from_structures([_cu_au()])
+            train = _training([(2, 2, 2), (1, 2, 3), (1, 1, 4)], 40)
+            mv.disorder.cluster_expansion(train, parent=parent, level="emt",
+                                          cutoffs={2: 6.0, 3: 4.5})
+            mv.disorder.monte_carlo(parent, level="emt", supercell=(2, 2, 2),
+                                    steps=8000, seed=3, threads=threads,
+                                    temperatures=(300., 600., 900.))
+            results.append(parent.obsm["mc_energy_emt"][0])
+        assert results[0] == pytest.approx(results[1], abs=1e-9)
+
+    def test_it_needs_a_fitted_expansion_first(self):
+        parent = mv.data.from_structures([_cu_au()])
+        with pytest.raises(ValueError, match="cluster_expansion"):
+            mv.disorder.monte_carlo(parent, level="emt")
+
+    def test_it_records_the_ensemble_it_sampled(self, sampled):
+        recorded = sampled.uns["monte_carlo"]["emt"]
+        assert "canonical" in recorded["ensemble"]
+        assert recorded["threads"] == 1
+        assert recorded["n_failed"] == 0

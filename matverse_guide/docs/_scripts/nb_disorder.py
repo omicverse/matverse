@@ -380,4 +380,121 @@ definition is worse than the gap.
 
 `obs['sro_rms_shell1']` is the single number to sort on: near zero for a good
 solid solution, large for anything that has ordered or clustered."""),
+
+    ("markdown", """\
+## An effective Hamiltonian, and what it buys
+
+Everything above reads order off a structure you already have. The question a
+screen actually asks is the other way round: *at what temperature does this
+alloy order at all?* That is a collective effect — no single ordered cell shows
+it — and answering it means visiting millions of configurations.
+
+A **cluster expansion** makes that affordable. Fit the energy to correlation
+functions of the lattice once, and afterwards scoring a configuration costs a
+dot product instead of a calculator call.
+
+`mv.disorder.cluster_expansion` fits it. The model lands on the disordered
+**parent**, because the parent is what owns the sublattice; the training object
+gets predictions and residuals so the fit can be inspected row by row."""),
+
+    ("code", """\
+import numpy as np
+from pymatgen.core import Lattice, Structure
+
+a = 3.9
+prim = Structure(Lattice([[0, a/2, a/2], [a/2, 0, a/2], [a/2, a/2, 0]]),
+                 [{"Cu": 0.5, "Au": 0.5}], [[0, 0, 0]])
+parent = mv.data.from_structures([prim])
+parent.obs_names = ["CuAu"]
+
+# Random decorations of the fcc lattice, over several supercell shapes.
+rng, cells = np.random.default_rng(0), []
+for _ in range(60):
+    shape = [(2, 2, 2), (1, 2, 3), (1, 1, 4), (2, 2, 3)][rng.integers(4)]
+    base = prim.copy()
+    base.make_supercell(list(shape))
+    n_cu = int(rng.integers(0, len(base) + 1))
+    species = ["Cu"] * n_cu + ["Au"] * (len(base) - n_cu)
+    rng.shuffle(species)
+    cells.append(Structure(base.lattice, species, base.frac_coords))
+
+training = mv.data.from_structures(cells)
+mv.calc.energy(training, level="emt")
+
+try:
+    mv.disorder.cluster_expansion(training, parent=parent, level="emt",
+                                  cutoffs={2: 6.0, 3: 4.5})
+    fit = parent.uns["cluster_expansion"]["emt"]
+    print(f"{fit['n_structures']} structures, {fit['n_features']} clusters, "
+          f"rank {fit['rank']}")
+    print(f"training {fit['train_rmse']*1000:.3f} meV/prim, "
+          f"CV {fit['cv_rmse']*1000:.3f} meV/prim")
+except ImportError:
+    print("needs smol; pip install matverse[alloys]")"""),
+
+    ("markdown", """\
+The number that says whether a cluster expansion is any good is the
+**cross-validated** error, never the training error — adding clusters drives
+training error to zero whether or not they mean anything.
+
+The other number to read is the **rank**. Sixty structures for eight clusters
+looks comfortable and can still be under-determined: on a training set of one
+supercell shape the rank came out 6, so two clusters had coefficients the data
+never determined and least-squares quietly picked the smallest ones. Varying the
+supercell *shape* is what fixes that — more structures of the same shape do not.
+`mv.disorder.cluster_expansion` warns when the rank falls short.
+
+Now the part the expansion was for:"""),
+
+    ("code", """\
+try:
+    mv.disorder.monte_carlo(
+        parent, level="emt", supercell=(4, 4, 4), steps=120000,
+        temperatures=(200., 260., 320., 380., 440., 560., 700.))
+
+    T = mv.grid_of(parent, "mc_energy")
+    C = parent.obsm["mc_heat_capacity_emt"][0]
+    for t, c in zip(T, C):
+        print(f"{t:6.0f} K   C = {c*1e5:7.2f} x 1e-5 eV/K/site")
+    print("\\ntransition:",
+          parent.obs["order_disorder_temperature_emt"].iloc[0], "K")
+except (ImportError, KeyError):
+    print("needs smol; pip install matverse[alloys]")"""),
+
+    ("markdown", """\
+A heat capacity that is flat everywhere except one sharp peak, and the peak is
+the order-disorder transition.
+
+Two guards are worth knowing about, because both were put in after the
+straightforward version returned a confident wrong answer:
+
+```{warning}
+**A maximum is not a peak.** At a 3×3×3 cell this same system gives a heat
+capacity flat to within 20%, and its maximum sits wherever the noise was
+largest — it moved from 380 K to 260 K on nothing but longer chains. A maximum
+below `min_prominence=` times the median is reported as **NaN**, not as a
+temperature. The fix is a larger `supercell=`: a transition is collective, and a
+cell too small to hold the ordered domain cannot show one however long you
+sample it.
+
+**A peak on the edge is not resolved either.** An edge maximum means either the
+transition is outside the range or the coldest chains never equilibrated, and a
+chain still relaxing has a large energy variance that looks exactly like a
+fluctuation. Also NaN, with the reason in
+`uns['monte_carlo'][level]['unresolved_transitions']`.
+```
+
+One cross-check costs nothing. The heat capacity comes from the energy
+*variance*; $d\\langle E\\rangle/dT$ across the sweep is an independent route to
+the same quantity. Where the sampling is good the two agree to a couple of
+percent, and where they disagree the sampling is not good — which is a more
+useful statement than any single number.
+
+```{note}
+`threads=` defaults to 1 deliberately. smol defaults it to the CPU count, and
+for these cell sizes that is a catastrophic default rather than a fast one: one
+swap is a few dozen multiply-adds and spawning a thread team per evaluation
+costs far more. Measured on a 17-core node, 2000 steps on 27 sites took 62 s at
+the default and 0.10 s at one thread — a factor of 620.
+```"""),
 ]

@@ -292,7 +292,14 @@ def probe_call(func: Callable, make_dataset: Callable, *args,
     results: list[ClaimResult] = []
 
     # produces — run it, then look.
-    md = make_dataset()
+    try:
+        md = make_dataset()
+    except ImportError as exc:
+        # The fixture itself needs an optional backend. That says nothing
+        # about whether the claims are true, so every claim for this entry is
+        # undecided rather than failed - the same treatment the call below
+        # gets, which previously did not extend to building its input.
+        return _all_skipped(entry, label, f"{exc}")
     before = {}
     if returns == "self":
         for container, slots in entry["produces"].items():
@@ -473,3 +480,15 @@ def audit(registry=None) -> dict:
 
 __all__ = ["probe_call", "probe_prerequisite", "audit", "ProbeReport",
            "ClaimResult"]
+
+
+def _all_skipped(entry, label: str, why: str) -> list:
+    """Every claim of one entry, marked undecided for a missing backend."""
+    out = []
+    for kind in ("produces", "requires"):
+        for container, slots in (entry.get(kind) or {}).items():
+            for slot in slots:
+                out.append(ClaimResult(
+                    label, kind, container, slot, slot, False,
+                    f"backend not installed: {why}", skipped=True))
+    return out

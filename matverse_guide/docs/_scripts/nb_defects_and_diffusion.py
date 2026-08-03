@@ -304,7 +304,7 @@ mv.thermo.defect_formation(
 )
 ```
 
-The alignment enters as $q\,\Delta V$, so it is exactly linear in a rigid shift
+The alignment enters as $q\\,\\Delta V$, so it is exactly linear in a rigid shift
 of either potential and vanishes at $q=0$. That is what makes it checkable
 without a real LOCPOT, and the suite checks it: shift one potential by 0.5 eV
 and every charge state moves by exactly $q \times 0.5$ eV.
