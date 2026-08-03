@@ -12,7 +12,7 @@ agent. Every entry names the state it reads and the state it writes, and each of
 those claims is verified by execution in `tests/test_contracts.py` rather than
 asserted.
 
-Public registry entries listed here: 121
+Public registry entries listed here: 207
 
 Look a function up by intent rather than by name:
 
@@ -84,12 +84,16 @@ Structure standardisation, quality control, filtering, deduplication and cross-d
    pp.filter_elements
    pp.filter_materials
    pp.harmonize
+   pp.locate_defect
    pp.normalize_composition
+   pp.predict_volume
+   pp.prototype
    pp.qc
    pp.rattle
    pp.standardize
    pp.strain
    pp.supercell
+   pp.symmetry
 ```
 
 
@@ -156,11 +160,30 @@ Derived properties, including curves stored on a shared grid.
    :toctree: reference/
    :nosignatures:
 
+   prop.capture
    prop.compare_grids
+   prop.configuration_coordinate
+   prop.cost
+   prop.dielectric
+   prop.dimensionality
+   prop.dispersion
+   prop.efg
    prop.elastic
+   prop.electrostatic
+   prop.eos
    prop.free_energy
+   prop.frontier_orbitals
+   prop.neutron
+   prop.nmr
    prop.phonon
+   prop.piezo_from_dfpt
+   prop.piezoelectric
+   prop.polarization
+   prop.quasiharmonic
    prop.rdf
+   prop.slme
+   prop.supply_risk
+   prop.tem
    prop.thermal_conductivity
    prop.xrd
 ```
@@ -178,9 +201,13 @@ Motion, and the properties only motion gives you.
    md.batched_available
    md.conductivity
    md.melt_quench
+   md.occupancy
+   md.rdf
    md.register_batched
    md.run
+   md.sites
    md.sweep
+   md.van_hove
 ```
 
 
@@ -194,8 +221,11 @@ Magnetic orderings, and picking the ground state before the hull.
    :nosignatures:
 
    mag.describe
+   mag.exchange
    mag.ground_state
+   mag.jahn_teller
    mag.orderings
+   mag.symmetry
 ```
 
 
@@ -210,6 +240,8 @@ Nudged elastic band, and building the endpoints for it.
 
    neb.barrier
    neb.hop_endpoints
+   neb.hops
+   neb.percolation
 ```
 
 
@@ -226,6 +258,7 @@ Slabs, surface energies, equilibrium shapes and adsorption.
    surf.adsorption_sites
    surf.slabs
    surf.surface_energy
+   surf.surface_energy_chempot
    surf.wulff
 ```
 
@@ -239,8 +272,11 @@ Convex hull, reactions, chemical potentials.
    :toctree: reference/
    :nosignatures:
 
+   thermo.chempot_diagram
    thermo.chempot_limits
+   thermo.corrections
    thermo.defect_formation
+   thermo.fit_corrections
    thermo.hull
    thermo.pourbaix
    thermo.reaction
@@ -290,6 +326,7 @@ Measured data, carried as a level of theory like any other.
    :nosignatures:
 
    exp.attach
+   exp.formation_hull
    exp.match_xrd
    exp.measure
 ```
@@ -319,6 +356,10 @@ Scoring generated structures, and enumerating substitutions.
    :toctree: reference/
    :nosignatures:
 
+   gen.alloy_pairs
+   gen.predict_dopants
+   gen.predict_hosts
+   gen.predict_substitutions
    gen.substitute
    gen.validate
 ```
@@ -366,6 +407,8 @@ Publication defaults; every function draws onto an axis and returns it.
    :toctree: reference/
    :nosignatures:
 
+   pl.bands
+   pl.distribution
    pl.embedding
    pl.hull
    pl.pareto
@@ -373,8 +416,10 @@ Publication defaults; every function draws onto an axis and returns it.
    pl.periodic_table
    pl.provenance
    pl.rank_elements_groups
+   pl.scatter
    pl.set_style
    pl.spectra
+   pl.structure
 ```
 
 
@@ -391,11 +436,112 @@ Units, checkpointing, cluster submission and object summaries.
    utils.checkpoint
    utils.chunks
    utils.convert
+   utils.job_status
    utils.map_chunks
    utils.resume
    utils.set_units
    utils.slurm_script
+   utils.submit
    utils.summary
+```
+
+
+## disorder
+
+```{eval-rst}
+.. autosummary::
+   :toctree: reference/
+   :nosignatures:
+
+   disorder.describe
+   disorder.dope
+   disorder.orderings
+   disorder.sqs
+   disorder.sro
+```
+
+
+## elec
+
+```{eval-rst}
+.. autosummary::
+   :toctree: reference/
+   :nosignatures:
+
+   elec.band_features
+   elec.bands
+   elec.cohp
+   elec.dos_fingerprint
+   elec.kpath
+   elec.read_bands
+   elec.transport
+   elec.xps
+```
+
+
+## env
+
+```{eval-rst}
+.. autosummary::
+   :toctree: reference/
+   :nosignatures:
+
+   env.bonds
+   env.chemenv
+   env.connectivity
+   env.coordination
+   env.lobster
+   env.summarise
+   env.voronoi
+```
+
+
+## iface
+
+```{eval-rst}
+.. autosummary::
+   :toctree: reference/
+   :nosignatures:
+
+   iface.build
+   iface.match
+   iface.reactivity
+```
+
+
+## mol
+
+```{eval-rst}
+.. autosummary::
+   :toctree: reference/
+   :nosignatures:
+
+   mol.bond_lengths
+   mol.bonds
+   mol.descriptors
+   mol.dissociation
+   mol.fragments
+   mol.from_molecules
+   mol.functional_groups
+   mol.match
+   mol.point_group
+   mol.quasirrho
+```
+
+
+## transform
+
+```{eval-rst}
+.. autosummary::
+   :toctree: reference/
+   :nosignatures:
+
+   transform.apply
+   transform.available
+   transform.chain
+   transform.expand
+   transform.oxidation_states
+   transform.setting
 ```
 
 
@@ -424,12 +570,16 @@ arguments — `obs['energy_{level}']` becomes `obs['energy_emt']` when you pass
 | `mv.pp.dedup` | `obs['duplicate_of']`, `obs['is_duplicate']`, `uns['dedup']` |
 | `mv.pp.describe` | `obs['formula']`, `obs['nsites']`, `obs['volume']`, `obs['density']`, `obs['n_elements']`, `obs['volume_per_atom']` |
 | `mv.pp.harmonize` | `obs['{energy_key}_harmonized']`, `uns['harmonize']` |
+| `mv.pp.locate_defect` | `obs['defect_a']`, `obs['defect_b']`, `obs['defect_c']`, `obs['defect_nearest_site']` |
 | `mv.pp.normalize_composition` | `layers['fraction']` |
+| `mv.pp.predict_volume` | `obs['predicted_volume']`, `obs['volume_scale']`, `obsm['structures']['{key_added}']` |
+| `mv.pp.prototype` | `obs['prototype']`, `obs['prototype_mineral']`, `obs['strukturbericht']` |
 | `mv.pp.qc` | `obs['min_distance']`, `obs['is_ordered']`, `obs['is_charge_balanced']`, `obs['is_valid']`, `obs['qc_reason']` |
 | `mv.pp.rattle` | `obsm['structures']['{name}']` |
 | `mv.pp.standardize` | `obsm['structures']['primitive']`, `obsm['structures']['conventional']`, `obs['spacegroup']`, `obs['spacegroup_number']`, `obs['crystal_system']`, `obs['nsites_primitive']` |
 | `mv.pp.strain` | `obsm['structures']['{name}']` |
 | `mv.pp.supercell` | `obsm['structures']['{name}']` |
+| `mv.pp.symmetry` | `obs['crystal_system']`, `obs['point_group']`, `obs['n_symmetry_operations']`, `obs['n_wyckoff']`, `obs['wyckoff']`, `obs['min_site_symmetry']`, `obs['max_site_symmetry']` |
 | `mv.feat.element_stats` | `obsm['X_element_stats']`, `uns['features']['X_element_stats']` |
 | `mv.feat.embed` | `obsm['X_{model}']`, `uns['features']['X_{model}']` |
 | `mv.feat.matminer` | `obsm['X_matminer']`, `uns['features']['X_matminer']` |
@@ -442,41 +592,76 @@ arguments — `obs['energy_{level}']` becomes `obs['energy_emt']` when you pass
 | `mv.tl.rank_elements_groups` | `uns['rank_elements_groups']` |
 | `mv.calc.committee` | `obs['energy_per_atom_{key}']`, `obs['energy_per_atom_{key}_std']`, `uns['levels']['{key}']` |
 | `mv.calc.energy` | `obs['energy_{level}']`, `obs['energy_per_atom_{level}']`, `uns['levels']['{level}']` |
-| `mv.calc.forces` | `uns['levels']['{level}']` |
+| `mv.calc.forces` | `uns['levels']['{level}']`, `sites.obsm['forces_{level}']`, `sites.obs['force_magnitude_{level}']` |
 | `mv.calc.relax` | `obsm['structures']['{key_added}']`, `obs['energy_{level}']`, `obs['energy_per_atom_{level}']`, `obs['relax_converged_{level}']`, `obs['max_force_{level}']`, `uns['levels']['{level}']` |
+| `mv.prop.capture` | `obs['capture_coefficient_{kind}']` |
 | `mv.prop.compare_grids` | `obs['{quantity}_cosine_{a}_vs_{b}']`, `obs['{quantity}_rmse_{a}_vs_{b}']`, `obs['{quantity}_overlap_{a}_vs_{b}']` |
+| `mv.prop.configuration_coordinate` | `obs['cc_frequency_{level}']`, `obs['cc_relaxation_{level}']`, `obs['cc_huang_rhys_{level}']` |
+| `mv.prop.cost` | `obs['cost_per_kg']`, `obs['cost_per_mol']` |
+| `mv.prop.dielectric` | `obsm['dielectric_real_{level}']`, `obsm['dielectric_imag_{level}']`, `obsm['absorption_{level}']`, `obsm['extinction_{level}']`, `obs['static_dielectric_{level}']`, `obs['refractive_index_{level}']`, `uns['grids']`, `uns['levels']['{level}']` |
+| `mv.prop.dimensionality` | `obs['dimensionality']`, `obs['n_components']`, `obs['is_layered']`, `obs['dimensionality_strategy']` |
+| `mv.prop.dispersion` | `obs['material']`, `obs['branch_index']`, `obs['branch_minimum']`, `obs['branch_maximum']`, `obs['is_imaginary']`, `obs['is_acoustic']` |
+| `mv.prop.efg` | `sites.obs['efg_vzz_{level}']`, `sites.obs['efg_asymmetry_{level}']`, `sites.obs['efg_coupling_{level}']`, `sites.obsm['efg_tensor_{level}']`, `uns['levels']['{level}']` |
 | `mv.prop.elastic` | `obs['bulk_modulus_{level}']`, `obs['shear_modulus_{level}']`, `obs['youngs_modulus_{level}']`, `obs['poisson_ratio_{level}']`, `obs['elastic_stable_{level}']`, `obsm['elastic_tensor_{level}']`, `uns['levels']['{level}']` |
+| `mv.prop.electrostatic` | `obs['electrostatic_energy']`, `obs['electrostatic_per_atom']`, `obs['electrostatic_per_formula_unit']` |
+| `mv.prop.eos` | `obs['bulk_modulus_eos_{level}']`, `obs['bulk_modulus_derivative_{level}']`, `obs['equilibrium_volume_{level}']`, `obs['equilibrium_energy_{level}']`, `obs['eos_residual_{level}']`, `obsm['eos_{level}']`, `uns['grids']`, `uns['levels']['{level}']` |
 | `mv.prop.free_energy` | `obs['vibrational_free_energy_{level}']`, `obs['vibrational_entropy_{level}']`, `obs['heat_capacity_{level}']` |
+| `mv.prop.frontier_orbitals` | `obs['homo_element']`, `obs['homo_orbital']`, `obs['homo_energy']`, `obs['lumo_element']`, `obs['lumo_orbital']`, `obs['lumo_energy']`, `obs['orbital_gap_estimate']`, `obs['likely_metal']` |
+| `mv.prop.neutron` | `obsm['neutron_{level}']`, `uns['grids']`, `uns['levels']['{level}']` |
+| `mv.prop.nmr` | `sites.obs['shielding_iso_{level}']`, `sites.obs['shielding_anisotropy_{level}']`, `sites.obs['shielding_asymmetry_{level}']`, `sites.obs['shielding_span_{level}']`, `sites.obs['shielding_skew_{level}']`, `sites.obsm['shielding_tensor_{level}']`, `uns['levels']['{level}']` |
 | `mv.prop.phonon` | `obsm['phonon_dos_{level}']`, `obs['n_imaginary_modes_{level}']`, `obs['dynamically_stable_{level}']`, `obs['zero_point_energy_{level}']`, `uns['grids']`, `uns['levels']['{level}']` |
+| `mv.prop.piezo_from_dfpt` | `obs['piezo_max_{level}']`, `obs['piezo_norm_{level}']`, `uns['piezo_from_dfpt']`, `uns['levels']['{level}']` |
+| `mv.prop.piezoelectric` | `obs['piezo_max_longitudinal_{level}']`, `obs['piezo_max_direction_{level}']`, `obs['piezo_symmetry_valid_{level}']`, `obsm['piezo_tensor_{level}']`, `uns['levels']['{level}']` |
+| `mv.prop.polarization` | `obs['polarization_a']`, `obs['polarization_b']`, `obs['polarization_c']`, `uns['polarization']` |
+| `mv.prop.quasiharmonic` | `obs['thermal_expansion_qha_{level}']`, `obs['gruneisen_{level}']`, `obs['debye_temperature_qha_{level}']`, `obs['heat_capacity_300K_{level}']`, `obsm['gibbs_{level}']`, `obsm['thermal_expansion_{level}']`, `uns['grids']`, `uns['levels']['{level}']` |
 | `mv.prop.rdf` | `obsm['rdf_{level}']`, `uns['grids']`, `uns['levels']['{level}']` |
+| `mv.prop.slme` | `obs['slme_{level}']`, `obs['sq_limit_{level}']` |
+| `mv.prop.supply_risk` | `obs['hhi_production']`, `obs['hhi_reserve']`, `obs['supply_risk']` |
+| `mv.prop.tem` | `obsm['tem_{level}']`, `uns['grids']`, `obs['tem_n_reflections_{level}']`, `obs['tem_strongest_{level}']`, `obs['tem_zone_axis']`, `uns['levels']['{level}']` |
 | `mv.prop.thermal_conductivity` | `obs['debye_temperature_{level}']`, `obs['gruneisen_{level}']`, `obs['sound_velocity_{level}']`, `obs['thermal_conductivity_{level}']` |
 | `mv.prop.xrd` | `obsm['xrd_{level}']`, `uns['grids']`, `uns['levels']['{level}']` |
 | `mv.md.conductivity` | `obs['conductivity_{species}_{level}']` |
 | `mv.md.melt_quench` | `obsm['structures']['amorphous_{level}']`, `obs['amorphous_density_{level}']`, `obs['amorphous_density_ratio_{level}']`, `uns['levels']['{level}']` |
+| `mv.md.occupancy` | `obs['occupied_fraction_{level}']`, `obs['occupancy_entropy_{level}']`, `obs['occupancy_peak_{level}']` |
+| `mv.md.rdf` | `obsm['rdf_md_{level}']`, `obsm['coordination_md_{level}']`, `uns['grids']`, `obs['first_shell_{level}']`, `obs['first_shell_coordination_{level}']`, `uns['levels']['{level}']` |
 | `mv.md.run` | `obs['md_energy_{level}']`, `obs['md_temperature_{level}']`, `obs['msd_{level}']`, `obs['diffusivity_{level}']`, `obs['md_volume_{level}']`, `layers['diffusivity_{level}']`, `obsm['structures']['md_{level}']`, `uns['levels']['{level}']` |
+| `mv.md.sites` | `obs['md_sites_{species}_{level}']`, `obs['md_site_spread_{species}_{level}']`, `obs['md_site_visits_{species}_{level}']` |
 | `mv.md.sweep` | `obsm['md_volume_{level}']`, `obsm['md_energy_{level}']`, `obsm['md_diffusivity_{level}']`, `obs['thermal_expansion_{level}']`, `obs['activation_energy_{level}']`, `uns['grids']`, `uns['levels']['{level}']` |
+| `mv.md.van_hove` | `obsm['van_hove_self_{level}']`, `obsm['van_hove_distinct_{level}']`, `uns['grids']`, `obs['van_hove_rms_{level}']`, `obs['van_hove_peak_{level}']`, `obs['van_hove_jump_{level}']` |
 | `mv.mag.describe` | `obs['total_magmom']`, `obs['absolute_magmom']`, `obs['magnetic_order']`, `obs['n_magnetic_species']` |
-| `mv.mag.ground_state` | `obs['magnetic_ordering_{level}']`, `obs['magnetic_spread_{level}']`, `obs['energy_per_atom_{level}']`, `obs['total_magmom_{level}']`, `obs['is_ground_state_{level}']` |
+| `mv.mag.exchange` | `obs['exchange_{level}']`, `obs['ordering_temperature_{level}']`, `uns['exchange']` |
+| `mv.mag.ground_state` | `md.obs['magnetic_ordering_{level}']`, `md.obs['magnetic_spread_{level}']`, `md.obs['energy_per_atom_{level}']`, `md.obs['total_magmom_{level}']`, `orderings_.obs['is_ground_state_{level}']` |
+| `mv.mag.jahn_teller` | `obs['jahn_teller_active']`, `obs['jahn_teller_strength']`, `obs['jahn_teller_species']`, `uns['jahn_teller']` |
+| `mv.mag.symmetry` | `obs['magnetic_symmetry_order']`, `obs['parent_symmetry_order']`, `obs['magnetic_symmetry_fraction']` |
 | `mv.neb.barrier` | `obs['barrier_{level}']`, `obs['barrier_reverse_{level}']`, `obs['reaction_energy_{level}']`, `obs['neb_converged_{level}']`, `obsm['neb_profile_{level}']`, `uns['grids']`, `uns['levels']['{level}']` |
 | `mv.neb.hop_endpoints` | `obsm['structures']['{key_added}_initial']`, `obsm['structures']['{key_added}_final']`, `obs['hop_distance']`, `obs['hop_species']` |
+| `mv.neb.percolation` | `obs['percolation_dimensionality_{species}']`, `obs['percolation_threshold_{species}']`, `obs['percolation_sites_{species}']` |
 | `mv.surf.adsorption_energy` | `obs['adsorption_energy_{level}']`, `obs['is_best_site_{level}']` |
-| `mv.surf.surface_energy` | `obs['surface_energy_{level}']` |
-| `mv.surf.wulff` | `obs['wulff_area_fraction_{level}']`, `obs['wulff_effective_radius_{level}']`, `obs['wulff_shape_factor_{level}']`, `uns['wulff']` |
+| `mv.surf.surface_energy` | `obs['surface_energy_{level}']`, `obs['surface_energy_{level}_off_stoichiometry']` |
+| `mv.surf.surface_energy_chempot` | `facets.obs['surface_energy_{level}']` |
+| `mv.surf.wulff` | `facets.obs['wulff_area_fraction_{level}']`, `bulk.obs['wulff_effective_radius_{level}']`, `bulk.obs['wulff_shape_factor_{level}']` |
+| `mv.thermo.chempot_diagram` | `obs['chempot_stable_{level}']`, `obs['chempot_window_{level}']`, `uns['chempot_diagram']` |
 | `mv.thermo.chempot_limits` | `uns['chempot_limits']` |
+| `mv.thermo.corrections` | `obs['energy_{level}-{scheme}']`, `obs['energy_per_atom_{level}-{scheme}']`, `obs['correction_{level}-{scheme}']`, `obs['correction_per_atom_{level}-{scheme}']`, `obs['run_type_{level}-{scheme}']`, `uns['levels']['{level}-{scheme}']`, `uns['corrections']` |
 | `mv.thermo.defect_formation` | `obs['defect_formation_energy_{level}']`, `obs['stable_charge_{level}']`, `obsm['formation_vs_fermi_{level}']`, `uns['grids']`, `uns['defect_thermodynamics']` |
+| `mv.thermo.fit_corrections` | `uns['fitted_corrections']`, `obs['correction_{level}']`, `obs['energy_corrected_{level}']` |
 | `mv.thermo.hull` | `obs['e_above_hull_{level}']`, `obs['is_stable_{level}']`, `obs['formation_energy_{level}']`, `obs['decomposes_to_{level}']`, `uns['phase_diagram']` |
 | `mv.thermo.pourbaix` | `obs['pourbaix_decomposition']`, `uns['pourbaix']` |
 | `mv.thermo.reaction` | `uns['reactions']` |
 | `mv.dft.read_dos` | `obsm['dos_{level}']`, `obs['band_gap_{level}']`, `obs['is_direct_gap_{level}']`, `obs['vbm_{level}']`, `obs['cbm_{level}']`, `obs['fermi_level_{level}']`, `obs['dos_at_fermi_{level}']`, `obs['is_metal_{level}']`, `uns['grids']`, `uns['levels']['{level}']` |
 | `mv.dft.read_outputs` | `obs['energy_{level}']`, `obs['energy_per_atom_{level}']`, `obs['band_gap_{level}']`, `obs['converged_{level}']`, `obsm['structures']['relaxed_{level}']`, `uns['levels']['{level}']`, `uns['dft']` |
 | `mv.dft.write_inputs` | `obs['dft_directory']`, `written to disk`, `uns['dft']` |
-| `mv.multi.aggregate` | `obs['{key_added}']` |
+| `mv.multi.aggregate` | `md.obs['{key_added}']` |
 | `mv.exp.attach` | `obsm['{quantity}_{level}']`, `uns['levels']['{level}']` |
+| `mv.exp.formation_hull` | `obs['e_above_hull_{level}']`, `obs['is_stable_{level}']`, `obs['formation_energy_{level}']` |
 | `mv.exp.match_xrd` | `obs['xrd_match']`, `obs['xrd_match_rank']`, `uns['xrd_match']` |
 | `mv.exp.measure` | `obs['{quantity}_{level}']`, `uns['levels']['{level}']` |
 | `mv.screen.filter` | `obs['{name}']`, `uns['screens']` |
 | `mv.screen.pareto` | `obs['{name}']`, `obs['{name}_rank']`, `uns['pareto']` |
 | `mv.screen.rank` | `obs['{name}']` |
+| `mv.gen.predict_dopants` | `obs['n_type_dopant']`, `obs['n_type_probability']`, `obs['p_type_dopant']`, `obs['p_type_probability']`, `uns['dopants']` |
+| `mv.gen.predict_hosts` | `obs['parent']`, `obs['target']`, `obs['host_probability']`, `obsm['structures']['input']` |
+| `mv.gen.predict_substitutions` | `obs['parent']`, `obs['substitution']`, `obs['substitution_probability']`, `obsm['structures']['input']` |
 | `mv.gen.validate` | `obs['gen_valid']`, `obs['gen_unique']`, `obs['gen_novel']`, `obs['gen_stable']`, `obs['gen_metastable']`, `obs['gen_sun']`, `obs['gen_msun']`, `uns['gen_validate']` |
 | `mv.model.cross_validate` | `uns['cross_validate']` |
 | `mv.model.fit` | `obs['{target}_{level}']`, `uns['levels']['{level}']`, `uns['model']` |
@@ -486,6 +671,8 @@ arguments — `obs['energy_{level}']` becomes `obs['energy_emt']` when you pass
 | `mv.opt.suggest` | `obs['acquisition']`, `obs['selected']`, `uns['{name}']` |
 | `mv.utils.checkpoint` | `written to disk`, `uns['checkpoints']` |
 | `mv.utils.convert` | `obs['{key_added}']`, `uns['units']` |
+| `mv.utils.job_status` | `uns['submissions']` |
 | `mv.utils.map_chunks` | `uns['chunked']` |
 | `mv.utils.set_units` | `uns['units']` |
 | `mv.utils.slurm_script` | `written to disk` |
+| `mv.utils.submit` | `uns['submissions']` |

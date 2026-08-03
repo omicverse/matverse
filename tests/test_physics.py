@@ -8,6 +8,7 @@ refactoring from a sign error.
 
 from __future__ import annotations
 
+import importlib.util
 import json
 
 import numpy as np
@@ -849,3 +850,274 @@ class TestConfigurationCoordinate:
                         coupling=1e-3)
         assert np.isfinite(
             float(md.obs["capture_coefficient_srh"].iloc[0]))
+
+
+_has_phonopy = importlib.util.find_spec("phonopy") is not None
+_has_seekpath = importlib.util.find_spec("seekpath") is not None
+
+
+@pytest.fixture(scope="module")
+def fcc_copper():
+    from pymatgen.core import Lattice, Structure
+    a = 3.61
+    return Structure(Lattice([[0, a / 2, a / 2], [a / 2, 0, a / 2],
+                              [a / 2, a / 2, 0]]), ["Cu"], [[0, 0, 0]])
+
+
+@pytest.mark.skipif(not _has_phonopy, reason="needs phonopy")
+class TestPhonopyMethod:
+    """The interpolated route, checked against things that are true of any
+    correct implementation rather than against my own numbers."""
+
+    @pytest.fixture(scope="class")
+    def both(self):
+        from pymatgen.core import Lattice, Structure
+        a = 3.61
+        fcc = Structure(Lattice([[0, a / 2, a / 2], [a / 2, 0, a / 2],
+                                 [a / 2, a / 2, 0]]), ["Cu"], [[0, 0, 0]])
+        out = {}
+        for method in ("commensurate", "phonopy"):
+            md = mv.data.from_structures([fcc])
+            mv.prop.phonon(md, level="emt", supercell=(3, 3, 3),
+                           method=method)
+            mv.prop.free_energy(md, level="emt", temperature=300.0)
+            out[method] = md
+        return out
+
+    def test_a_missing_phonopy_raises_rather_than_returning_nan(
+            self, fcc_copper, monkeypatch):
+        """The per-structure loop turns any exception into a NaN row and a
+        failure count, which is right for a structure that would not converge
+        and wrong for an absent dependency — it produced a full column of NaN
+        with no mention of phonopy. Caught by running the suite with phonopy
+        hidden, which is the only way this was ever going to show up."""
+        import builtins
+        real_import = builtins.__import__
+
+        def blocked(name, *args, **kwargs):
+            if name.split(".")[0] == "phonopy":
+                raise ImportError("No module named 'phonopy'")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", blocked)
+        md = mv.data.from_structures([fcc_copper])
+        with pytest.raises(ImportError, match="matverse\\[phonons\\]"):
+            mv.prop.phonon(md, level="emt", method="phonopy")
+
+    def test_an_unknown_method_is_refused(self, fcc_copper):
+        md = mv.data.from_structures([fcc_copper])
+        with pytest.raises(ValueError, match="commensurate"):
+            mv.prop.phonon(md, level="emt", method="phono3py")
+
+    def test_both_methods_agree_that_fcc_copper_is_stable(self, both):
+        for md in both.values():
+            assert bool(md.obs["dynamically_stable_emt"].iloc[0])
+            assert int(md.obs["n_imaginary_modes_emt"].iloc[0]) == 0
+
+    def test_the_two_methods_land_within_a_few_meV(self, both):
+        """Different sampling of the same force constants, so they may not
+        agree exactly — but a disagreement beyond ~10 meV/atom would mean one
+        of them is wrong, not merely coarser."""
+        f = [float(md.obs["vibrational_free_energy_emt"].iloc[0])
+             for md in both.values()]
+        assert abs(f[0] - f[1]) < 0.010
+
+    def test_the_interpolated_free_energy_is_the_lower_one(self, both):
+        """The commensurate route misses the low-frequency weight that a
+        converged mesh picks up near Gamma, and missing low-frequency weight
+        raises the free energy. This is the whole reason the method exists; if
+        it ever inverts, the q-point weights have been dropped again."""
+        assert (float(both["phonopy"].obs["vibrational_free_energy_emt"].iloc[0])
+                < float(both["commensurate"].obs[
+                    "vibrational_free_energy_emt"].iloc[0]))
+
+    def test_the_heat_capacity_reaches_the_dulong_petit_limit(self, fcc_copper):
+        """3 k_B per atom well above the Debye temperature — the check that
+        does not depend on the calculator being any good."""
+        md = mv.data.from_structures([fcc_copper])
+        mv.prop.phonon(md, level="emt", supercell=(3, 3, 3), method="phonopy")
+        mv.prop.free_energy(md, level="emt", temperature=2000.0)
+        c = float(md.obs["heat_capacity_emt"].iloc[0])
+        assert c == pytest.approx(3 * 8.617333262e-5, rel=0.02)
+
+    def test_the_zero_point_energy_does_not_depend_on_the_cell(self):
+        """Per-atom means per-atom: the same crystal described by its
+        primitive or its conventional cell must give the same number. This is
+        where a wrong divisor hides, because a single cell choice looks
+        plausible on its own."""
+        from pymatgen.core import Lattice, Structure
+        a = 3.61
+        primitive = Structure(Lattice([[0, a / 2, a / 2], [a / 2, 0, a / 2],
+                                       [a / 2, a / 2, 0]]), ["Cu"], [[0, 0, 0]])
+        conventional = Structure(
+            Lattice.cubic(a), ["Cu"] * 4,
+            [[0, 0, 0], [0, .5, .5], [.5, 0, .5], [.5, .5, 0]])
+        zpe = []
+        for cell in (primitive, conventional):
+            md = mv.data.from_structures([cell])
+            mv.prop.phonon(md, level="emt", supercell=(3, 3, 3),
+                           method="phonopy", mesh=(21, 21, 21))
+            zpe.append(float(md.obs["zero_point_energy_emt"].iloc[0]))
+        assert zpe[0] == pytest.approx(zpe[1], abs=1e-4)
+        # And it is copper's, roughly 30 meV/atom, not an order out.
+        assert 0.02 < zpe[0] < 0.05
+
+    def test_the_method_is_recorded_with_the_grid(self, both):
+        grids = both["phonopy"].uns["grids"]["phonon_dos"]
+        assert grids["method"] == "phonopy"
+        assert grids["mesh"] == [13, 13, 13]
+        assert both["commensurate"].uns["grids"]["phonon_dos"]["mesh"] is None
+
+    def test_the_mesh_is_actually_sampled(self, fcc_copper):
+        """A denser mesh must move the answer, or the mesh argument is being
+        ignored — which is exactly the bug a smoke test would not see."""
+        free = []
+        for mesh in ((3, 3, 3), (21, 21, 21)):
+            md = mv.data.from_structures([fcc_copper])
+            mv.prop.phonon(md, level="emt", supercell=(2, 2, 2),
+                           method="phonopy", mesh=mesh)
+            mv.prop.free_energy(md, level="emt", temperature=300.0)
+            free.append(float(md.obs["vibrational_free_energy_emt"].iloc[0]))
+        assert abs(free[0] - free[1]) > 1e-4
+
+
+@pytest.mark.skipif(not (_has_phonopy and _has_seekpath),
+                    reason="needs phonopy and seekpath")
+class TestPhononDispersion:
+    @pytest.fixture(scope="class")
+    def dispersed(self):
+        from pymatgen.core import Lattice, Structure
+        a = 3.61
+        fcc = Structure(Lattice([[0, a / 2, a / 2], [a / 2, 0, a / 2],
+                                 [a / 2, a / 2, 0]]), ["Cu"], [[0, 0, 0]])
+        bcc = Structure(Lattice.cubic(2.9), ["Cu", "Cu"],
+                        [[0, 0, 0], [0.5, 0.5, 0.5]])
+        md = mv.data.from_structures([fcc, bcc])
+        md.obs_names = ["fcc", "bcc"]
+        return mv.prop.dispersion(md, level="emt", supercell=(3, 3, 3))
+
+    def test_it_returns_a_bands_axis(self, dispersed):
+        from matverse._core import AXIS_KEY
+        assert dispersed.uns[AXIS_KEY] == "bands"
+        assert dispersed.uns["unit"] == "THz"
+        assert {"material", "branch_index", "is_acoustic"} <= set(
+            dispersed.obs.columns)
+
+    def test_three_acoustic_branches_per_material(self, dispersed):
+        counts = dispersed.obs.groupby("material", observed=True)[
+            "is_acoustic"].sum()
+        assert (counts == 3).all()
+
+    def test_the_acoustic_branches_vanish_at_gamma(self, dispersed):
+        """The path from seekpath starts at Gamma, and the three acoustic
+        branches are zero there by the translational sum rule. Any correct
+        implementation satisfies this; a wrong mass or a wrong cell does not."""
+        X = np.asarray(dispersed.X)
+        acoustic = X[np.asarray(dispersed.obs["is_acoustic"])]
+        assert np.abs(acoustic[:, 0]).max() < 0.05
+
+    def test_bcc_copper_is_unstable_and_fcc_is_not(self, dispersed):
+        """bcc Cu is dynamically unstable — this is the instability a
+        Gamma-only or coarsely commensurate calculation can miss entirely."""
+        by_material = dispersed.obs.groupby("material", observed=True)[
+            "is_imaginary"].any()
+        assert bool(by_material["bcc"])
+        assert not bool(by_material["fcc"])
+
+    def test_the_frequencies_are_physical_for_copper(self, dispersed):
+        """Copper's phonons top out near 7-8 THz. An order of magnitude out
+        means the units are wrong, which is the classic silent failure."""
+        assert 3.0 < float(np.asarray(dispersed.X).max()) < 15.0
+
+    def test_it_records_what_produced_it(self, dispersed):
+        assert dispersed.uns["dispersion"]["supercell"] == [3, 3, 3]
+        assert dispersed.uns["dispersion"]["n_failed"] == 0
+        assert "emt" in dispersed.uns["levels"]
+
+    def test_the_path_ticks_start_and_end_the_path(self, dispersed):
+        for name in ("fcc", "bcc"):
+            ticks = dispersed.uns["path_labels"][name]
+            assert min(ticks) == 0.0 and max(ticks) == 1.0
+            assert "Gamma" in ticks[0.0]        # every path starts at Gamma
+
+    def test_a_discontinuous_path_joins_both_endpoints(self, dispersed):
+        """Where the path jumps, the line stops at one point and resumes at
+        another, and both belong at that abscissa. Copper's conventional paths
+        contain such a jump in both phases, so a tick reading only one of them
+        would be mislabelling the plot."""
+        for name in ("fcc", "bcc"):
+            assert any("|" in text
+                       for text in dispersed.uns["path_labels"][name].values())
+
+    def test_the_ticks_land_where_the_acoustic_branches_return_to_zero(self):
+        """Gamma appears twice on this path and the acoustic branches are zero
+        at both, which ties the tick positions to the physics rather than to
+        my arithmetic on segment lengths.
+
+        Sampled at the native path length: phonopy takes 51 q-points per
+        segment, and resampling onto fewer than that interpolates across the
+        sharp V at an interior Gamma so it no longer reaches zero. That is a
+        documented artefact of sharing one abscissa between materials, not a
+        wrong tick, and 306 = 6 segments x 51 avoids it."""
+        from pymatgen.core import Lattice, Structure
+        a = 3.61
+        md = mv.data.from_structures([Structure(
+            Lattice([[0, a / 2, a / 2], [a / 2, 0, a / 2], [a / 2, a / 2, 0]]),
+            ["Cu"], [[0, 0, 0]])])
+        md.obs_names = ["fcc"]
+        ph = mv.prop.dispersion(md, level="emt", supercell=(3, 3, 3),
+                                n_points=306)
+        fraction = ph.var["path_fraction"].to_numpy(dtype=float)
+        acoustic = np.asarray(ph.X)[np.asarray(ph.obs["is_acoustic"])]
+        gammas = [f for f, text in ph.uns["path_labels"]["fcc"].items()
+                  if "Gamma" in text]
+        assert len(gammas) >= 2
+        for position in gammas:
+            column = int(np.argmin(np.abs(fraction - position)))
+            assert np.abs(acoustic[:, column]).max() < 0.01
+
+    def test_the_resampling_artefact_is_the_documented_size(self, dispersed):
+        """The notes claim ~0.08 THz at the default n_points and exactness at
+        the native length. A claim with a number in it should fail if the
+        number changes."""
+        fraction = dispersed.var["path_fraction"].to_numpy(dtype=float)
+        rows = np.asarray(dispersed.obs["material"]).astype(str) == "fcc"
+        acoustic = np.asarray(dispersed.X)[
+            rows & np.asarray(dispersed.obs["is_acoustic"])]
+        interior = [f for f, text in dispersed.uns["path_labels"]["fcc"].items()
+                    if "Gamma" in text and f > 0.0]
+        worst = max(
+            float(np.abs(acoustic[:, int(np.argmin(np.abs(fraction - g)))]
+                         ).max()) for g in interior)
+        assert worst < 0.2, "the artefact grew beyond what the notes describe"
+        # And the endpoint of the path is exact regardless of n_points.
+        assert np.abs(acoustic[:, 0]).max() < 0.01
+
+    def test_mv_pl_bands_plots_it_unchanged(self, dispersed):
+        """The claim in the registry notes, checked rather than asserted — it
+        was false when first written, because the object was missing the
+        var['path_fraction'] column mv.pl.bands reads."""
+        pytest.importorskip("matplotlib")
+        import matplotlib
+        matplotlib.use("Agg")
+        ax = mv.pl.bands(dispersed, materials=["fcc", "bcc"])
+        assert ax._matverse_n_bands == dispersed.n_obs
+        # And the ordinate says frequency, not electron energy.
+        assert "THz" in ax.get_ylabel()
+
+    def test_a_band_gap_is_refused_on_a_phonon_spectrum(self, dispersed):
+        """Same axis, different physics. Without the guard this returns a
+        plausible number in THz labelled as an electronic gap."""
+        md = mv.datasets.metals(["Cu"])
+        with pytest.raises(ValueError, match="phonon dispersion"):
+            mv.elec.band_features(dispersed, md, level="emt")
+
+    def test_failures_are_reported_not_silently_dropped(self, fcc_copper):
+        from pymatgen.core import Lattice, Structure
+        md = mv.data.from_structures([fcc_copper])
+        md.obs_names = ["only"]
+        with pytest.raises(ValueError, match="no dispersion"):
+            # Helium has no EMT parameters, so every force call raises.
+            bad = mv.data.from_structures(
+                [Structure(Lattice.cubic(3.0), ["He"], [[0, 0, 0]])])
+            mv.prop.dispersion(bad, level="emt")

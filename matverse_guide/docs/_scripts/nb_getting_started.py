@@ -474,6 +474,108 @@ metals.obs[["name", "vibrational_free_energy_emt",
             "vibrational_entropy_emt"]].round(4)"""),
 
     ("markdown", """\
+### The q-points a supercell cannot hold
+
+Everything above came from `method="commensurate"`: displace every atom of a
+supercell, read the forces, diagonalise. It needs nothing beyond ASE, and it
+samples only the q-points commensurate with the supercell — eight of them for a
+2x2x2.
+
+`method="phonopy"` fits force constants to the same displacements and
+interpolates them onto an arbitrary mesh. It is both more accurate and much
+cheaper, because symmetry collapses the displacement list: on fcc copper at
+3x3x3, 162 central-difference force calls become **one** inequivalent
+displacement, and the 300 K vibrational free energy goes from -13.1 meV/atom
+(commensurate 2x2x2) to -17.4, against a converged -17.3. A commensurate 4x4x4
+costing 384 force calls still only reaches -15.7. Those figures are for an
+ideal a = 3.61 A cell — a convergence sequence needs a fixed geometry — so they
+do not match the table below, which uses each metal's own EMT-relaxed cell.
+
+Four meV/atom is the order a hull decision turns on, so this is not a rounding
+detail. The default is nevertheless `"commensurate"`, because an answer that
+silently changed depending on whether phonopy happened to be installed would be
+worse than one that is merely coarse — `uns["grids"]` records which method
+produced a stored spectrum."""),
+
+    ("code", """\
+try:
+    import phonopy  # noqa: F401
+    for method in ("commensurate", "phonopy"):
+        mv.prop.phonon(metals, level="emt", source="relaxed_emt",
+                       supercell=(2, 2, 2), method=method)
+        mv.prop.free_energy(metals, level="emt", temperature=300.0)
+        metals.obs[f"F_{method}"] = metals.obs["vibrational_free_energy_emt"]
+    print(metals.obs[["name", "F_commensurate", "F_phonopy"]].round(5))
+except ImportError:
+    print("phonopy is not installed; pip install matverse[phonons]")"""),
+
+    ("markdown", """\
+Interpolation is also the only way to get a *dispersion*. A supercell holds a
+finite set of q-points and a dispersion is the continuous line between them, so
+`mv.prop.dispersion` needs phonopy and seekpath — the latter supplies the
+high-symmetry path.
+
+It returns a **bands-axis object** with the same layout `mv.elec.bands` uses for
+electronic bands: one row per branch, a normalised path coordinate for columns.
+That is why `mv.pl.bands` plots it unchanged."""),
+
+    ("code", """\
+from pymatgen.core import Lattice, Structure
+
+# fcc copper, which is what copper is, and bcc copper, which is not.
+both = mv.data.from_structures([
+    Structure(Lattice([[0, 1.805, 1.805], [1.805, 0, 1.805],
+                       [1.805, 1.805, 0]]), ["Cu"], [[0, 0, 0]]),
+    Structure(Lattice.cubic(2.9), ["Cu", "Cu"], [[0, 0, 0], [.5, .5, .5]]),
+])
+both.obs_names = ["fcc-Cu", "bcc-Cu"]
+
+try:
+    ph = mv.prop.dispersion(both, level="emt", supercell=(3, 3, 3))
+    print(ph.obs.groupby("material", observed=True)
+          .agg(lowest=("branch_minimum", "min"),
+               highest=("branch_maximum", "max"),
+               unstable=("is_imaginary", "any")).round(3))
+except ImportError:
+    print("needs phonopy and seekpath; pip install matverse[phonons]")"""),
+
+    ("markdown", """\
+That is the check a hull cannot make, and the reason the two cells above are
+fcc and bcc copper rather than the metals list: both sit at a perfectly ordinary
+energy, and only one of them is a structure that holds together. `is_imaginary`
+flags a branch that dips below zero *anywhere* on the path — bcc copper's goes
+to about -1.2 THz partway along, which a Gamma-point calculation never sees.
+
+The other thing to read off it is the acoustic branches, which must go to zero
+at Gamma because the translational sum rule says so. A few hundredths of a THz
+there is numerical; a whole THz means the structure was never relaxed.
+
+Both are visible when it is drawn — by `mv.pl.bands`, the same function that
+plots electronic bands, because it is the same axis. The two get their own
+panels rather than being overlaid, because they share the abscissa without
+sharing the path: fraction 0.33 is U|K for fcc and N for bcc, and one set of
+tick labels across both would be wrong for one of them. `uns["path_labels"]`
+holds the ticks per material for exactly that reason."""),
+
+    ("code", """\
+try:
+    import matplotlib.pyplot as plt
+
+    fig, axes = plt.subplots(1, 2, figsize=(11, 4), sharey=True)
+    for ax, name in zip(axes, ["fcc-Cu", "bcc-Cu"]):
+        mv.pl.bands(ph, materials=[name],
+                    labels=ph.uns["path_labels"][name], ax=ax)
+        ax.set_title(name)
+    fig.tight_layout()
+except (ImportError, NameError):
+    print("needs phonopy, seekpath and matplotlib")"""),
+
+    ("markdown", """\
+The dashed line at zero is where `mv.pl.bands` would normally draw the Fermi
+level. On a phonon spectrum it marks exactly the right thing: below it is
+imaginary. bcc copper goes under at **N**, bottoming at -1.2 THz — the N-point
+instability that is the standard reason bcc is not what copper does.
+
 ## Screening
 
 `mv.screen.filter` takes criteria as `column__operator=value` and **deposits** a

@@ -1080,7 +1080,10 @@ def bands(bands_obj: AnnData, materials=None, labels: dict | None = None,
     ax.set_xlim(float(fraction.min()), float(fraction.max()))
     ax.set_xlabel("fraction along the high-symmetry path"
                   if not labels else "")
-    ax.set_ylabel("E − E$_F$ (eV)")
+    # A phonon dispersion is the same object with a different ordinate, and
+    # mv.prop.dispersion says so in uns rather than leaving the axis labelled
+    # as electron energies.
+    ax.set_ylabel(str(bands_obj.uns.get("y_label", "E − E$_F$ (eV)")))
     if len(names) > 1:
         ax.legend(frameon=False, fontsize=8)
     for spine in ("top", "right"):

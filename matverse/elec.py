@@ -44,11 +44,10 @@ import numpy as np
 import pandas as pd
 from anndata import AnnData
 
-from ._core import deposit_grid, record, set_level, structures
+from ._core import AXIS_KEY, deposit_grid, record, set_level, structures
 from ._registry import register_function
 
-#: Set on a bands object so functions can tell the axes apart.
-AXIS_KEY = "matverse_axis"
+__all_axis__ = AXIS_KEY   # re-exported; the definition lives in _core
 
 #: Conventions for choosing the high-symmetry path.
 PATH_TYPES = {
@@ -307,6 +306,14 @@ def band_features(bands_obj: AnnData, md: AnnData, level: str = "dft") -> None:
     if bands_obj.uns.get(AXIS_KEY) != "bands":
         raise ValueError("this is not a bands object; build one with "
                          "mv.elec.bands or mv.elec.read_bands")
+    # mv.prop.dispersion builds the same axis for phonons, and a band gap is
+    # not a thing a phonon spectrum has. Without this it would return a
+    # plausible-looking number in THz labelled as an electronic gap.
+    if bands_obj.uns.get("quantity") == "phonon_frequency":
+        raise ValueError(
+            "this is a phonon dispersion, not an electronic band structure; "
+            "a band gap is not defined for it. For the phonon equivalents see "
+            "obs['is_imaginary'] on the object mv.prop.dispersion returned")
 
     X = np.asarray(bands_obj.X, dtype=float)
     material = bands_obj.obs["material"].astype(str).to_numpy()

@@ -17,9 +17,10 @@ from __future__ import annotations
 import warnings
 
 import numpy as np
+import pandas as pd
 from anndata import AnnData
 
-from ._core import deposit_grid, record, set_level, structures
+from ._core import AXIS_KEY, deposit_grid, record, set_level, structures
 from ._registry import register_function
 
 
@@ -846,15 +847,35 @@ def _moduli(C: np.ndarray):
                       "zero_point_energy_{level}"],
               "uns": ["grids"], "levels": ["{level}"]},
     prerequisites=["mv.calc.relax"],
-    dispatch="level= selects the calculator, as for mv.calc.energy",
+    dispatch="level= selects the calculator, as for mv.calc.energy; method= "
+             "selects how the force constants become a spectrum",
     examples=["mv.prop.phonon(md, level='emt', source='relaxed_emt')",
-              "mv.prop.phonon(md, level='emt', supercell=(2, 2, 2))"],
-    related=["mv.calc.relax", "mv.prop.free_energy", "mv.thermo.hull"],
-    notes="Gamma-point frozen phonons on a supercell: displace each atom, read "
-          "the forces, diagonalise. Cheap, and coarser than phonopy's full "
-          "q-mesh — a supercell samples only the q-points commensurate with it. "
-          "Run it on a relaxed structure; imaginary modes on an unrelaxed one "
-          "mean the geometry, not the material.\n\n"
+              "mv.prop.phonon(md, level='emt', supercell=(2, 2, 2))",
+              "mv.prop.phonon(md, level='emt', method='phonopy')"],
+    related=["mv.calc.relax", "mv.prop.free_energy", "mv.prop.dispersion",
+             "mv.thermo.hull"],
+    notes="Two methods, and the default is the worse one for a reason.\n\n"
+          "method='commensurate' (default) displaces every atom of the "
+          "supercell, reads the forces and diagonalises. It needs nothing "
+          "beyond ASE, and it samples only the q-points commensurate with the "
+          "supercell — 8 of them for a 2x2x2.\n\n"
+          "method='phonopy' fits force constants to a symmetry-reduced set of "
+          "displacements and interpolates them onto an arbitrary mesh. It is "
+          "both more accurate and far cheaper, and the gap is not small. On "
+          "fcc copper with EMT, the 300 K vibrational free energy is -13.1 "
+          "meV/atom from a commensurate 2x2x2, -15.7 from a 4x4x4 costing 384 "
+          "force calls, and -17.4 from phonopy on a 3x3x3 costing one — "
+          "symmetry reduces 162 displacements to a single inequivalent one. "
+          "The converged answer is -17.3. The default is off by 4 meV/atom, "
+          "which is the order of magnitude a hull decision turns on.\n\n"
+          "The default is nevertheless the commensurate route, because it is "
+          "reproducible without an optional dependency: a default that "
+          "silently changed its answer depending on whether phonopy happened "
+          "to be installed would be worse than one that is merely coarse. The "
+          "method is recorded in uns['grids'] so a stored DOS says which it "
+          "was. If phonopy is installed, pass method='phonopy'.\n\n"
+          "Run it on a relaxed structure either way; imaginary modes on an "
+          "unrelaxed one mean the geometry, not the material.\n\n"
           "An imaginary mode is the check a hull cannot make. A composition can "
           "sit on the convex hull and still be dynamically unstable, and "
           "generated structures fail this far more often than they fail the "
@@ -862,12 +883,29 @@ def _moduli(C: np.ndarray):
 )
 def phonon(md: AnnData, level: str = "emt", source: str = "input",
            supercell=(2, 2, 2), displacement: float = 0.01,
-           f_max: float = 15.0, n_bins: int = 200,
-           sigma: float = 0.3) -> None:
+           f_max: float = 15.0, n_bins: int = 200, sigma: float = 0.3,
+           method: str = "commensurate", mesh=(13, 13, 13)) -> None:
     """Phonon density of states by frozen displacements, in THz."""
     from pymatgen.io.ase import AseAtomsAdaptor
 
     from .calc import _get
+
+    if method not in ("commensurate", "phonopy"):
+        raise ValueError(f"method must be 'commensurate' or 'phonopy', got "
+                         f"{method!r}")
+    if method == "phonopy":
+        # Checked once here rather than left to the per-structure loop below,
+        # which turns any exception into a NaN row and a failure count. A
+        # missing dependency is not a structure that failed to converge, and
+        # reporting it as one gave a full column of NaN with no mention of
+        # phonopy anywhere.
+        try:
+            import phonopy                                # noqa: F401
+        except ImportError as exc:
+            raise ImportError(
+                f"method='phonopy' needs phonopy: `pip install "
+                f"matverse[phonons]`. The default method='commensurate' needs "
+                f"nothing beyond ASE. ({exc})") from exc
 
     factory, meta = _get(level)
     adaptor = AseAtomsAdaptor()
@@ -877,8 +915,12 @@ def phonon(md: AnnData, level: str = "emt", source: str = "input",
     rows, imaginary, stable, zpe, failed = [], [], [], [], 0
     for structure in structures(md, source):
         try:
-            frequencies = _frequencies(structure, supercell, adaptor,
-                                       calculator, displacement)
+            frequencies = (
+                _phonopy_frequencies(structure, supercell, calculator,
+                                     displacement, mesh)
+                if method == "phonopy" else
+                _frequencies(structure, supercell, adaptor,
+                             calculator, displacement))
             negative = int((frequencies < -_IMAGINARY_TOLERANCE).sum())
             real = frequencies[frequencies > _IMAGINARY_TOLERANCE]
             rows.append(_smear(real, grid, sigma))
@@ -886,7 +928,11 @@ def phonon(md: AnnData, level: str = "emt", source: str = "input",
             stable.append(negative == 0)
             # ZPE is the sum of hbar*omega/2 over modes, reported per atom so
             # it is comparable between cells of different size.
-            n_atoms = len(structure) * int(np.prod(supercell))
+            # phonopy returns frequencies per q-point of the primitive cell,
+            # so the mode count per atom is 3 either way and the divisor is
+            # whatever produced this frequency list.
+            n_atoms = (len(frequencies) / 3.0 if method == "phonopy"
+                       else len(structure) * int(np.prod(supercell)))
             zpe.append(float(0.5 * _THZ_TO_EV * real.sum() / n_atoms))
         except Exception:
             rows.append(np.full(len(grid), np.nan))
@@ -897,7 +943,8 @@ def phonon(md: AnnData, level: str = "emt", source: str = "input",
 
     deposit_grid(md, "phonon_dos", level, np.vstack(rows), grid, unit="THz",
                  supercell=list(supercell), displacement=displacement,
-                 smearing=sigma)
+                 smearing=sigma, method=method,
+                 mesh=list(mesh) if method == "phonopy" else None)
     md.obs[f"n_imaginary_modes_{level}"] = imaginary
     md.obs[f"dynamically_stable_{level}"] = stable
     md.obs[f"zero_point_energy_{level}"] = zpe
@@ -2282,3 +2329,263 @@ def configuration_coordinate(md: AnnData, coordinate: str = "Q",
     }
     record(md, "prop.configuration_coordinate", coordinate=coordinate,
            level=level, key_added=name)
+
+
+def _phonopy_frequencies(structure, supercell, calculator, displacement,
+                         mesh):
+    """Frequencies over a q-mesh, by interpolating the force constants.
+
+    The commensurate route diagonalises the supercell dynamical matrix, which
+    samples only the q-points the supercell can hold. phonopy fits force
+    constants to a symmetry-reduced set of displacements and then evaluates
+    them anywhere, so a converged mesh costs no extra force evaluations - and
+    usually far fewer, since symmetry collapses fcc copper's 162 displacements
+    at 3x3x3 to a single inequivalent one.
+    """
+    try:
+        import phonopy                                     # noqa: F401
+    except ImportError as exc:                             # pragma: no cover
+        raise ImportError(
+            f"method='phonopy' needs phonopy: `pip install phonopy`. The "
+            f"'commensurate' method needs nothing extra and is what runs by "
+            f"default. ({exc})") from exc
+
+    engine = _phonopy_engine(structure, supercell, calculator, displacement)
+    engine.run_mesh(list(mesh), with_eigenvectors=False)
+    # phonopy 4 deprecated the dict accessors in favour of result objects; the
+    # dicts are still what phonopy 3 offers, so both are supported.
+    result = getattr(engine, "mesh", None) or engine.get_mesh_dict()
+    # run_mesh returns the irreducible wedge, not the full mesh. Every q-point
+    # carries a multiplicity, and a density of states built without it is the
+    # wrong shape - on fcc copper, ignoring the weights moved the 300 K free
+    # energy by 5 meV/atom, which is larger than the error this method exists
+    # to remove.
+    frequencies = np.asarray(_field(result, "frequencies"), dtype=float)
+    weights = np.asarray(_field(result, "weights"), dtype=int)
+    return np.repeat(frequencies, weights, axis=0).ravel()
+
+
+@register_function(
+    aliases=["phonon dispersion", "phonon band structure", "phonon bands",
+             "dispersion", "phonon branches", "acoustic modes"],
+    category="prop",
+    description="Phonon dispersion along a high-symmetry path — one row per "
+                "branch per material, frequencies on a shared normalised path "
+                "coordinate, in THz.",
+    requires={"structures": ["{source}"]},
+    produces={"obs": ["material", "branch_index", "branch_minimum",
+                      "branch_maximum", "is_imaginary", "is_acoustic"]},
+    prerequisites=["mv.calc.relax"],
+    dispatch="level= selects the calculator, as for mv.calc.energy",
+    examples=["ph = mv.prop.dispersion(md, level='emt')",
+              "ph = mv.prop.dispersion(md, level='emt', supercell=(3, 3, 3))",
+              "mv.pl.bands(ph, materials=['Cu'])"],
+    related=["mv.prop.phonon", "mv.prop.free_energy", "mv.pl.bands",
+             "mv.elec.bands"],
+    notes="Returns a bands-axis AnnData with the same layout as "
+          "mv.elec.bands, so mv.pl.bands plots it unchanged — rows are "
+          "branches, columns are a normalised path coordinate. The axis is "
+          "'fraction along this material's own path', not a wavevector, so "
+          "two materials sharing the abscissa are not sharing q.\n\n"
+          "This needs phonopy, and it is the one thing the commensurate route "
+          "genuinely cannot do: a supercell holds only the q-points "
+          "commensurate with it, and a dispersion is a continuous line "
+          "between them. Interpolating force constants is what produces the "
+          "line.\n\n"
+          "The three lowest branches at Gamma are acoustic and must go to "
+          "zero there. They do not, quite — the sum rule that guarantees it "
+          "is only as good as the forces, so a few tenths of a THz at Gamma "
+          "is numerical, and a whole THz means the structure was not relaxed. "
+          "is_imaginary flags a branch that dips below zero anywhere on the "
+          "path, which is the instability a Gamma-only calculation misses.\n\n"
+          "One artefact to know about, which is the price of a shared "
+          "abscissa. phonopy samples 51 q-points per segment, and those are "
+          "then resampled onto n_points. Where n_points is smaller, the sharp "
+          "V the acoustic branches make at an *interior* Gamma is linearly "
+          "interpolated across and no longer reaches zero — 0.08 THz for fcc "
+          "copper at the default 200 against a native 306. The path endpoints "
+          "are exact regardless, and so is everything at n_points >= the "
+          "native length. Raise n_points if you are reading frequencies at "
+          "high-symmetry points rather than looking at the shape.\n\n"
+          "uns['path_labels'] holds {fraction: label} per material, ready to "
+          "pass to mv.pl.bands(labels=...). Two materials share the abscissa "
+          "without sharing the path, so those ticks are per material and "
+          "overlaying two different paths under one set of labels would "
+          "mislabel one of them.",
+)
+def dispersion(md: AnnData, level: str = "emt", source: str = "input",
+               supercell=(2, 2, 2), displacement: float = 0.01,
+               n_points: int = 200) -> AnnData:
+    """Phonon dispersion along a high-symmetry path. Returns a bands object."""
+    try:
+        from phonopy.phonon.band_structure import get_band_qpoints_by_seekpath
+    except ImportError as exc:                             # pragma: no cover
+        raise ImportError(
+            f"mv.prop.dispersion needs phonopy: `pip install phonopy`. For a "
+            f"density of states without it, use mv.prop.phonon, which falls "
+            f"back to a commensurate supercell. ({exc})") from exc
+
+    from .calc import _get
+
+    factory, meta = _get(level)
+    calculator = factory()
+
+    rows, material, material_index, branches = [], [], [], []
+    labels, failures = {}, []
+
+    for i, (name, structure) in enumerate(zip(md.obs_names,
+                                              structures(md, source))):
+        try:
+            engine = _phonopy_engine(structure, supercell, calculator,
+                                     displacement)
+            qpoints, point_labels, connections = \
+                get_band_qpoints_by_seekpath(engine.primitive, npoints=51)
+            engine.run_band_structure(qpoints, path_connections=connections,
+                                      labels=point_labels)
+            band = (getattr(engine, "band_structure", None)
+                    or engine.get_band_structure_dict())
+            # Segments are concatenated into one path, then resampled, so a
+            # material with more segments still shares the abscissa.
+            segments = [np.asarray(f, dtype=float)
+                        for f in _field(band, "frequencies")]
+            block = np.concatenate(segments, axis=0)
+            ticks = _path_ticks([len(f) for f in segments], point_labels,
+                                connections)
+        except Exception as exc:
+            failures.append(f"{name}: {type(exc).__name__}: {exc}")
+            continue
+
+        for b in range(block.shape[1]):
+            rows.append(_resample_path(block[:, b], n_points))
+            material.append(str(name))
+            material_index.append(i)
+            branches.append(b)
+        labels[str(name)] = ticks
+
+    if not rows:
+        raise ValueError(
+            "no dispersion could be computed for any structure"
+            + (f"; first failure was {failures[0]}" if failures else ""))
+
+    X = np.vstack(rows)
+    obs = pd.DataFrame({
+        "material": pd.Categorical(material),
+        "material_index": material_index,
+        "branch_index": branches,
+        "branch_minimum": X.min(axis=1),
+        "branch_maximum": X.max(axis=1),
+        "is_imaginary": X.min(axis=1) < -_IMAGINARY_TOLERANCE,
+        # The three lowest branches of each material are the acoustic ones.
+        "is_acoustic": [b < 3 for b in branches],
+    }, index=pd.Index([f"{m}:{b}" for m, b in zip(material, branches)],
+                      dtype=object))
+
+    # The same var convention mv.elec.bands uses, so mv.pl.bands accepts this
+    # object without knowing it is phonons rather than electrons.
+    var = pd.DataFrame(
+        {"path_fraction": np.linspace(0.0, 1.0, n_points)},
+        index=pd.Index([f"q{i}" for i in range(n_points)], dtype=object))
+
+    ph = AnnData(X=X, obs=obs, var=var)
+    ph.uns[AXIS_KEY] = "bands"
+    ph.uns["provenance"] = []
+    ph.uns["quantity"] = "phonon_frequency"
+    ph.uns["unit"] = "THz"
+    ph.uns["y_label"] = "frequency (THz)"
+    # {fraction: label}, ready to hand to mv.pl.bands(labels=...).
+    ph.uns["path_labels"] = labels
+    ph.uns["dispersion"] = {"level": level, "source": source,
+                            "supercell": list(supercell),
+                            "displacement": float(displacement),
+                            "n_failed": len(failures),
+                            "errors": failures[:10]}
+    set_level(ph, level, **meta, source=source, supercell=list(supercell),
+              displacement=displacement, n_failed=len(failures))
+    if failures:
+        warnings.warn(
+            f"{len(failures)} of {md.n_obs} structures produced no dispersion "
+            f"and are absent from the returned object; see "
+            f"uns['dispersion']['errors']. First: {failures[0]}",
+            RuntimeWarning, stacklevel=2)
+    record(md, "prop.dispersion", level=level, source=source,
+           supercell=list(supercell))
+    return ph
+
+
+def _resample_path(values: np.ndarray, n_points: int) -> np.ndarray:
+    """One branch onto a normalised path coordinate of fixed length."""
+    original = np.linspace(0.0, 1.0, len(values))
+    return np.interp(np.linspace(0.0, 1.0, n_points), original, values)
+
+
+def _phonopy_engine(structure, supercell, calculator, displacement):
+    """A Phonopy object with force constants already produced."""
+    from ase import Atoms
+    from phonopy import Phonopy
+    from phonopy.structure.atoms import PhonopyAtoms
+
+    cell = PhonopyAtoms(symbols=[site.specie.symbol for site in structure],
+                        cell=np.asarray(structure.lattice.matrix, dtype=float),
+                        scaled_positions=np.asarray(structure.frac_coords,
+                                                    dtype=float))
+    # The primitive matrix is resolved here rather than left to phonopy,
+    # because its default changed between phonopy 3 (identity) and 4 ('auto'),
+    # and a silent change of primitive cell changes the branch count, the
+    # per-atom normalisation and the high-symmetry path. 'auto' is the right
+    # choice - seekpath's path is defined on the primitive cell, and a
+    # conventional cell reports folded branches as if they were distinct - but
+    # passing the string still counts as relying on the default, so it is
+    # resolved to an explicit matrix.
+    try:
+        from phonopy.structure.cells import get_primitive_matrix_with_auto
+        primitive_matrix = get_primitive_matrix_with_auto(cell, "auto")
+    except ImportError:                                    # pragma: no cover
+        primitive_matrix = "auto"                          # older phonopy
+    engine = Phonopy(cell, supercell_matrix=np.diag(list(supercell)),
+                     primitive_matrix=primitive_matrix)
+    engine.generate_displacements(distance=float(displacement))
+
+    forces = []
+    for displaced in engine.supercells_with_displacements:
+        atoms = Atoms(symbols=displaced.symbols, cell=displaced.cell,
+                      scaled_positions=displaced.scaled_positions, pbc=True)
+        atoms.calc = calculator
+        forces.append(atoms.get_forces())
+    engine.forces = np.array(forces)
+    engine.produce_force_constants()
+    return engine
+
+
+def _field(result, name):
+    """One field of a phonopy result, whichever form this phonopy returns.
+
+    phonopy 4 returns result objects with attributes and deprecates the dict
+    accessors; phonopy 3 returns plain dicts.
+    """
+    return result[name] if isinstance(result, dict) else getattr(result, name)
+
+
+def _path_ticks(counts, labels, connections) -> dict:
+    """High-symmetry point labels keyed by normalised path fraction.
+
+    phonopy gives one label per distinct point along the path, which is one
+    more than the number of segments plus one extra for every discontinuity.
+    Where the path jumps, both endpoints belong at the same abscissa, so they
+    are joined - 'H|P' is the standard way of writing that the line stops at H
+    and resumes at P.
+    """
+    total = sum(counts)
+    if total < 2 or not labels:
+        return {}
+    ticks, position, index = {0.0: str(labels[0])}, 0, 0
+    for i, count in enumerate(counts):
+        position += count
+        index += 1
+        if (i < len(counts) - 1 and not connections[i]
+                and index + 1 < len(labels)):
+            text = f"{labels[index]}|{labels[index + 1]}"
+            index += 1
+        else:
+            text = str(labels[index]) if index < len(labels) else ""
+        ticks[round((position - 1) / (total - 1), 6)] = text
+    return ticks
