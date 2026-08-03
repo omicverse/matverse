@@ -24,6 +24,7 @@ against the references' own and refuses by default when they disagree.
 from __future__ import annotations
 
 import warnings
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -358,6 +359,8 @@ def chempot_limits(md: AnnData, level: str = "emt", source: str = "input",
                 "level and charge state, and find the charge transition levels "
                 "where the stable charge changes.",
     requires={"obs": ["energy_{level}", "parent", "defect"]},
+    dispatch="dielectric= adds the image-charge term; locpots= adds the "
+             "potential-alignment term on top of it",
     produces={"obs": ["defect_formation_energy_{level}",
                       "stable_charge_{level}"],
               "obsm": ["formation_vs_fermi_{level}"],
@@ -382,14 +385,26 @@ def chempot_limits(md: AnnData, level: str = "emt", source: str = "input",
           "Freysoldt correction, which needs only the cell, the charge and "
           "epsilon: it scales as q^2, as 1/epsilon, and as 1/L, so it matters "
           "most exactly where supercells are smallest.\n\n"
-          "It is half of the correction, and the half that is left out is "
-          "named rather than glossed. Freysoldt is an image-charge term plus "
-          "a potential-alignment term, and the second one needs the planar-"
-          "averaged electrostatic potential — a LOCPOT — from both the "
-          "defective and the pristine run. Supply that and doped or pydefect "
-          "will do the whole thing; what is here is exact for the part it "
-          "covers and absent for the part it does not, which is recorded in "
-          "uns['defect_thermodynamics']['correction_terms'].\n\n"
+          "**Pass locpots= as well for the other half.** Freysoldt is an "
+          "image-charge term plus a potential-alignment term, and the second "
+          "needs the planar-averaged electrostatic potential — a LOCPOT — "
+          "from both the defective and the pristine run. Give it a "
+          "{row name: path or Locpot} mapping covering the defect rows and "
+          "the host rows they name in obs['parent'], and both terms are "
+          "applied. Which ones were is recorded in "
+          "uns['defect_thermodynamics']['correction_terms'], and "
+          "['potential_alignment'] is a plain boolean.\n\n"
+          "The alignment enters as q * dV, so it is exactly linear in a rigid "
+          "shift of either potential and vanishes at q = 0 — which is what "
+          "makes it testable without a real LOCPOT.\n\n"
+          "The defect site is found by comparing the two cells rather than "
+          "with pymatgen's DefectSiteFinder, which fits a SOAP descriptor and "
+          "so needs dscribe — a package that cannot import at all on numpy "
+          ">= 2.5. For a vacancy, an interstitial or a substitution the "
+          "correspondence between the cells is one-to-one apart from the "
+          "defect, so matching sites by position answers it directly. "
+          "obs['defect_a', 'defect_b', 'defect_c'] from mv.pp.locate_defect "
+          "are used instead when present.\n\n"
           "Without dielectric= nothing is corrected and the uns flag says so, "
           "which is the older behaviour and still the right one for ranking "
           "neutral defects.",
@@ -397,7 +412,8 @@ def chempot_limits(md: AnnData, level: str = "emt", source: str = "input",
 def defect_formation(defective: AnnData, host: AnnData, level: str = "emt",
                      chempot: dict | None = None, band_gap: float = 2.0,
                      charges=(-2, -1, 0, 1, 2), n_points: int = 200,
-                     dielectric: float | None = None) -> None:
+                     dielectric: float | None = None,
+                     locpots: dict | None = None) -> None:
     """Defect formation energy against the Fermi level, per charge state."""
     from ._core import deposit_grid
 
@@ -431,6 +447,15 @@ def defect_formation(defective: AnnData, host: AnnData, level: str = "emt",
     corrections = np.zeros((defective.n_obs, len(charges)))
     correction_error = ""
 
+    if locpots is not None and dielectric is None:
+        raise ValueError(
+            "locpots= given without dielectric=; the alignment term is only "
+            "half of Freysoldt and applying it alone would be worse than "
+            "applying neither. Pass the bulk dielectric constant too")
+
+    alignment = np.zeros((defective.n_obs, len(charges)))
+    aligned = False
+
     if dielectric is not None:
         try:
             from pymatgen.analysis.defects.corrections.freysoldt import (
@@ -455,6 +480,13 @@ def defect_formation(defective: AnnData, host: AnnData, level: str = "emt",
                     correction_error = f"{type(exc).__name__}: {exc}"
                     corrections[i, j] = np.nan
 
+    if locpots is not None:
+        aligned, failures = _potential_alignment(
+            defective, parents, charges, float(dielectric), locpots,
+            alignment)
+        if failures:
+            correction_error = "; ".join(failures[:3])
+
     for i in range(defective.n_obs):
         bulk = host_energy.get(parents[i], np.nan)
         if not (np.isfinite(defect_energy[i]) and np.isfinite(bulk)):
@@ -475,11 +507,14 @@ def defect_formation(defective: AnnData, host: AnnData, level: str = "emt",
 
         base = float(defect_energy[i]) - float(bulk) + exchange
         neutral[i] = base
-        # E_f(q, E_F) = base + q * E_F + E_img(q), where E_img removes the
-        # spurious interaction of the charged defect with its own periodic
-        # images. It is positive, zero at q = 0, and zero throughout when no
-        # dielectric constant was given.
+        # E_f(q, E_F) = base + q * E_F + E_img(q) + q * dV, where E_img
+        # removes the spurious interaction of the charged defect with its own
+        # periodic images and q * dV realigns the two calculations' potential
+        # zeros. E_img is positive and zero at q = 0; both terms are zero
+        # throughout when no dielectric constant was given, and the alignment
+        # is zero unless locpots= supplied the potentials it needs.
         per_charge = np.vstack([base + q * fermi + corrections[i, j]
+                                + alignment[i, j]
                                 for j, q in enumerate(charges)])
         curves[i] = per_charge.min(axis=0)
         stable[i] = str(charges[int(np.argmin(per_charge[:, 0]))])
@@ -496,12 +531,20 @@ def defect_formation(defective: AnnData, host: AnnData, level: str = "emt",
         "missing_chempot": sorted(missing_chempot),
         "image_charge_correction": dielectric is not None,
         "dielectric": None if dielectric is None else float(dielectric),
-        "correction_terms": ("Freysoldt electrostatic (image-charge) only; "
-                             "the potential-alignment term needs a LOCPOT"
-                             if dielectric is not None else None),
+        "potential_alignment": bool(aligned),
+        "correction_terms": (
+            None if dielectric is None else
+            "Freysoldt, both terms: electrostatic (image-charge) and "
+            "potential alignment from the supplied LOCPOTs" if aligned else
+            "Freysoldt electrostatic (image-charge) only; the "
+            "potential-alignment term needs locpots="),
         "correction_error": correction_error or None,
-        "note": "uncorrected for periodic image interaction; doped and "
-                "pydefect implement Freysoldt and Kumagai properly",
+        "note": ("fully corrected in the Freysoldt sense" if aligned else
+                 "uncorrected for periodic image interaction; pass "
+                 "dielectric= and locpots= for the full Freysoldt correction"
+                 if dielectric is None else
+                 "image-charge corrected; pass locpots= for the alignment "
+                 "term as well"),
     }
     if missing_chempot:
         warnings.warn(
@@ -1064,3 +1107,94 @@ def fit_corrections(md: AnnData, experimental: str, level: str = "pbe",
     }
     record(md, "thermo.fit_corrections", level=level,
            experimental=experimental, species=list(species), key_added=name)
+
+
+def _potential_alignment(defective, parents, charges, dielectric, locpots,
+                         out) -> tuple[bool, list]:
+    """Fill ``out`` with the q * dV term of Freysoldt. Returns (did_any, errors).
+
+    ``locpots`` is keyed by row name, and a defect row's bulk reference is
+    found through obs['parent'] — the same link mv.pp.defects already records,
+    so nothing new has to be threaded through.
+    """
+    from pymatgen.analysis.defects.corrections.freysoldt import (
+        get_freysoldt_correction, perform_es_corr)
+    from pymatgen.analysis.defects.utils import QModel
+    from pymatgen.io.vasp.outputs import Locpot
+
+    def load(value):
+        return value if not isinstance(value, (str, Path)) else \
+            Locpot.from_file(str(value))
+
+    coordinate_columns = ("defect_a", "defect_b", "defect_c")
+    has_site = all(c in defective.obs for c in coordinate_columns)
+    defect_cells = structures(defective, "input")
+
+    model, done, errors = QModel(), False, []
+    for i, name in enumerate(map(str, defective.obs_names)):
+        parent = str(parents[i])
+        if name not in locpots or parent not in locpots:
+            errors.append(f"{name}: no LOCPOT for the defect or for its "
+                          f"parent {parent!r}")
+            continue
+        try:
+            defect_locpot, bulk_locpot = load(locpots[name]), load(
+                locpots[parent])
+            coords = ([float(defective.obs[c].iloc[i])
+                       for c in coordinate_columns] if has_site
+                      else _locate(defect_cells[i], bulk_locpot.structure))
+            for j, q in enumerate(charges):
+                if int(q) == 0:
+                    continue
+                total = get_freysoldt_correction(
+                    q=int(q), dielectric=dielectric,
+                    defect_locpot=defect_locpot, bulk_locpot=bulk_locpot,
+                    defect_frac_coords=coords).correction_energy
+                # get_freysoldt_correction returns both terms and the
+                # electrostatic one is already in `corrections`; subtracting
+                # the same perform_es_corr call leaves the alignment alone,
+                # rather than double-counting a term computed twice.
+                out[i, j] = float(total) - float(perform_es_corr(
+                    defect_locpot.structure.lattice, q=int(q),
+                    dielectric=dielectric, q_model=model))
+            done = True
+        except Exception as exc:
+            errors.append(f"{name}: {type(exc).__name__}: {exc}")
+            out[i, :] = np.nan
+    return done, errors
+
+
+def _locate(defect, bulk):
+    """Fractional coordinates of the defect, by comparing the two cells.
+
+    pymatgen's own fallback is DefectSiteFinder, which fits a SOAP descriptor
+    and so needs dscribe - a package that cannot import on numpy >= 2.5 at
+    all, and which for a defect matverse itself generated is answering a
+    harder question than the one being asked. The two structures are already
+    in hand and the correspondence is one-to-one apart from the defect, so
+    matching sites by position says directly which one it is.
+
+    Returns ``None`` if the two cells disagree by more than one site, which is
+    not a point defect and not something to guess at.
+    """
+    lattice = bulk.lattice
+    defect_frac = np.asarray(defect.frac_coords, dtype=float)
+    bulk_frac = np.asarray(bulk.frac_coords, dtype=float)
+    if not len(defect_frac) or not len(bulk_frac):
+        return None
+    distances = lattice.get_all_distances(bulk_frac, defect_frac)
+
+    if len(defect) == len(bulk) - 1:                       # vacancy
+        return list(bulk_frac[int(np.argmax(distances.min(axis=1)))])
+    if len(defect) == len(bulk) + 1:                       # interstitial
+        return list(defect_frac[int(np.argmax(distances.min(axis=0)))])
+    if len(defect) == len(bulk):                           # substitution
+        partner = distances.argmin(axis=1)
+        changed = [j for i, j in enumerate(partner)
+                   if bulk[i].specie.symbol != defect[int(j)].specie.symbol]
+        if len(changed) == 1:
+            return list(defect_frac[int(changed[0])])
+        # Nothing swapped: the cells differ only by relaxation, so the caller
+        # is asking where a defect is in a structure that has none.
+        return None
+    return None

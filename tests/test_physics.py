@@ -331,7 +331,11 @@ class TestDefectThermodynamics:
                                    chempot={"Cu": -3.5})
         recorded = defects.uns["defect_thermodynamics"]
         assert recorded["image_charge_correction"] is False
-        assert "pydefect" in recorded["note"]
+        assert recorded["potential_alignment"] is False
+        # And it says how to get the correction rather than only that it is
+        # absent, which is the difference between a caveat and a next step.
+        assert "dielectric=" in recorded["note"]
+        assert "locpots=" in recorded["note"]
 
     def test_it_needs_energies_on_both_objects(self, defective):
         defects, host = defective
@@ -576,7 +580,7 @@ class TestImageChargeCorrection:
     It needs only the cell, the charge and the dielectric constant — no LOCPOT
     — so its three scalings are exact and can be asserted rather than eyeballed:
     q squared, one over epsilon, one over the cell length. The half that does
-    need a LOCPOT is the potential alignment, and it is absent by design.
+    need a LOCPOT is the potential alignment; see TestPotentialAlignment.
     """
 
     @staticmethod
@@ -656,14 +660,17 @@ class TestImageChargeCorrection:
         assert corrected[0] == pytest.approx(plain[0], abs=1e-9)
 
     def test_it_says_which_half_it_did(self):
-        """The potential-alignment term is missing and must be named, not
-        left for the reader to discover."""
+        """With dielectric= alone only the electrostatic half is applied, and
+        the run must name the half it left out rather than leaving the reader
+        to discover it."""
         defects, host = self._system((2, 2, 2))
         out, _ = self._curve(defects, host, 10.0)
         record = out.uns["defect_thermodynamics"]
         assert record["image_charge_correction"] is True
+        assert record["potential_alignment"] is False
         assert record["dielectric"] == 10.0
-        assert "LOCPOT" in record["correction_terms"]
+        assert "image-charge) only" in record["correction_terms"]
+        assert "locpots=" in record["correction_terms"]
         assert record["correction_error"] is None
 
 
@@ -1121,3 +1128,184 @@ class TestPhononDispersion:
             bad = mv.data.from_structures(
                 [Structure(Lattice.cubic(3.0), ["He"], [[0, 0, 0]])])
             mv.prop.dispersion(bad, level="emt")
+
+
+@pytest.mark.skipif(not _has_defects_addon(),
+                    reason="pymatgen-analysis-defects is an optional extra")
+class TestPotentialAlignment:
+    """The other half of Freysoldt, the one that needs a LOCPOT.
+
+    There is no VASP output to test against, but the term does not need one to
+    be checked: it enters the formation energy as q * dV, so a rigid shift of
+    either potential must move every charge state by exactly q times that
+    shift, and must not move the neutral one at all. That is a statement about
+    the physics rather than about this implementation, and it is what a wrong
+    sign, a double-counted electrostatic term or a dropped charge factor would
+    all break.
+    """
+
+    LENGTH = 10.0
+    GRID = 32
+
+    @classmethod
+    def _system(cls):
+        from pymatgen.core import Lattice, Structure
+        bulk = Structure(Lattice.cubic(cls.LENGTH), ["Si"] * 4,
+                         [[0, 0, 0], [.5, .5, 0], [.5, 0, .5], [0, .5, .5]])
+        vacancy = Structure(Lattice.cubic(cls.LENGTH), ["Si"] * 3,
+                            [[0, 0, 0], [.5, .5, 0], [.5, 0, .5]])
+        host = mv.data.from_structures([bulk])
+        host.obs_names = ["bulk"]
+        host.obs["energy_emt"] = [-20.0]
+        defects = mv.data.from_structures([vacancy])
+        defects.obs_names = ["vac"]
+        defects.obs["parent"] = "bulk"
+        defects.obs["defect"] = "vacancy"
+        defects.obs["removed"] = "Si"
+        defects.obs["added"] = ""
+        defects.obs["energy_emt"] = [-15.0]
+        return defects, host, bulk, vacancy
+
+    @classmethod
+    def _potentials(cls, bulk, vacancy, shift):
+        from pymatgen.io.vasp.outputs import Locpot
+        flat = np.zeros((cls.GRID,) * 3)
+        return {"vac": Locpot(vacancy, {"total": flat + shift}),
+                "bulk": Locpot(bulk, {"total": flat})}
+
+    @classmethod
+    def _energy(cls, charge, shift):
+        defects, host, bulk, vacancy = cls._system()
+        mv.thermo.defect_formation(
+            defects, host=host, level="emt", chempot={"Si": -5.0},
+            band_gap=1.1, dielectric=10.0, charges=(charge,),
+            locpots=cls._potentials(bulk, vacancy, shift))
+        return defects, float(defects.obsm["formation_vs_fermi_emt"][0][0])
+
+    @pytest.mark.parametrize("charge", [-2, -1, 1, 2])
+    def test_a_rigid_shift_moves_the_energy_by_exactly_q_times_it(self, charge):
+        before = self._energy(charge, 0.0)[1]
+        after = self._energy(charge, 0.5)[1]
+        assert after - before == pytest.approx(charge * 0.5, abs=1e-4)
+
+    def test_the_neutral_state_is_untouched(self):
+        """q * dV is zero at q = 0. If the alignment were applied as a bare
+        potential difference rather than a charge times one, this is the test
+        that would catch it."""
+        assert self._energy(0, 0.0)[1] == pytest.approx(
+            self._energy(0, 0.75)[1], abs=1e-9)
+
+    def test_the_electrostatic_term_is_not_counted_twice(self):
+        """get_freysoldt_correction returns *both* terms, and the
+        electrostatic one is already applied from dielectric= alone. The shift
+        tests above cannot see a double count, because a constant offset in
+        the correction cancels out of a difference — so this one pins the
+        magnitude against pymatgen computed independently."""
+        from pymatgen.analysis.defects.corrections.freysoldt import (
+            get_freysoldt_correction, perform_es_corr)
+        from pymatgen.analysis.defects.utils import QModel
+
+        charge, shift = 1, 0.3
+        defects, host, bulk, vacancy = self._system()
+        potentials = self._potentials(bulk, vacancy, shift)
+        expected = (
+            float(get_freysoldt_correction(
+                q=charge, dielectric=10.0,
+                defect_locpot=potentials["vac"],
+                bulk_locpot=potentials["bulk"],
+                defect_frac_coords=[0.0, 0.5, 0.5]).correction_energy)
+            - float(perform_es_corr(vacancy.lattice, q=charge,
+                                    dielectric=10.0, q_model=QModel())))
+
+        with_locpots = self._energy(charge, shift)[1]
+        plain, _, _, _ = self._system()
+        mv.thermo.defect_formation(plain, host=host, level="emt",
+                                   chempot={"Si": -5.0}, band_gap=1.1,
+                                   dielectric=10.0, charges=(charge,))
+        without = float(plain.obsm["formation_vs_fermi_emt"][0][0])
+
+        assert with_locpots - without == pytest.approx(expected, abs=1e-6)
+
+    def test_it_says_which_terms_it_applied(self):
+        aligned = self._energy(1, 0.0)[0].uns["defect_thermodynamics"]
+        assert aligned["potential_alignment"] is True
+        assert "potential alignment" in aligned["correction_terms"]
+        assert aligned["correction_error"] is None
+
+        defects, host, _, _ = self._system()
+        mv.thermo.defect_formation(defects, host=host, level="emt",
+                                   chempot={"Si": -5.0}, band_gap=1.1,
+                                   dielectric=10.0)
+        plain = defects.uns["defect_thermodynamics"]
+        assert plain["potential_alignment"] is False
+        assert "image-charge) only" in plain["correction_terms"]
+
+    def test_alignment_without_a_dielectric_is_refused(self):
+        """Applying the alignment alone would be worse than applying neither,
+        so it is an error rather than a half-correction."""
+        defects, host, bulk, vacancy = self._system()
+        with pytest.raises(ValueError, match="half of Freysoldt"):
+            mv.thermo.defect_formation(
+                defects, host=host, level="emt", chempot={"Si": -5.0},
+                locpots=self._potentials(bulk, vacancy, 0.0))
+
+    def test_a_missing_locpot_is_reported_not_silently_skipped(self):
+        defects, host, bulk, vacancy = self._system()
+        potentials = self._potentials(bulk, vacancy, 0.0)
+        del potentials["bulk"]
+        mv.thermo.defect_formation(
+            defects, host=host, level="emt", chempot={"Si": -5.0},
+            band_gap=1.1, dielectric=10.0, locpots=potentials)
+        recorded = defects.uns["defect_thermodynamics"]
+        assert recorded["potential_alignment"] is False
+        assert "no LOCPOT" in recorded["correction_error"]
+
+
+class TestDefectSiteFromTwoCells:
+    """Locating the defect without dscribe, which cannot import on numpy 2.5."""
+
+    @staticmethod
+    def _cells():
+        from pymatgen.core import Lattice, Structure
+        lattice = Lattice.cubic(8.0)
+        bulk = Structure(lattice, ["Cu"] * 4,
+                         [[0, 0, 0], [.5, .5, 0], [.5, 0, .5], [0, .5, .5]])
+        return lattice, bulk
+
+    def test_a_vacancy_is_the_site_that_went_missing(self):
+        from matverse.thermo import _locate
+        from pymatgen.core import Structure
+        lattice, bulk = self._cells()
+        vacancy = Structure(lattice, ["Cu"] * 3,
+                            [[0, 0, 0], [.5, .5, 0], [.5, 0, .5]])
+        assert _locate(vacancy, bulk) == pytest.approx([0.0, 0.5, 0.5])
+
+    def test_an_interstitial_is_the_site_that_appeared(self):
+        from matverse.thermo import _locate
+        from pymatgen.core import Structure
+        lattice, bulk = self._cells()
+        interstitial = Structure(
+            lattice, ["Cu"] * 5,
+            [[0, 0, 0], [.5, .5, 0], [.5, 0, .5], [0, .5, .5],
+             [.25, .25, .25]])
+        assert _locate(interstitial, bulk) == pytest.approx([.25, .25, .25])
+
+    def test_a_substitution_is_the_site_whose_species_changed(self):
+        from matverse.thermo import _locate
+        from pymatgen.core import Structure
+        lattice, bulk = self._cells()
+        substituted = Structure(lattice, ["Cu", "Cu", "Al", "Cu"],
+                                [[0, 0, 0], [.5, .5, 0], [.5, 0, .5],
+                                 [0, .5, .5]])
+        assert _locate(substituted, bulk) == pytest.approx([0.5, 0.0, 0.5])
+
+    def test_no_defect_and_too_many_defects_both_give_nothing(self):
+        """Guessing would be worse than declining. A cell that differs by two
+        sites is not a point defect, and one that differs by none has no
+        defect to locate."""
+        from matverse.thermo import _locate
+        from pymatgen.core import Structure
+        lattice, bulk = self._cells()
+        assert _locate(bulk, bulk) is None
+        assert _locate(Structure(lattice, ["Cu"] * 2,
+                                 [[0, 0, 0], [.5, .5, 0]]), bulk) is None

@@ -284,14 +284,36 @@ than trust. Double epsilon and it halves; go from a 2×2×2 to a 3×3×3 superce
 and it falls by 3/2; set $q=0$ and it vanishes. All three are asserted in the
 test suite.
 
-```{warning}
-This is **half** of the Freysoldt correction. The other half is a
+```{note}
+That is **half** of the Freysoldt correction. The other half is a
 potential-alignment term computed from the planar-averaged electrostatic
-potential of both the defective and the pristine cell — a LOCPOT — and matverse
-does not have one. `uns['defect_thermodynamics']['correction_terms']` says so on
-every run rather than leaving you to infer it. For the complete correction, hand
-your LOCPOTs to doped or pydefect.
-```"""),
+potential of both the defective and the pristine cell — a LOCPOT. Pass
+`locpots=` and matverse applies it too;
+`uns['defect_thermodynamics']['correction_terms']` says which terms a given run
+actually used, and `['potential_alignment']` is a plain boolean.
+```
+
+The mapping is keyed by row name and covers both the defect rows and the host
+rows they name in `obs['parent']`, so nothing extra has to be threaded through.
+Values may be paths or `Locpot` objects.
+
+```python
+mv.thermo.defect_formation(
+    defective, host, level="pbe", dielectric=11.7,
+    locpots={"V_Si-0": "runs/vac/LOCPOT", "Si-bulk": "runs/bulk/LOCPOT"},
+)
+```
+
+The alignment enters as $q\,\Delta V$, so it is exactly linear in a rigid shift
+of either potential and vanishes at $q=0$. That is what makes it checkable
+without a real LOCPOT, and the suite checks it: shift one potential by 0.5 eV
+and every charge state moves by exactly $q \times 0.5$ eV.
+
+Finding the defect site is done by comparing the two cells rather than with
+pymatgen's `DefectSiteFinder`, which fits a SOAP descriptor and needs dscribe —
+a package that cannot import at all on numpy ≥ 2.5. For a vacancy, an
+interstitial or a substitution the two cells correspond one-to-one apart from
+the defect, so matching sites by position answers it directly."""),
 
     ("markdown", """\
 ## What it costs to move
