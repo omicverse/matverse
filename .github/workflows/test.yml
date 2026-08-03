@@ -90,7 +90,10 @@ jobs:
           "
 
       - name: Test the self-consistent phonons
-        run: pytest tests/test_physics.py -q -k "SelfConsistentPhonons"
+        # Slow — the self-consistent solves dominate, and they are run past
+        # the defaults on purpose because these tests assert a specific
+        # physical outcome and so have to be where it has converged.
+        run: pytest tests/test_physics.py -q -k "SelfConsistentPhonons" --durations=5
 
   docs:
     runs-on: ubuntu-latest

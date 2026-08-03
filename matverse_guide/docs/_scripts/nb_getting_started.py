@@ -602,7 +602,7 @@ try:
     lattices.obs_names = ["bcc", "fcc", "sc"]
 
     mv.prop.phonon_at_temperature(
-        lattices, level="emt", temperatures=(50., 300., 600., 900.),
+        lattices, level="emt", temperatures=(5., 25., 300., 600.),
         supercell=(5, 5, 5), cutoff=5.0)
 
     counts = lattices.obsm["imaginary_modes_vs_temperature_emt"]
@@ -618,11 +618,17 @@ because the environment that builds them runs numpy 2.5 and hiphive cannot.
 These are the values it produces where hiphive is installed, and the suite
 asserts every one of them:
 
-| | 50 K | 300 K | verdict |
-|---|---|---|---|
-| bcc | unstable | stable | **stabilised at 300 K** |
-| fcc | stable | stable | already stable at the lowest scanned |
-| sc | unstable | unstable | never stabilised in range |
+| | 5 K | 25 K | 300 K | verdict |
+|---|---|---|---|---|
+| bcc | 4 imaginary | 4 imaginary | none | **stabilised at 300 K** |
+| fcc | none | none | none | already stable at the lowest scanned |
+| sc | unstable | unstable | unstable | never stabilised in range |
+
+The scanned temperatures jump from 25 K to 300 K deliberately. bcc copper
+stabilises somewhere between 25 K and 100 K with this calculator, and *exactly*
+where moves with the convergence — 8 iterations put it at 100 K, 30 put it at
+50 K. The transition is resolved no better than the spacing you scan at, so
+bracket it rather than reading the number as exact.
 
 Three lattices, three different answers, and the reason for running all three
 is that the column can be NaN for two opposite reasons.

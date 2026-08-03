@@ -2624,7 +2624,7 @@ def _path_ticks(counts, labels, connections) -> dict:
           "best describe the potential energy surface *sampled at* a "
           "temperature, iterating until the phonons used to generate the "
           "displacements agree with the phonons fitted to them.\\n\\n"
-          "On bcc copper with EMT there are four imaginary modes at 50 K and "
+          "On bcc copper with EMT there are four imaginary modes at 5 K and "
           "none from 300 K upward — the standard behaviour of bcc metals, "
           "invisible to a harmonic calculation. fcc copper is stable "
           "throughout and simple cubic copper is unstable throughout, which "
@@ -2652,6 +2652,15 @@ def _path_ticks(counts, labels, connections) -> dict:
           "iteration run for a fixed number of steps, so it does not report "
           "its own convergence, and anything above a few percent means the "
           "number is where the walk stopped.\\n\\n"
+          "The defaults are 20 iterations and 25 structures because 8 and 15 "
+          "were not enough and the difference was invisible on one machine. "
+          "Across five seeds locally, 8 iterations gave the right answer "
+          "every time with a worst drift of 0.023; the same settings on CI "
+          "produced 22 imaginary modes where there should have been none, on "
+          "a solve whose drift exceeded the 5% threshold. The stochastic "
+          "sampling differs with the BLAS underneath, so a setting that "
+          "converges on the machine it was tuned on is not a setting that "
+          "converges. Twenty iterations bring the worst drift to 0.007.\\n\\n"
           "The cutoff must be shorter than half the shortest supercell "
           "dimension or the force constants wrap around onto themselves; the "
           "check is made here rather than left to a confusing failure deep "
@@ -2661,7 +2670,7 @@ def phonon_at_temperature(md: AnnData, level: str = "emt",
                           source: str = "input",
                           temperatures=(100.0, 300.0, 600.0, 900.0),
                           supercell=(4, 4, 4), cutoff: float = 4.0,
-                          n_structures: int = 15, n_iterations: int = 10,
+                          n_structures: int = 25, n_iterations: int = 20,
                           alpha: float = 0.2, mesh=(9, 9, 9),
                           seed: int = 0) -> None:
     """Self-consistent phonons versus temperature. Deposits; returns ``None``."""
