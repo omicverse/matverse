@@ -576,6 +576,83 @@ level. On a phonon spectrum it marks exactly the right thing: below it is
 imaginary. bcc copper goes under at **N**, bottoming at -1.2 THz — the N-point
 instability that is the standard reason bcc is not what copper does.
 
+### Unstable at zero kelvin, and real anyway
+
+`dynamically_stable_emt` is a statement about **0 K**, and a great many real
+materials fail it and exist regardless. bcc metals and cubic perovskites are
+unstable in the harmonic approximation and are held up by anharmonicity at the
+temperature they are actually used at. Discarding them from a screen because a
+0 K calculation called them unstable is discarding the answer.
+
+`mv.prop.phonon_at_temperature` is what that costs to check. Instead of
+expanding about the 0 K minimum it fits the effective harmonic force constants
+that best describe the potential energy surface *sampled at* a temperature,
+iterating until the phonons generating the displacements agree with the phonons
+fitted to them."""),
+
+    ("code", """\
+try:
+    from ase.build import bulk
+    from pymatgen.io.ase import AseAtomsAdaptor
+
+    adaptor = AseAtomsAdaptor()
+    lattices = mv.data.from_structures([
+        adaptor.get_structure(bulk("Cu", kind, a=a, cubic=False))
+        for kind, a in (("bcc", 2.9), ("fcc", 3.61), ("sc", 2.4))])
+    lattices.obs_names = ["bcc", "fcc", "sc"]
+
+    mv.prop.phonon_at_temperature(
+        lattices, level="emt", temperatures=(5., 25., 300., 600.),
+        supercell=(5, 5, 5), cutoff=5.0)
+
+    counts = lattices.obsm["imaginary_modes_vs_temperature_emt"]
+    verdicts = lattices.uns["self_consistent_phonons"]["emt"]["verdict"]
+    for name, row, verdict in zip(lattices.obs_names, counts, verdicts):
+        print(f"{name:4s} imaginary modes {row.astype(int)}  -> {verdict}")
+except ImportError:
+    print("needs hiphive; pip install matverse[anharmonic]")"""),
+
+    ("markdown", """\
+The cell above prints a fallback rather than a table in the rendered docs,
+because the environment that builds them runs numpy 2.5 and hiphive cannot.
+These are the values it produces where hiphive is installed, and the suite
+asserts every one of them:
+
+| | 5 K | 25 K | 300 K | verdict |
+|---|---|---|---|---|
+| bcc | 4 imaginary | 4 imaginary | none | **stabilised at 300 K** |
+| fcc | none | none | none | already stable at the lowest scanned |
+| sc | unstable | unstable | unstable | never stabilised in range |
+
+The scanned temperatures jump from 25 K to 300 K deliberately. bcc copper
+stabilises somewhere between 25 K and 100 K with this calculator, and *exactly*
+where moves with the convergence — 8 iterations put it at 100 K, 30 put it at
+50 K. The transition is resolved no better than the spacing you scan at, so
+bracket it rather than reading the number as exact.
+
+Three lattices, three different answers, and the reason for running all three
+is that the column can be NaN for two opposite reasons.
+`obs['stabilisation_temperature_emt']` is 300 K for bcc and **NaN for both of
+the others** — once because there was nothing to stabilise, once because nothing
+did. A NaN meaning two opposite things is worse than no column, so
+`uns['self_consistent_phonons'][level]['verdict']` says which.
+
+```{note}
+hiphive reaches numba through its own dependencies, and numba caps numpy below
+2.5, so `matverse[anharmonic]` cannot share an environment with the newest
+numpy. It has a CI job of its own for that reason — installing it alongside the
+rest would quietly downgrade numpy on the leg that exists to test the newest
+one.
+```
+
+Two diagnostics are recorded because both change the answer silently.
+`n_free_parameters` is the size of the cluster space — a strongly unstable cell
+with only four gave imaginary modes *reappearing* at higher temperature, which
+is not physics, and eleven did not. `convergence_drift` is how much the
+parameters were still moving over the last five iterations; this is a
+fixed-point iteration run for a fixed number of steps, so it does not report its
+own convergence.
+
 ## Screening
 
 `mv.screen.filter` takes criteria as `column__operator=value` and **deposits** a

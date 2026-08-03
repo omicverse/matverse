@@ -62,6 +62,39 @@ jobs:
         # failing assertion.
         run: pytest tests/test_contracts.py -q -s -k "rate or audit"
 
+  anharmonic:
+    # A job of its own, because hiphive reaches numba through trainstation and
+    # numba caps numpy below 2.5. Installing it alongside the others would
+    # quietly downgrade numpy on the 3.12 leg, which exists precisely to test
+    # the newest numpy — the extra would be tested at the cost of no longer
+    # testing what that leg is for.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev,phonons,anharmonic]"
+
+      - name: Show that numpy really is the older line here
+        run: |
+          python -c "
+          import importlib.metadata as m
+          for p in ('numpy','hiphive','phonopy'):
+              print(f'{p:10s} {m.version(p)}')
+          "
+
+      - name: Test the self-consistent phonons
+        # Slow — the self-consistent solves dominate, and they are run past
+        # the defaults on purpose because these tests assert a specific
+        # physical outcome and so have to be where it has converged.
+        run: pytest tests/test_physics.py -q -k "SelfConsistentPhonons" --durations=5
+
   docs:
     runs-on: ubuntu-latest
     steps:

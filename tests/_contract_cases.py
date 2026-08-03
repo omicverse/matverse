@@ -806,6 +806,12 @@ def cases(tmp):
         (mv.prop.dispersion, relaxed_metal, (),
          {"level": "emt", "source": "relaxed_emt", "supercell": (2, 2, 2),
           "n_points": 40, "returns": "new"}),
+        # Skipped by the probe wherever hiphive is absent, which is
+        # everywhere except its own CI job — it pins numpy below 2.5.
+        (mv.prop.phonon_at_temperature, relaxed_metal, (),
+         {"level": "emt", "source": "relaxed_emt", "temperatures": (300.0,),
+          "supercell": (4, 4, 4), "cutoff": 3.5, "n_structures": 6,
+          "n_iterations": 3}),
         (mv.prop.quasiharmonic, relaxed_metal, (),
          {"level": "emt", "source": "relaxed_emt", "t_max": 500.0,
           "scales": [0.96, 0.98, 1.0, 1.02, 1.04]}),

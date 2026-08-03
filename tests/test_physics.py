@@ -1317,3 +1317,141 @@ class TestDefectSiteFromTwoCells:
         assert _locate(bulk, bulk) is None
         assert _locate(Structure(lattice, ["Cu"] * 2,
                                  [[0, 0, 0], [.5, .5, 0]]), bulk) is None
+
+
+_has_hiphive = importlib.util.find_spec("hiphive") is not None
+
+
+@pytest.mark.skipif(not _has_hiphive, reason="needs hiphive")
+class TestSelfConsistentPhonons:
+    """Phonons at temperature, which is a different question from phonons.
+
+    obs['dynamically_stable_{level}'] is a statement about 0 K, and a great
+    many real materials fail it and exist anyway. These tests use the three
+    copper lattices because they give the three different answers this can
+    return, and because which one each gives is known independently.
+    """
+
+    @staticmethod
+    def _lattice(kind, a):
+        from ase.build import bulk
+        from pymatgen.io.ase import AseAtomsAdaptor
+        return AseAtomsAdaptor().get_structure(bulk("Cu", kind, a=a,
+                                                    cubic=False))
+
+    @pytest.fixture(scope="class")
+    def sampled(self):
+        md = mv.data.from_structures([self._lattice("bcc", 2.9),
+                                      self._lattice("fcc", 3.61),
+                                      self._lattice("sc", 2.4)])
+        md.obs_names = ["bcc", "fcc", "sc"]
+        # Deliberately past the defaults. This is a stochastic fixed-point
+        # iteration and the tests below assert a specific physical outcome, so
+        # they have to be run where it has actually converged - at 8
+        # iterations CI produced 22 imaginary modes at 300 K where there
+        # should be none, on a solve that the drift diagnostic flagged.
+        # 5 K is safely below the transition and 300 K safely above it. 50 K
+        # is not: bcc copper stabilises between 25 K and 100 K here, and
+        # exactly where moves with the convergence - 8 iterations put it at
+        # 100 K and 30 put it at 50 K. Asserting a point that sits on the
+        # boundary is asserting the resolution limit, not the physics.
+        mv.prop.phonon_at_temperature(
+            md, level="emt", temperatures=(5., 25., 300., 600.),
+            supercell=(5, 5, 5), cutoff=5.0, n_structures=30,
+            n_iterations=30)
+        return md
+
+    @staticmethod
+    def _drift(md):
+        return np.asarray(md.uns["self_consistent_phonons"]["emt"][
+            "convergence_drift"], dtype=float)
+
+    def test_the_fixture_actually_converged(self, sampled):
+        """Run first so that a convergence failure is named as one rather than
+        showing up as the physics being wrong."""
+        assert (self._drift(sampled) < 0.05).all()
+
+    def test_bcc_copper_is_unstable_cold_and_stable_warm(self, sampled):
+        """The whole point. bcc metals are unstable in the harmonic
+        approximation and stabilised by anharmonicity at temperature; a screen
+        that discarded them on the 0 K answer would discard the answer."""
+        assert (self._drift(sampled)[0] < 0.05).all(), "did not converge"
+        counts = sampled.obsm["imaginary_modes_vs_temperature_emt"][0]
+        assert (counts[:2] > 0).all()          # 5 K and 25 K: unstable
+        assert (counts[2:] == 0).all()         # 300 K and 600 K: stable
+        assert float(
+            sampled.obs["stabilisation_temperature_emt"].iloc[0]) == 300.0
+
+    def test_fcc_copper_never_needed_stabilising(self, sampled):
+        """NaN here means 'already stable at the lowest temperature scanned',
+        which is a different thing from 'never stabilised' and must not be
+        read as the same."""
+        assert (sampled.obsm["imaginary_modes_vs_temperature_emt"][1] == 0).all()
+        assert np.isnan(
+            float(sampled.obs["stabilisation_temperature_emt"].iloc[1]))
+        assert "already stable" in \
+            sampled.uns["self_consistent_phonons"]["emt"]["verdict"][1]
+
+    def test_simple_cubic_copper_is_stabilised_by_nothing(self, sampled):
+        """The other NaN. Same column, opposite meaning."""
+        assert (sampled.obsm["imaginary_modes_vs_temperature_emt"][2] > 0).all()
+        assert np.isnan(
+            float(sampled.obs["stabilisation_temperature_emt"].iloc[2]))
+        assert "unstable at every" in \
+            sampled.uns["self_consistent_phonons"]["emt"]["verdict"][2]
+
+    def test_the_two_nans_are_told_apart(self, sampled):
+        """A NaN that means two opposite things is worse than no column."""
+        verdicts = sampled.uns["self_consistent_phonons"]["emt"]["verdict"]
+        assert verdicts[1] != verdicts[2]
+
+    def test_the_answer_does_not_depend_on_the_iteration_count(self):
+        """A fixed-point iteration run for a fixed number of steps does not
+        report its own convergence. If this ever fails, the stabilisation
+        temperature is wherever the walk stopped."""
+        results = []
+        for iterations in (20, 40):
+            md = mv.data.from_structures([self._lattice("bcc", 2.9)])
+            mv.prop.phonon_at_temperature(
+                md, level="emt", temperatures=(5., 300., 600.),
+                supercell=(5, 5, 5), cutoff=5.0, n_structures=30,
+                n_iterations=iterations)
+            results.append(
+                md.obsm["imaginary_modes_vs_temperature_emt"][0] > 0)
+        assert (results[0] == results[1]).all()
+
+    def test_a_cutoff_that_wraps_around_the_cell_is_refused(self):
+        """A force constant must not reach an atom and its own periodic image
+        at once. Checked here rather than left to a confusing failure deep
+        inside the fit."""
+        md = mv.data.from_structures([self._lattice("bcc", 2.9)])
+        with pytest.raises(ValueError, match="half the shortest"):
+            mv.prop.phonon_at_temperature(md, level="emt", supercell=(2, 2, 2),
+                                          cutoff=5.0,
+                                          temperatures=(300.,))
+
+    def test_a_cluster_space_too_small_to_mean_anything_is_flagged(self):
+        md = mv.data.from_structures([self._lattice("bcc", 2.9)])
+        with pytest.warns(RuntimeWarning, match="free parameters"):
+            mv.prop.phonon_at_temperature(
+                md, level="emt", temperatures=(300.,), supercell=(5, 5, 5),
+                cutoff=4.0, n_structures=10, n_iterations=5)
+        assert md.uns["self_consistent_phonons"]["emt"][
+            "n_free_parameters"][0] < 6
+
+    def test_it_records_how_far_from_converged_each_solve_was(self, sampled):
+        drift = np.asarray(sampled.uns["self_consistent_phonons"]["emt"][
+            "convergence_drift"], dtype=float)
+        assert drift.shape == (3, 4)
+        assert np.isfinite(drift).all()
+        assert (drift >= 0).all()
+
+    def test_it_does_not_print_over_the_caller(self, sampled, capsys):
+        """hiphive reports at length on stdout, and a library should not write
+        into the middle of somebody else's loop."""
+        md = mv.data.from_structures([self._lattice("fcc", 3.61)])
+        capsys.readouterr()
+        mv.prop.phonon_at_temperature(
+            md, level="emt", temperatures=(300.,), supercell=(5, 5, 5),
+            cutoff=5.0, n_structures=10, n_iterations=5)
+        assert capsys.readouterr().out == ""

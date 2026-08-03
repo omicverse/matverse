@@ -42,6 +42,11 @@ matminer = ["matminer"]
 cost = ["bibtexparser"]                               # mv.prop.cost price table
 screening = ["smact"]                                # mv.gen.compositions
 generation = ["pyxtal"]                              # mv.gen.from_symmetry
+# mv.prop.phonon_at_temperature. hiphive reaches numba through trainstation,
+# and numba caps numpy below 2.5, so this extra cannot share an environment
+# with the newest numpy. It is tested in its own CI job for that reason rather
+# than added to the others.
+anharmonic = ["hiphive"]
 diffusion = ["pymatgen-analysis-diffusion"]           # mv.md.rdf, mv.md.sites,
                                                      # mv.neb.percolation
 # mv.gen.alloy_pairs, plus mv.disorder.cluster_expansion and
