@@ -895,3 +895,192 @@ def _reduced(formula: str) -> str:
         return Composition(formula).reduced_formula
     except Exception:                                      # pragma: no cover
         return formula
+
+
+@register_function(
+    aliases=["pyxtal", "random crystals", "generate structures", "structure "
+             "from symmetry", "space group generation", "make structures from "
+             "a formula", "symmetry-based generation"],
+    category="gen",
+    description="Generate crystal structures for a composition by filling "
+                "Wyckoff positions of a space group — structures from a "
+                "formula, where none existed.",
+    # No requires: obs[source_column] is used when present and the
+    # composition matrix is the fallback, so the column is not required. The
+    # probe deletes a required slot and expects the call to fail; this one
+    # succeeded, which is what a wrong claim looks like.
+    produces={"obs": ["parent", "formula", "requested_space_group",
+                      "space_group", "space_group_symbol",
+                      "symmetry_as_requested", "nsites"],
+              "structures": ["input"]},
+    prerequisites=["mv.gen.compositions"],
+    examples=["built = mv.gen.from_symmetry(candidates, space_groups=[221])",
+              "built = mv.gen.from_symmetry(candidates, per_composition=5)",
+              "built = mv.gen.from_symmetry(candidates, space_groups=[62, 194])"],
+    related=["mv.gen.compositions", "mv.data.from_compositions",
+             "mv.calc.relax", "mv.gen.validate", "mv.gen.substitute"],
+    notes="This is the step that turns a composition into something a "
+          "calculator can accept. mv.gen.compositions produces rows with no "
+          "structures; this gives them one, by placing the atoms on Wyckoff "
+          "positions of a chosen space group and randomising the free "
+          "parameters that remain.\\n\\n"
+          "**The output is a starting geometry, not a structure.** Cell "
+          "lengths come from a volume estimate and the free coordinates are "
+          "random, so bond lengths are only approximately right — generated "
+          "BaTiO3 in Pm-3m comes out near 5.06 A against a measured 4.00. "
+          "Run mv.calc.relax before believing any energy, and mv.gen.validate "
+          "before believing the structure.\\n\\n"
+          "The space group is **verified rather than assumed**. What is "
+          "requested is what pyxtal was asked for; obs['space_group'] is what "
+          "pymatgen finds in the structure that came back, and "
+          "obs['symmetry_as_requested'] says whether they agree. They can "
+          "differ often, not occasionally: asking for 40 random groups for "
+          "TiO2 gave 7 structures of which 5 came back at *higher* symmetry "
+          "than requested — P-6 asked for, P6/mmm delivered — because with "
+          "few atoms the random free parameters land on a special position. A "
+          "generator that reported only the request would be reporting its "
+          "input.\\n\\n"
+          "Sampling random space groups is wasteful. Of those same 40 "
+          "attempts, 33 failed outright because the group could not host the "
+          "composition at that cell size. Passing space_groups= explicitly is "
+          "both faster and more likely to give what was asked for.\\n\\n"
+          "The composition comes from obs[source_column] when it is there and "
+          "from the composition matrix otherwise, so a dataset that never had "
+          "a formula column still works.\\n\\n"
+          "Generation fails for combinations a group cannot host, and a "
+          "failure is a missing row plus a counted reason in "
+          "uns['from_symmetry'], never a silently substituted structure.",
+)
+def from_symmetry(md: AnnData, space_groups=None, per_composition: int = 1,
+                  dimension: int = 3, source_column: str = "formula",
+                  factor: float = 1.1, max_attempts: int = 10,
+                  seed: int = 0) -> AnnData:
+    """Structures from a composition and a space group. Returns a new object."""
+    try:
+        from pyxtal import pyxtal
+    except ImportError as exc:
+        raise ImportError(
+            f"mv.gen.from_symmetry needs PyXtal: `pip install "
+            f"matverse[generation]` or `pip install pyxtal`. ({exc})") from exc
+
+    from pymatgen.core.composition import Composition
+
+    from .data import from_structures
+
+    formulas = _formulas_of(md, source_column)
+    groups = (None if space_groups is None
+              else [int(g) for g in np.atleast_1d(space_groups)])
+    if groups is not None and any(not 1 <= g <= 230 for g in groups):
+        raise ValueError(f"space_groups={space_groups} must lie in 1..230")
+    if int(per_composition) < 1:
+        raise ValueError("per_composition must be at least 1")
+
+    rng = np.random.default_rng(int(seed))
+    built, rows, failures = [], [], []
+
+    for i, formula in enumerate(formulas):
+        composition = Composition(formula).reduced_composition
+        species = [str(el) for el in composition.elements]
+        counts = [int(round(composition[el])) for el in composition.elements]
+        wanted = (groups if groups is not None
+                  else [int(g) for g in rng.integers(1, 231,
+                                                     int(per_composition))])
+        repeats = (int(per_composition) if groups is not None else 1)
+
+        for group in wanted:
+            for _ in range(repeats):
+                structure, why = _one_crystal(
+                    pyxtal, dimension, group, species, counts, factor,
+                    max_attempts, int(rng.integers(0, 2 ** 31)))
+                if structure is None:
+                    failures.append(f"{formula} in group {group}: {why}")
+                    continue
+                achieved, symbol = _spacegroup_of(structure)
+                built.append(structure)
+                rows.append({
+                    "parent": str(md.obs_names[i]),
+                    "formula": Composition(formula).reduced_formula,
+                    "requested_space_group": int(group),
+                    "space_group": int(achieved),
+                    "space_group_symbol": str(symbol),
+                    "symmetry_as_requested": bool(achieved == group),
+                    "nsites": len(structure),
+                })
+
+    if not built:
+        raise ValueError(
+            f"no structure could be generated for any of the {len(formulas)} "
+            f"compositions"
+            + (f"; first failure was {failures[0]}" if failures else ""))
+
+    out = from_structures(built, obs=pd.DataFrame(rows))
+    out.uns["from_symmetry"] = {
+        "space_groups": groups,
+        "per_composition": int(per_composition),
+        "dimension": int(dimension),
+        "factor": float(factor),
+        "seed": int(seed),
+        "n_requested": len(formulas) * int(per_composition),
+        "n_built": len(built),
+        "n_failed": len(failures),
+        "errors": failures[:10],
+        "note": "starting geometries: cell volume is estimated and free "
+                "coordinates are random, so relax before believing an energy",
+    }
+    if failures:
+        warnings.warn(
+            f"{len(failures)} of {len(failures) + len(built)} attempts "
+            f"produced no structure and are missing rows rather than "
+            f"substituted ones; see uns['from_symmetry']['errors']. First: "
+            f"{failures[0]}", RuntimeWarning, stacklevel=2)
+    record(out, "gen.from_symmetry", space_groups=groups,
+           per_composition=per_composition, seed=seed)
+    return out
+
+
+def _one_crystal(pyxtal_class, dimension, group, species, counts, factor,
+                 max_attempts, seed):
+    """One random crystal, or ``(None, reason)``."""
+    try:
+        crystal = pyxtal_class()
+        crystal.from_random(dim=int(dimension), group=int(group),
+                            species=list(species), numIons=list(counts),
+                            factor=float(factor), max_count=int(max_attempts),
+                            random_state=int(seed))
+        if not getattr(crystal, "valid", False):
+            return None, "pyxtal reported the crystal as invalid"
+        return crystal.to_pymatgen(), ""
+    except Exception as exc:
+        return None, f"{type(exc).__name__}: {exc}"
+
+
+def _spacegroup_of(structure, tolerance: float = 0.1):
+    """The symmetry actually present, not the one that was asked for."""
+    try:
+        from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
+        analyzer = SpacegroupAnalyzer(structure, symprec=tolerance)
+        return analyzer.get_space_group_number(), analyzer.get_space_group_symbol()
+    except Exception:                                      # pragma: no cover
+        return -1, "unknown"
+
+
+def _formulas_of(md: AnnData, column: str) -> list:
+    """Formulas from obs if they are there, else from the composition matrix."""
+    if column in md.obs:
+        return [str(f) for f in md.obs[column]]
+    if md.n_vars == 0:
+        raise ValueError(
+            f"obs[{column!r}] absent and this object has no element axis, so "
+            f"there is no composition to build from")
+    from pymatgen.core.composition import Composition
+
+    values = np.asarray(md.X.todense() if hasattr(md.X, "todense") else md.X,
+                        dtype=float)
+    elements = list(md.var_names)
+    out = []
+    for row in values:
+        amounts = {elements[j]: float(v) for j, v in enumerate(row) if v}
+        if not amounts:
+            raise ValueError("a row has an empty composition")
+        out.append(Composition(amounts).reduced_formula)
+    return out

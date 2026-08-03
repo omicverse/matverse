@@ -12,7 +12,7 @@ agent. Every entry names the state it reads and the state it writes, and each of
 those claims is verified by execution in `tests/test_contracts.py` rather than
 asserted.
 
-Public registry entries listed here: 211
+Public registry entries listed here: 212
 
 Look a function up by intent rather than by name:
 
@@ -359,6 +359,7 @@ Scoring generated structures, and enumerating substitutions.
 
    gen.alloy_pairs
    gen.compositions
+   gen.from_symmetry
    gen.predict_dopants
    gen.predict_hosts
    gen.predict_substitutions
@@ -665,6 +666,7 @@ arguments — `obs['energy_{level}']` becomes `obs['energy_emt']` when you pass
 | `mv.screen.pareto` | `obs['{name}']`, `obs['{name}_rank']`, `uns['pareto']` |
 | `mv.screen.rank` | `obs['{name}']` |
 | `mv.gen.compositions` | `obs['formula']`, `obs['n_elements']`, `obs['oxidation_states']`, `obs['n_oxidation_assignments']`, `obs['stoichiometry']`, `X` |
+| `mv.gen.from_symmetry` | `obs['parent']`, `obs['formula']`, `obs['requested_space_group']`, `obs['space_group']`, `obs['space_group_symbol']`, `obs['symmetry_as_requested']`, `obs['nsites']`, `obsm['structures']['input']` |
 | `mv.gen.predict_dopants` | `obs['n_type_dopant']`, `obs['n_type_probability']`, `obs['p_type_dopant']`, `obs['p_type_probability']`, `uns['dopants']` |
 | `mv.gen.predict_hosts` | `obs['parent']`, `obs['target']`, `obs['host_probability']`, `obsm['structures']['input']` |
 | `mv.gen.predict_substitutions` | `obs['parent']`, `obs['substitution']`, `obs['substitution_probability']`, `obsm['structures']['input']` |
