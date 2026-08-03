@@ -2589,3 +2589,248 @@ def _path_ticks(counts, labels, connections) -> dict:
             text = str(labels[index]) if index < len(labels) else ""
         ticks[round((position - 1) / (total - 1), 6)] = text
     return ticks
+
+
+@register_function(
+    aliases=["self-consistent phonons", "anharmonic phonons", "phonons at "
+             "temperature", "temperature dependent phonons", "does it "
+             "stabilise", "anharmonic stabilisation", "hiphive", "SCPH"],
+    category="prop",
+    description="Self-consistent phonons at a series of temperatures, giving "
+                "the temperature at which a structure that is unstable at 0 K "
+                "becomes dynamically stable.",
+    requires={"structures": ["{source}"]},
+    produces={"obsm": ["min_frequency_vs_temperature_{level}",
+                       "imaginary_modes_vs_temperature_{level}"],
+              "obs": ["stabilisation_temperature_{level}"],
+              "uns": ["grids", "self_consistent_phonons"],
+              "levels": ["{level}"]},
+    prerequisites=["mv.calc.relax"],
+    dispatch="level= selects the calculator, as for mv.calc.energy",
+    examples=["mv.prop.phonon_at_temperature(md, level='emt')",
+              "mv.prop.phonon_at_temperature(md, level='emt', "
+              "temperatures=(100, 500, 900), supercell=(5, 5, 5))"],
+    related=["mv.prop.phonon", "mv.prop.dispersion", "mv.prop.free_energy",
+             "mv.thermo.hull"],
+    notes="mv.prop.phonon answers a question about 0 K, and "
+          "obs['dynamically_stable_{level}'] is a 0 K statement. A great many "
+          "real materials fail it and exist anyway: bcc metals and cubic "
+          "perovskites are unstable in the harmonic approximation and are "
+          "stabilised by anharmonicity at the temperature they are used at. "
+          "Discarding them from a screen because a 0 K calculation called "
+          "them unstable is discarding the answer.\\n\\n"
+          "This is what that costs to check. Rather than expanding about the "
+          "0 K minimum, it fits the effective harmonic force constants that "
+          "best describe the potential energy surface *sampled at* a "
+          "temperature, iterating until the phonons used to generate the "
+          "displacements agree with the phonons fitted to them.\\n\\n"
+          "On bcc copper with EMT there are four imaginary modes at 50 K and "
+          "none from 300 K upward — the standard behaviour of bcc metals, "
+          "invisible to a harmonic calculation. fcc copper is stable "
+          "throughout and simple cubic copper is unstable throughout, which "
+          "are the other two answers this can give.\\n\\n"
+          "obs['stabilisation_temperature_{level}'] is the lowest scanned "
+          "temperature with no imaginary modes, and it is NaN in two "
+          "different situations that must not be confused: a structure stable "
+          "at every scanned temperature (already stable at the lowest, so "
+          "there is nothing to stabilise) and one unstable at all of them "
+          "(not stabilised anywhere in range). uns tells them apart, and "
+          "obs['imaginary_modes_vs_temperature_{level}'] shows which.\\n\\n"
+          "Two diagnostics are recorded because both silently change the "
+          "answer. uns[...]['n_free_parameters'] is the size of the cluster "
+          "space, and too small a one cannot describe a potential energy "
+          "surface however well it is converged. A strongly unstable simple "
+          "cubic copper gave four free parameters at a 4.0 A cutoff and a "
+          "non-monotonic result — imaginary modes reappearing at a higher "
+          "temperature, which is not physics — where a 5.0 A cutoff gave "
+          "eleven and a monotonic one. Fewer than six free parameters is "
+          "warned about. Note that on well-behaved cases the two cutoffs "
+          "agree exactly, so a small cluster space is a risk rather than a "
+          "guaranteed error. "
+          "uns[...]['convergence_drift'] is how much the parameters were "
+          "still moving over the last five iterations; this is a fixed-point "
+          "iteration run for a fixed number of steps, so it does not report "
+          "its own convergence, and anything above a few percent means the "
+          "number is where the walk stopped.\\n\\n"
+          "The cutoff must be shorter than half the shortest supercell "
+          "dimension or the force constants wrap around onto themselves; the "
+          "check is made here rather than left to a confusing failure deep "
+          "inside the fit.",
+)
+def phonon_at_temperature(md: AnnData, level: str = "emt",
+                          source: str = "input",
+                          temperatures=(100.0, 300.0, 600.0, 900.0),
+                          supercell=(4, 4, 4), cutoff: float = 4.0,
+                          n_structures: int = 15, n_iterations: int = 10,
+                          alpha: float = 0.2, mesh=(9, 9, 9),
+                          seed: int = 0) -> None:
+    """Self-consistent phonons versus temperature. Deposits; returns ``None``."""
+    try:
+        from hiphive import ClusterSpace, ForceConstantPotential
+        from hiphive.self_consistent_phonons import (
+            self_consistent_harmonic_model)
+    except ImportError as exc:
+        raise ImportError(
+            f"mv.prop.phonon_at_temperature needs hiphive: `pip install "
+            f"matverse[anharmonic]` or `pip install hiphive`. Note that "
+            f"hiphive pins numpy < 2.5 through its own dependencies, so it "
+            f"cannot share an environment with the newest numpy. ({exc})"
+        ) from exc
+
+    import io
+    import sys
+
+    from pymatgen.io.ase import AseAtomsAdaptor
+
+    from .calc import _get
+
+    grid = np.asarray(list(temperatures), dtype=float)
+    if not len(grid):
+        raise ValueError("temperatures= is empty")
+
+    factory, meta = _get(level)
+    adaptor = AseAtomsAdaptor()
+
+    lowest = np.full((md.n_obs, len(grid)), np.nan)
+    imaginary = np.full((md.n_obs, len(grid)), np.nan)
+    drift = np.full((md.n_obs, len(grid)), np.nan)
+    degrees = np.full(md.n_obs, -1, dtype=int)
+    stabilisation = np.full(md.n_obs, np.nan)
+    verdicts, failures = [], []
+
+    for i, structure in enumerate(structures(md, source)):
+        primitive = adaptor.get_atoms(structure)
+        repeated = primitive.repeat(tuple(int(x) for x in supercell))
+        shortest = float(min(np.linalg.norm(repeated.cell, axis=1)))
+        if cutoff >= 0.5 * shortest:
+            raise ValueError(
+                f"cutoff={cutoff} must be less than half the shortest "
+                f"supercell dimension ({shortest:.2f} A for supercell="
+                f"{tuple(supercell)}), or a force constant reaches an atom "
+                f"and its own periodic image at once. Shorten cutoff= or "
+                f"enlarge supercell=")
+
+        # hiphive prints a full report from several of these calls, and a
+        # library should not write to stdout in the middle of somebody's loop.
+        stream, real = io.StringIO(), sys.stdout
+        try:
+            sys.stdout = stream
+            space = ClusterSpace(primitive, [float(cutoff)])
+            degrees[i] = int(space.n_dofs)
+            for j, temperature in enumerate(grid):
+                parameters = self_consistent_harmonic_model(
+                    repeated, factory(), space, float(temperature),
+                    float(alpha), int(n_iterations), int(n_structures))
+                # How much the parameters were still moving over the last few
+                # iterations. This is a fixed-point iteration with a fixed step
+                # count, so it does not report its own convergence: a large
+                # value means the answer below is wherever the walk happened
+                # to stop.
+                trace = np.asarray(parameters, dtype=float)
+                scale = max(float(np.linalg.norm(trace[-1])), 1e-12)
+                drift[i, j] = float(
+                    np.linalg.norm(trace[-5:].std(axis=0)) / scale)
+                potential = ForceConstantPotential(space, parameters[-1])
+                frequencies = _effective_frequencies(
+                    potential, primitive, repeated, supercell, mesh)
+                lowest[i, j] = float(frequencies.min())
+                imaginary[i, j] = int(
+                    (frequencies < -_IMAGINARY_TOLERANCE).sum())
+        except Exception as exc:
+            failures.append(f"{md.obs_names[i]}: {type(exc).__name__}: {exc}")
+        finally:
+            sys.stdout = real
+
+        stabilisation[i], verdict = _stabilisation(grid, imaginary[i])
+        verdicts.append(verdict)
+
+    deposit_grid(md, "min_frequency_vs_temperature", level, lowest, grid,
+                 unit="K", value_unit="THz", supercell=list(supercell),
+                 cutoff=float(cutoff))
+    deposit_grid(md, "imaginary_modes_vs_temperature", level, imaginary, grid,
+                 unit="K", value_unit="count")
+    md.obs[f"stabilisation_temperature_{level}"] = stabilisation
+    md.uns.setdefault("self_consistent_phonons", {})[level] = {
+        "temperatures": grid.tolist(),
+        "supercell": list(supercell),
+        "cutoff": float(cutoff),
+        "n_structures": int(n_structures),
+        "n_iterations": int(n_iterations),
+        "alpha": float(alpha),
+        "mesh": list(mesh),
+        "verdict": verdicts,
+        "n_free_parameters": degrees.tolist(),
+        "convergence_drift": drift.tolist(),
+        "n_failed": len(failures),
+        "errors": failures[:10],
+        "note": "effective harmonic force constants fitted to the potential "
+                "energy surface sampled at each temperature; a NaN "
+                "stabilisation temperature means either always stable or "
+                "never stable in range, and verdict says which",
+    }
+    set_level(md, level, **meta, source=source, supercell=list(supercell),
+              cutoff=float(cutoff), temperatures=grid.tolist())
+    thin = [str(md.obs_names[i]) for i in range(md.n_obs)
+            if 0 <= degrees[i] < 6]
+    if thin:
+        warnings.warn(
+            f"the cluster space has fewer than six free parameters for "
+            f"{thin[:3]}, which is too small a model to describe a potential "
+            f"energy surface. A strongly unstable cell with four parameters "
+            f"gave imaginary modes reappearing at higher temperature, which "
+            f"is not physics; the same cell at eleven parameters did not. "
+            f"Raise cutoff= (and supercell= with it, since "
+            f"cutoff must stay below half the shortest supercell dimension).",
+            RuntimeWarning, stacklevel=2)
+    unsettled = int(np.nansum(drift > 0.05))
+    if unsettled:
+        warnings.warn(
+            f"{unsettled} of the {drift.size} self-consistent solves were "
+            f"still moving by more than 5% over their last five iterations, "
+            f"so those columns are where the walk stopped rather than where "
+            f"it converged. Raise n_iterations= and n_structures=; the drift "
+            f"per temperature is in "
+            f"uns['self_consistent_phonons'][{level!r}]['convergence_drift'].",
+            RuntimeWarning, stacklevel=2)
+    if failures:
+        warnings.warn(
+            f"{len(failures)} of {md.n_obs} structures produced no "
+            f"self-consistent phonons; see "
+            f"uns['self_consistent_phonons'][{level!r}]['errors']. First: "
+            f"{failures[0]}", RuntimeWarning, stacklevel=2)
+    record(md, "prop.phonon_at_temperature", level=level, source=source,
+           temperatures=grid.tolist(), supercell=list(supercell))
+
+
+def _effective_frequencies(potential, primitive, repeated, supercell, mesh):
+    """Frequencies of the effective harmonic model, in THz."""
+    from phonopy import Phonopy
+    from phonopy.structure.atoms import PhonopyAtoms
+
+    constants = potential.get_force_constants(repeated)
+    cell = PhonopyAtoms(symbols=primitive.get_chemical_symbols(),
+                        cell=np.asarray(primitive.cell, dtype=float),
+                        scaled_positions=primitive.get_scaled_positions())
+    engine = Phonopy(cell, supercell_matrix=np.diag(list(supercell)),
+                     primitive_matrix=np.eye(3))
+    engine.force_constants = constants.get_fc_array(order=2)
+    engine.run_mesh(list(mesh))
+    result = getattr(engine, "mesh", None) or engine.get_mesh_dict()
+    return np.asarray(_field(result, "frequencies"), dtype=float).ravel()
+
+
+def _stabilisation(grid: np.ndarray, counts: np.ndarray):
+    """Lowest temperature with no imaginary mode, and what the answer means.
+
+    NaN covers two opposite situations and they must not be read as one:
+    stable everywhere scanned, and stable nowhere scanned.
+    """
+    known = np.isfinite(counts)
+    if not known.any():
+        return np.nan, "not computed"
+    clean = known & (counts <= 0)
+    if not clean.any():
+        return np.nan, "unstable at every temperature scanned"
+    if bool(clean[np.argmax(known)]):
+        return np.nan, "already stable at the lowest temperature scanned"
+    return float(grid[clean][0]), "stabilised within the scanned range"

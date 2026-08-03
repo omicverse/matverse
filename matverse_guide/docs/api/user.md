@@ -12,7 +12,7 @@ agent. Every entry names the state it reads and the state it writes, and each of
 those claims is verified by execution in `tests/test_contracts.py` rather than
 asserted.
 
-Public registry entries listed here: 212
+Public registry entries listed here: 213
 
 Look a function up by intent rather than by name:
 
@@ -177,6 +177,7 @@ Derived properties, including curves stored on a shared grid.
    prop.neutron
    prop.nmr
    prop.phonon
+   prop.phonon_at_temperature
    prop.piezo_from_dfpt
    prop.piezoelectric
    prop.polarization
@@ -616,6 +617,7 @@ arguments — `obs['energy_{level}']` becomes `obs['energy_emt']` when you pass
 | `mv.prop.neutron` | `obsm['neutron_{level}']`, `uns['grids']`, `uns['levels']['{level}']` |
 | `mv.prop.nmr` | `sites.obs['shielding_iso_{level}']`, `sites.obs['shielding_anisotropy_{level}']`, `sites.obs['shielding_asymmetry_{level}']`, `sites.obs['shielding_span_{level}']`, `sites.obs['shielding_skew_{level}']`, `sites.obsm['shielding_tensor_{level}']`, `uns['levels']['{level}']` |
 | `mv.prop.phonon` | `obsm['phonon_dos_{level}']`, `obs['n_imaginary_modes_{level}']`, `obs['dynamically_stable_{level}']`, `obs['zero_point_energy_{level}']`, `uns['grids']`, `uns['levels']['{level}']` |
+| `mv.prop.phonon_at_temperature` | `obsm['min_frequency_vs_temperature_{level}']`, `obsm['imaginary_modes_vs_temperature_{level}']`, `obs['stabilisation_temperature_{level}']`, `uns['grids']`, `uns['self_consistent_phonons']`, `uns['levels']['{level}']` |
 | `mv.prop.piezo_from_dfpt` | `obs['piezo_max_{level}']`, `obs['piezo_norm_{level}']`, `uns['piezo_from_dfpt']`, `uns['levels']['{level}']` |
 | `mv.prop.piezoelectric` | `obs['piezo_max_longitudinal_{level}']`, `obs['piezo_max_direction_{level}']`, `obs['piezo_symmetry_valid_{level}']`, `obsm['piezo_tensor_{level}']`, `uns['levels']['{level}']` |
 | `mv.prop.polarization` | `obs['polarization_a']`, `obs['polarization_b']`, `obs['polarization_c']`, `uns['polarization']` |
