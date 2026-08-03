@@ -12,7 +12,7 @@ agent. Every entry names the state it reads and the state it writes, and each of
 those claims is verified by execution in `tests/test_contracts.py` rather than
 asserted.
 
-Public registry entries listed here: 209
+Public registry entries listed here: 211
 
 Look a function up by intent rather than by name:
 
@@ -55,6 +55,7 @@ Build a dataset, and get it back out again.
    data.from_ase
    data.from_ase_file
    data.from_cif
+   data.from_compositions
    data.from_iterable
    data.from_matminer
    data.from_mp
@@ -357,6 +358,7 @@ Scoring generated structures, and enumerating substitutions.
    :nosignatures:
 
    gen.alloy_pairs
+   gen.compositions
    gen.predict_dopants
    gen.predict_hosts
    gen.predict_substitutions
@@ -562,6 +564,7 @@ arguments — `obs['energy_{level}']` becomes `obs['energy_emt']` when you pass
 | `mv.data.from_ase` | `obsm['structures']['input']`, `X` |
 | `mv.data.from_ase_file` | `obsm['structures']['input']`, `X` |
 | `mv.data.from_cif` | `obsm['structures']['input']`, `obs['source_file']`, `X` |
+| `mv.data.from_compositions` | `obs['formula']`, `X` |
 | `mv.data.from_iterable` | `obsm['structures']['input']`, `X` |
 | `mv.data.from_matminer` | `obsm['structures']['input']`, `obsm['X_matminer']`, `X` |
 | `mv.data.from_mp` | `obsm['structures']['input']`, `obs['material_id']`, `obs['formula']`, `uns['levels']['mp']`, `X` |
@@ -661,6 +664,7 @@ arguments — `obs['energy_{level}']` becomes `obs['energy_emt']` when you pass
 | `mv.screen.filter` | `obs['{name}']`, `uns['screens']` |
 | `mv.screen.pareto` | `obs['{name}']`, `obs['{name}_rank']`, `uns['pareto']` |
 | `mv.screen.rank` | `obs['{name}']` |
+| `mv.gen.compositions` | `obs['formula']`, `obs['n_elements']`, `obs['oxidation_states']`, `obs['n_oxidation_assignments']`, `obs['stoichiometry']`, `X` |
 | `mv.gen.predict_dopants` | `obs['n_type_dopant']`, `obs['n_type_probability']`, `obs['p_type_dopant']`, `obs['p_type_probability']`, `uns['dopants']` |
 | `mv.gen.predict_hosts` | `obs['parent']`, `obs['target']`, `obs['host_probability']`, `obsm['structures']['input']` |
 | `mv.gen.predict_substitutions` | `obs['parent']`, `obs['substitution']`, `obs['substitution_probability']`, `obsm['structures']['input']` |

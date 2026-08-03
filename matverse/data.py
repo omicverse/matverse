@@ -36,6 +36,52 @@ def from_structures(structures_: list, obs: pd.DataFrame | None = None,
 
 
 @register_function(
+    aliases=["from compositions", "from formulas", "compositions without "
+             "structures", "formula list", "screen formulas"],
+    category="data",
+    description="Build a dataset from formulas alone, with no structures — "
+                "the composition axis on its own, for screening before any "
+                "structure exists.",
+    produces={"obs": ["formula"], "X": ["composition"]},
+    examples=["md = mv.data.from_compositions(['BaTiO3', 'SrTiO3'])",
+              "md = mv.data.from_compositions(candidates)"],
+    related=["mv.data.from_structures", "mv.gen.compositions",
+             "mv.feat.element_stats", "mv.prop.cost"],
+    notes="matverse's X *is* the materials-by-elements composition matrix, so "
+          "a dataset with no structures is not a degenerate object here — it "
+          "is the same object with one thing missing. Everything that reads "
+          "composition works unchanged: mv.feat.element_stats, mv.tl.pca, "
+          "mv.screen.filter, mv.prop.cost, mv.prop.supply_risk.\n\n"
+          "Everything that reads a structure will raise, and should. There is "
+          "no structure to be had, and inventing one would be inventing the "
+          "answer. mv.gen.pyxtal and mv.gen.substitute are how a row on this "
+          "axis acquires one.",
+)
+def from_compositions(formulas, obs: pd.DataFrame | None = None) -> AnnData:
+    """A dataset of compositions with no structures."""
+    from ._core import composition_matrix, record
+    from ._core import _element_frame
+
+    items = [str(f) for f in formulas]
+    if not items:
+        raise ValueError("no formulas were given")
+
+    names = pd.Index([str(i) for i in range(len(items))], dtype=object)
+    frame = (pd.DataFrame(index=names) if obs is None
+             else obs.reset_index(drop=True).set_axis(names))
+    frame["formula"] = items
+
+    X, elements = composition_matrix(items)
+    md = AnnData(X=X, obs=frame, var=_element_frame(elements))
+    md.uns["features"] = {}
+    md.uns["levels"] = {}
+    md.uns["provenance"] = []
+    md.uns["X_is"] = "composition_atoms_reduced"
+    record(md, "data.from_compositions")
+    return md
+
+
+@register_function(
     aliases=["from cif", "read cif", "load cif files", "cif directory"],
     category="data",
     description="Build a dataset from CIF files, either a directory of them or "
