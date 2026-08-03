@@ -30,6 +30,8 @@ the set.
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 import pandas as pd
 from anndata import AnnData
@@ -732,3 +734,164 @@ def alloy_pairs(md: AnnData, source: str = "input",
     }
     record(pairs, "gen.alloy_pairs", source=source, n_parents=int(md.n_obs))
     return pairs
+
+
+@register_function(
+    aliases=["enumerate compositions", "charge neutral compositions",
+             "smact", "candidate formulas", "composition screening",
+             "which compositions are plausible", "chemical filter"],
+    category="gen",
+    description="Enumerate charge-neutral, electronegativity-consistent "
+                "compositions from a set of elements — candidates before any "
+                "structure exists.",
+    produces={"obs": ["formula", "n_elements", "oxidation_states",
+                      "n_oxidation_assignments", "stoichiometry"],
+              "X": ["composition"]},
+    examples=["candidates = mv.gen.compositions(['Ti', 'O'])",
+              "candidates = mv.gen.compositions(['Ba', 'Ti', 'O'], "
+              "threshold=4)",
+              "candidates = mv.gen.compositions(['Li', 'Fe', 'P', 'O'], "
+              "sizes=(3, 4))"],
+    related=["mv.data.from_compositions", "mv.gen.predict_substitutions",
+             "mv.screen.filter", "mv.prop.cost", "mv.thermo.hull"],
+    notes="The cheapest filter in the funnel, and the only one that runs "
+          "before a structure exists. Two rules do the work: a compound must "
+          "be **charge neutral** in some combination of its elements' known "
+          "oxidation states, and the more electronegative element must take "
+          "the more negative one. Everything failing those is discarded for "
+          "the cost of arithmetic, against minutes per candidate for anything "
+          "that needs a structure.\\n\\n"
+          "What survives is **not** a prediction that the compound exists. It "
+          "is a statement that one reason for it not to has been ruled out — "
+          "the filter passes roughly a thousand compositions for every one "
+          "that has ever been made. It is a way of not wasting a calculator "
+          "on CaF3, not a way of finding new materials.\\n\\n"
+          "Returns a dataset with **no structures**, because there are none "
+          "yet. X is the composition matrix, so mv.feat.element_stats, "
+          "mv.tl.pca, mv.screen.filter, mv.prop.cost and mv.prop.supply_risk "
+          "all work on it directly; anything reading a structure raises until "
+          "one is built.\\n\\n"
+          "A composition often has **more than one** charge-neutral "
+          "assignment, and charge neutrality cannot say which is meant. "
+          "smact_filter returns TiO2 twice, as Ti(+2)O(-1) and as the "
+          "rutile-like Ti(+4)O(-2); obs['oxidation_states'] lists all of them "
+          "separated by ' | ' and obs['n_oxidation_assignments'] counts them, "
+          "rather than reporting whichever came first and dropping the "
+          "rest.\\n\\n"
+          "oxidation_states= chooses the table. The default 'icsd24' is what "
+          "has been observed in the ICSD, which is narrower and more "
+          "realistic than the union of everything ever reported; 'smact14' is "
+          "the older permissive set and passes considerably more. The choice "
+          "changes the answer, so it is recorded in uns['compositions'].",
+)
+def compositions(elements, threshold: int = 8, sizes=None,
+                 use_pauling: bool = True,
+                 oxidation_states: str = "icsd24") -> AnnData:
+    """Charge-neutral candidate compositions. Returns a materials object."""
+    try:
+        import smact
+        from smact.screening import smact_filter
+    except ImportError as exc:
+        raise ImportError(
+            f"mv.gen.compositions needs SMACT: `pip install "
+            f"matverse[screening]` or `pip install smact`. ({exc})") from exc
+
+    from itertools import combinations
+
+    from .data import from_compositions
+
+    symbols = [str(e) for e in elements]
+    if len(symbols) < 2:
+        raise ValueError(
+            f"got {len(symbols)} elements; charge neutrality needs at least "
+            f"two so that something can balance something else")
+    wanted = (tuple(range(2, len(symbols) + 1)) if sizes is None
+              else tuple(int(s) for s in sizes))
+    if any(s < 2 or s > len(symbols) for s in wanted):
+        raise ValueError(
+            f"sizes={sizes} must lie between 2 and the {len(symbols)} "
+            f"elements given")
+
+    # One row per reduced formula, but every charge-neutral assignment kept.
+    # smact_filter returns TiO2 twice - once as Ti(+2)O(-1) and once as the
+    # rutile-like Ti(+4)O(-2) - and taking the first and discarding the rest
+    # reports a peroxide assignment for a composition that also has the
+    # ordinary one. Which assignment is "right" is not something charge
+    # neutrality can decide, so all of them are reported.
+    found_by_formula: dict = {}
+    order, failures = [], []
+    for size in wanted:
+        for chosen in combinations(symbols, size):
+            try:
+                found = smact_filter(
+                    [smact.Element(s) for s in chosen], threshold=int(threshold),
+                    oxidation_states_set=str(oxidation_states))
+            except Exception as exc:
+                failures.append(f"{'-'.join(chosen)}: {type(exc).__name__}: "
+                                f"{exc}")
+                continue
+            for entry in found:
+                names, states, amounts = entry[0], entry[1], entry[2]
+                key = _reduced("".join(f"{n}{a}"
+                                       for n, a in zip(names, amounts)))
+                if key not in found_by_formula:
+                    found_by_formula[key] = []
+                    order.append(key)
+                found_by_formula[key].append(
+                    (tuple(names), tuple(states), tuple(amounts)))
+
+    rows = []
+    for key in order:
+        assignments = found_by_formula[key]
+        names, _, amounts = assignments[0]
+        rows.append({
+            "formula": key,
+            "n_elements": len(names),
+            "oxidation_states": " | ".join(
+                " ".join(f"{n}{s:+d}" for n, s in zip(a_names, a_states))
+                for a_names, a_states, _ in assignments),
+            "n_oxidation_assignments": len(assignments),
+            "stoichiometry": ":".join(str(a) for a in amounts),
+        })
+
+    if not rows:
+        raise ValueError(
+            f"no charge-neutral composition was found for {symbols} at "
+            f"threshold={threshold}"
+            + (f"; first failure was {failures[0]}" if failures else
+               ". Raising threshold= allows larger stoichiometric ratios"))
+
+    frame = pd.DataFrame(rows)
+    md = from_compositions(frame["formula"].tolist(),
+                           obs=frame.drop(columns=["formula"]))
+    md.uns["compositions"] = {
+        "elements": symbols,
+        "threshold": int(threshold),
+        "sizes": list(wanted),
+        "oxidation_states_set": str(oxidation_states),
+        "use_pauling": bool(use_pauling),
+        "n_candidates": len(rows),
+        "n_combinations_tried": sum(
+            len(list(combinations(symbols, s))) for s in wanted),
+        "n_failed": len(failures),
+        "errors": failures[:10],
+        "note": "charge neutrality and electronegativity ordering only; "
+                "survival is not a prediction that the compound exists",
+    }
+    if failures:
+        warnings.warn(
+            f"{len(failures)} element combinations could not be screened; see "
+            f"uns['compositions']['errors']. First: {failures[0]}",
+            RuntimeWarning, stacklevel=2)
+    record(md, "gen.compositions", elements=symbols, threshold=threshold,
+           oxidation_states=oxidation_states)
+    return md
+
+
+def _reduced(formula: str) -> str:
+    """The reduced formula, so Ti2O4 and TiO2 are not two candidates."""
+    from pymatgen.core.composition import Composition
+    try:
+        return Composition(formula).reduced_formula
+    except Exception:                                      # pragma: no cover
+        return formula

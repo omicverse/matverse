@@ -141,6 +141,14 @@ def mixture():
     ])
 
 
+def formulas():
+    return ["BaTiO3", "SrTiO3"]
+
+
+def two_elements():
+    return ["Ti", "O"]
+
+
 def cu_au_parent():
     """The disordered fcc primitive a cluster expansion is defined on."""
     return mv.data.from_structures([_mixed({"Cu": 0.5, "Au": 0.5}, a=3.9)])
@@ -824,6 +832,11 @@ def cases(tmp):
         (mv.neb.hops, one_metal, ("Cu",), {"returns": "new"}),
 
         (mv.disorder.sro, one_metal, (), {}),
+        # Constructors: the probe hands the fixture in as the first argument,
+        # and for these that argument is the list itself, not a dataset.
+        (mv.data.from_compositions, formulas, (), {"returns": "new"}),
+        (mv.gen.compositions, two_elements, (),
+         {"threshold": 4, "returns": "new"}),
         (mv.disorder.cluster_expansion, cu_au_training, (),
          {"parent": cu_au_parent(), "level": "emt",
           "cutoffs": {2: 6.0, 3: 4.5}}),

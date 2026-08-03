@@ -334,6 +334,72 @@ element is Al. If element-level enrichment ever stops recovering chemistry a
 domain expert would recognise, the design falls back to the width-zero `X` of
 v0.1 — `mv.data.from_structures(..., build_X=False)` — and nothing else changes.
 
+## Before there is a structure at all
+
+Everything so far started from structures. The bet that `X` is the composition
+matrix has a consequence worth using: a dataset needs **no structures at all**
+to be a matverse object. `mv.data.from_compositions` builds one from formulas,
+and everything that reads composition works on it unchanged."""),
+
+    ("code", """\
+candidates = mv.data.from_compositions(["BaTiO3", "SrTiO3", "CaTiO3", "PbTiO3"])
+mv.feat.element_stats(candidates)
+print(candidates)"""),
+
+    ("markdown", """\
+Anything that reads a *structure* raises, and should — there is none, and
+inventing one would be inventing the answer.
+
+That makes room for the cheapest filter in the whole funnel, and the only one
+that runs before a structure exists. `mv.gen.compositions` enumerates
+compositions that are **charge neutral** in some combination of their elements'
+known oxidation states, with the more electronegative element taking the more
+negative one. Everything else is discarded for the cost of arithmetic."""),
+
+    ("code", """\
+try:
+    found = mv.gen.compositions(["Ba", "Ti", "O"], threshold=4)
+    print(f"{found.n_obs} candidates from Ba-Ti-O")
+    print(found.obs[["formula", "n_elements", "n_oxidation_assignments"]]
+          .head(8).to_string(index=False))
+    print("\\nBaTiO3 among them:", "BaTiO3" in set(found.obs["formula"]))
+except ImportError:
+    print("needs SMACT; pip install matverse[screening]")"""),
+
+    ("markdown", """\
+```{warning}
+Surviving this is **not** a prediction that the compound exists. It is a
+statement that one reason for it not to has been ruled out — the filter passes
+roughly a thousand compositions for every one that has ever been made. It is a
+way of not wasting a calculator on CaF3, not a way of finding new materials.
+```
+
+Two details that change the answer, so both are recorded in
+`uns['compositions']`:
+
+**A composition often has more than one charge-neutral assignment**, and charge
+neutrality cannot say which is meant. SMACT returns TiO₂ twice — as
+Ti(+2)O(−1) and as the rutile-like Ti(+4)O(−2). `obs['oxidation_states']` lists
+all of them rather than reporting whichever came first, which would have
+labelled ordinary TiO₂ a peroxide."""),
+
+    ("code", """\
+try:
+    ti_o = mv.gen.compositions(["Ti", "O"], threshold=4)
+    print(ti_o.obs[["formula", "oxidation_states"]].to_string(index=False))
+except ImportError:
+    print("needs SMACT; pip install matverse[screening]")"""),
+
+    ("markdown", """\
+**The oxidation-state table is a choice.** The default `'icsd24'` is what has
+actually been observed in the ICSD; `'smact14'` is the older permissive set and
+passes considerably more — 29 candidates against 16 on Ba–Ti–O. Neither is
+wrong; they answer slightly different questions, and a screen that does not say
+which it used is not reproducible.
+
+From here a candidate needs a structure before anything else can touch it, which
+is what `mv.gen.substitute` and structure prediction are for.
+
 ```{seealso}
 [Beyond one number](beyond_one_number.ipynb) covers the results that are not a
 single number per material: curves, per-atom values and measurements.

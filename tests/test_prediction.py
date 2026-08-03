@@ -848,3 +848,96 @@ class TestLocateDefect:
         two = mv.data.from_structures([perfect, perfect])
         with pytest.raises(ValueError, match="one host or one per row"):
             mv.pp.locate_defect(md, host=two)
+
+
+def _has_smact() -> bool:
+    import importlib.util
+    return importlib.util.find_spec("smact") is not None
+
+
+class TestCompositionAxis:
+    """A dataset with no structures. matverse's X is the composition matrix,
+    so this is the same object with one thing missing rather than a degenerate
+    one."""
+
+    def test_composition_features_work_without_a_structure(self):
+        md = mv.data.from_compositions(["BaTiO3", "SrTiO3", "CaTiO3"])
+        assert md.n_obs == 3
+        assert md.n_vars > 0
+        mv.feat.element_stats(md)
+        assert np.isfinite(md.obsm["X_element_stats"]).any()
+
+    def test_anything_needing_a_structure_raises(self):
+        """There is no structure to be had, and inventing one would be
+        inventing the answer."""
+        md = mv.data.from_compositions(["BaTiO3"])
+        with pytest.raises((KeyError, ValueError)):
+            mv.pp.describe(md)
+
+    def test_the_formula_column_is_what_was_asked_for(self):
+        md = mv.data.from_compositions(["BaTiO3", "SrTiO3"])
+        assert list(md.obs["formula"]) == ["BaTiO3", "SrTiO3"]
+
+    def test_an_empty_list_is_refused(self):
+        with pytest.raises(ValueError, match="no formulas"):
+            mv.data.from_compositions([])
+
+
+@pytest.mark.skipif(not _has_smact(), reason="SMACT is an optional extra")
+class TestCompositionEnumeration:
+    def test_it_finds_the_compound_that_exists(self):
+        found = mv.gen.compositions(["Ba", "Ti", "O"], threshold=4)
+        assert "BaTiO3" in set(found.obs["formula"])
+
+    def test_every_candidate_is_charge_neutral(self):
+        """The whole point of the filter, checked from the reported states
+        rather than taken on trust."""
+        found = mv.gen.compositions(["Ti", "O"], threshold=4)
+        for states, ratio in zip(found.obs["oxidation_states"],
+                                 found.obs["stoichiometry"]):
+            counts = [int(x) for x in ratio.split(":")]
+            # Each assignment separately has to balance.
+            for assignment in states.split(" | "):
+                charges = [int(token[-2:]) for token in assignment.split()]
+                assert sum(c * n for c, n in zip(charges, counts)) == 0
+
+    def test_alternative_oxidation_assignments_are_all_kept(self):
+        """smact_filter returns TiO2 twice, as Ti(+2)O(-1) and Ti(+4)O(-2).
+        Keeping the first and dropping the rest reported a peroxide
+        assignment for a composition that also has the ordinary one."""
+        found = mv.gen.compositions(["Ti", "O"], threshold=4)
+        row = found.obs[found.obs["formula"] == "TiO2"].iloc[0]
+        assert int(row["n_oxidation_assignments"]) == 2
+        assert "Ti+4 O-2" in row["oxidation_states"]
+
+    def test_formulas_are_reduced_so_a_composition_appears_once(self):
+        found = mv.gen.compositions(["Ti", "O"], threshold=8)
+        assert found.obs["formula"].is_unique
+
+    def test_the_oxidation_table_changes_the_answer(self):
+        """Recorded in uns because it is a choice, not a constant: the older
+        permissive set passes considerably more."""
+        strict = mv.gen.compositions(["Ba", "Ti", "O"], threshold=4,
+                                     oxidation_states="icsd24")
+        loose = mv.gen.compositions(["Ba", "Ti", "O"], threshold=4,
+                                    oxidation_states="smact14")
+        assert loose.n_obs > strict.n_obs
+        assert strict.uns["compositions"]["oxidation_states_set"] == "icsd24"
+
+    def test_a_higher_threshold_admits_more(self):
+        small = mv.gen.compositions(["Ti", "O"], threshold=2)
+        large = mv.gen.compositions(["Ti", "O"], threshold=6)
+        assert large.n_obs > small.n_obs
+
+    def test_sizes_restricts_how_many_elements_combine(self):
+        binaries = mv.gen.compositions(["Ba", "Ti", "O"], threshold=4,
+                                       sizes=(2,))
+        assert set(binaries.obs["n_elements"]) == {2}
+
+    def test_one_element_cannot_balance_anything(self):
+        with pytest.raises(ValueError, match="at least"):
+            mv.gen.compositions(["O"])
+
+    def test_it_says_that_survival_is_not_a_prediction(self):
+        found = mv.gen.compositions(["Ti", "O"], threshold=4)
+        assert "not a prediction" in found.uns["compositions"]["note"]

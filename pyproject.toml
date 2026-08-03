@@ -40,6 +40,7 @@ plot = ["matplotlib"]                                # mv.pl
 ml = ["scikit-learn"]                                # mv.model estimators
 matminer = ["matminer"]
 cost = ["bibtexparser"]                               # mv.prop.cost price table
+screening = ["smact"]                                # mv.gen.compositions
 diffusion = ["pymatgen-analysis-diffusion"]           # mv.md.rdf, mv.md.sites,
                                                      # mv.neb.percolation
 # mv.gen.alloy_pairs, plus mv.disorder.cluster_expansion and
