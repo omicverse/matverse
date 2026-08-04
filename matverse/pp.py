@@ -919,6 +919,7 @@ def prototype(md: AnnData, source: str = "input") -> None:
                 "which Wyckoff positions the atoms occupy.",
     requires={"structures": ["{source}"]},
     produces={"obs": ["crystal_system", "point_group",
+                      "spacegroup_number", "spacegroup_symbol",
                       "n_symmetry_operations", "n_wyckoff", "wyckoff",
                       "min_site_symmetry", "max_site_symmetry"]},
     examples=["mv.pp.symmetry(md)",
@@ -957,6 +958,8 @@ def symmetry(md: AnnData, source: str = "input", symprec: float = 0.01) -> None:
     systems = np.empty(md.n_obs, dtype=object)
     points = np.empty(md.n_obs, dtype=object)
     orders = np.full(md.n_obs, np.nan)
+    numbers = np.full(md.n_obs, np.nan)
+    group_symbols = np.empty(md.n_obs, dtype=object)
     wyckoff_count = np.full(md.n_obs, np.nan)
     wyckoff = np.empty(md.n_obs, dtype=object)
     lowest = np.full(md.n_obs, np.nan)
@@ -968,12 +971,19 @@ def symmetry(md: AnnData, source: str = "input", symprec: float = 0.01) -> None:
         systems[i] = ""
         points[i] = ""
         wyckoff[i] = ""
+        group_symbols[i] = ""
         try:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
                 analyzer = SpacegroupAnalyzer(structure, symprec=symprec)
                 systems[i] = str(analyzer.get_crystal_system())
                 points[i] = str(analyzer.get_point_group_symbol())
+                # The analyser is already built, so the space group costs
+                # nothing extra - and a symmetry report that gives the crystal
+                # system and the point group but not the group itself is
+                # missing the one label everybody actually cites.
+                numbers[i] = float(analyzer.get_space_group_number())
+                group_symbols[i] = str(analyzer.get_space_group_symbol())
                 symbols = list(
                     analyzer.get_symmetrized_structure().wyckoff_symbols)
                 wyckoff[i] = ", ".join(str(w) for w in symbols)
@@ -993,6 +1003,8 @@ def symmetry(md: AnnData, source: str = "input", symprec: float = 0.01) -> None:
 
     md.obs["crystal_system"] = systems.astype(str)
     md.obs["point_group"] = points.astype(str)
+    md.obs["spacegroup_number"] = numbers
+    md.obs["spacegroup_symbol"] = group_symbols.astype(str)
     md.obs["n_symmetry_operations"] = orders
     md.obs["n_wyckoff"] = wyckoff_count
     md.obs["wyckoff"] = wyckoff.astype(str)

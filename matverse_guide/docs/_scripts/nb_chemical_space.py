@@ -456,6 +456,27 @@ The result is an ordinary materials object, so `mv.pp.describe`, `mv.calc.relax`
 and everything else work on it unchanged. The funnel is now complete: elements →
 compositions → structures → energies.
 
+`mv.pl.spacegroups` shows the distribution, and putting the requested and the
+achieved group side by side is how the difference stops being a column nobody
+reads. Bars are grouped and coloured by crystal system rather than plotted as
+230 flat categories, because the number itself carries no order a reader can
+use — 62 is not "between" 61 and 63 in any sense that matters, but Pnma being
+orthorhombic does."""),
+
+    ("code", """\
+try:
+    ax = mv.pl.spacegroups(many, column="space_group",
+                           compare="requested_space_group")
+    ax.set_title("requested (hollow) vs achieved (filled)")
+except (ImportError, NameError, ValueError) as exc:
+    print("needs PyXtal and matplotlib:", exc)"""),
+
+    ("markdown", """\
+It also works on any dataset that has been through `mv.pp.symmetry`, which now
+records `spacegroup_number` and `spacegroup_symbol` alongside the crystal system
+and point group — the analyser was already being built, so the group itself cost
+nothing to report and is the one label everybody actually cites.
+
 ```{seealso}
 [Beyond one number](beyond_one_number.ipynb) covers the results that are not a
 single number per material: curves, per-atom values and measurements.

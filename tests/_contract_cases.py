@@ -149,6 +149,13 @@ def two_elements():
     return ["Ti", "O"]
 
 
+def symmetric():
+    """A dataset carrying obs['spacegroup_number'], for mv.pl.spacegroups."""
+    md = mv.datasets.metals(["Cu", "Al"])
+    mv.pp.symmetry(md)
+    return md
+
+
 def perovskite_candidates():
     return mv.data.from_compositions(["BaTiO3", "SrTiO3"])
 
@@ -849,6 +856,7 @@ def cases(tmp):
          {"threshold": 4, "returns": "new"}),
         (mv.gen.from_symmetry, perovskite_candidates, (),
          {"space_groups": [221], "seed": 0, "returns": "new"}),
+        (mv.pl.spacegroups, symmetric, (), {}),
         (mv.disorder.cluster_expansion, cu_au_training, (),
          {"parent": cu_au_parent(), "level": "emt",
           "cutoffs": {2: 6.0, 3: 4.5}}),

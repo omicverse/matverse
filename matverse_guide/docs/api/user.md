@@ -12,7 +12,7 @@ agent. Every entry names the state it reads and the state it writes, and each of
 those claims is verified by execution in `tests/test_contracts.py` rather than
 asserted.
 
-Public registry entries listed here: 213
+Public registry entries listed here: 214
 
 Look a function up by intent rather than by name:
 
@@ -422,6 +422,7 @@ Publication defaults; every function draws onto an axis and returns it.
    pl.rank_elements_groups
    pl.scatter
    pl.set_style
+   pl.spacegroups
    pl.spectra
    pl.structure
 ```
@@ -586,7 +587,7 @@ arguments — `obs['energy_{level}']` becomes `obs['energy_emt']` when you pass
 | `mv.pp.standardize` | `obsm['structures']['primitive']`, `obsm['structures']['conventional']`, `obs['spacegroup']`, `obs['spacegroup_number']`, `obs['crystal_system']`, `obs['nsites_primitive']` |
 | `mv.pp.strain` | `obsm['structures']['{name}']` |
 | `mv.pp.supercell` | `obsm['structures']['{name}']` |
-| `mv.pp.symmetry` | `obs['crystal_system']`, `obs['point_group']`, `obs['n_symmetry_operations']`, `obs['n_wyckoff']`, `obs['wyckoff']`, `obs['min_site_symmetry']`, `obs['max_site_symmetry']` |
+| `mv.pp.symmetry` | `obs['crystal_system']`, `obs['point_group']`, `obs['spacegroup_number']`, `obs['spacegroup_symbol']`, `obs['n_symmetry_operations']`, `obs['n_wyckoff']`, `obs['wyckoff']`, `obs['min_site_symmetry']`, `obs['max_site_symmetry']` |
 | `mv.feat.element_stats` | `obsm['X_element_stats']`, `uns['features']['X_element_stats']` |
 | `mv.feat.embed` | `obsm['X_{model}']`, `uns['features']['X_{model}']` |
 | `mv.feat.matminer` | `obsm['X_matminer']`, `uns['features']['X_matminer']` |

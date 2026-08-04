@@ -229,7 +229,22 @@ def elastic(md: AnnData, level: str = "emt", source: str = "input",
           "absolute volume: materials of different size have no common volume "
           "axis, and the strain series they were computed on is common by "
           "construction. obs['eos_residual'] is the RMS misfit in eV/atom; a "
-          "value far above a meV is a fit that should not be read.",
+          "value far above a meV is a fit that should not be read.\n\n"
+          "**With a plane-wave DFT calculator, hold the k-point mesh fixed "
+          "across the scan.** A mesh set by a k-point *density* changes "
+          "discretely as the cell grows, and each change puts a step in E(V) "
+          "that the fit reads as curvature. On silicon with GPAW, varying "
+          "nothing but the k-points, the bulk modulus went -879, 319, 125 and "
+          "85.7 GPa at densities of 2.0, 2.5, 3.0 and 4.0, against 88.7 GPa "
+          "from the same calculator at a fixed 8x8x8 and a PBE literature "
+          "88-89. A negative bulk modulus is not a soft crystal; it is a "
+          "discontinuity. Raising the density only shrinks the jump.\n\n"
+          "obs['eos_residual'] catches it before the modulus does, and by a "
+          "wide margin: 9.5 meV/atom for the density-2.0 fit against 0.002 "
+          "for the fixed mesh, a factor of nearly five thousand. The existing "
+          "advice above — a residual far above a meV is a fit that should not "
+          "be read — was already enough to reject it. The built-in gpaw-pbe "
+          "levels use a fixed mesh so the situation does not arise.",
 )
 def eos(md: AnnData, level: str = "emt", source: str = "input",
         scales=None, model: str = "birch_murnaghan",

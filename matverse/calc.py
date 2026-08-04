@@ -47,7 +47,9 @@ from ._registry import register_function
 _CALCULATORS: dict[str, tuple] = {}
 
 #: Levels matverse knows how to build, if their backend happens to be installed.
-BUILTIN_LEVELS = ("emt", "lj", "mace-mpa", "mace-omat", "sevennet", "chgnet")
+BUILTIN_LEVELS = ("emt", "lj", "mace-mpa", "mace-omat", "sevennet", "chgnet",
+                  "m3gnet", "m3gnet-r2scan", "tensornet", "orb",
+                  "gpaw-pbe", "gpaw-pbe-fast")
 
 
 @register_function(
@@ -122,6 +124,86 @@ def _builtin(name: str):
             "surrogate": True, "license": "BSD-3-Clause", "uncertainty": None,
             "note": "Superseded on Matbench Discovery by OMat24-trained models; "
                     "kept because a great deal of published work used it."})
+    if name in ("m3gnet", "m3gnet-r2scan", "tensornet"):
+        import matgl
+        from matgl.ext.ase import PESCalculator
+        checkpoint, functional = {
+            "m3gnet": ("M3GNet-PES-MatPES-PBE-2025.2", "PBE"),
+            "m3gnet-r2scan": ("M3GNet-PES-MatPES-r2SCAN-2025.2", "r2SCAN"),
+            "tensornet": ("TensorNet-PES-MatPES-PBE-2025.2", "PBE"),
+        }[name]
+        # stress_unit is not optional. matgl returns stress in GPa by
+        # default while ASE's contract is eV/A^3, so leaving it alone makes
+        # every stress-derived quantity - elastic constants, bulk modulus,
+        # pressure - exactly 160.2x too large, with no error anywhere.
+        return (lambda: PESCalculator(matgl.load_model(checkpoint),
+                                      stress_unit="eV/A3"),
+                {"kind": "mlip", "method": checkpoint,
+                 "reference": f"{functional} (MatPES)", "surrogate": True,
+                 "license": "BSD-3-Clause", "uncertainty": None,
+                 "note": "MatPES-trained, so it reproduces plain "
+                         f"{functional} rather than the PBE+U of the MP-"
+                         "trained generation. Which functional a surrogate "
+                         "was fitted to is not a detail: mixing a PBE+U "
+                         "surrogate with a PBE one is the same class of error "
+                         "as mixing PBE with HSE06, and it is why "
+                         "reference= is recorded on every level."})
+    if name == "orb":
+        from orb_models.forcefield import pretrained
+        from orb_models.forcefield.calculator import ORBCalculator
+        return (lambda: ORBCalculator(
+            pretrained.orb_v3_conservative_inf_omat(device="cpu"),
+            device="cpu"),
+            {"kind": "mlip", "method": "ORB v3 conservative", 
+             "reference": "PBE+U (OMat24)", "surrogate": True,
+             "license": "Apache-2.0", "uncertainty": None,
+             "note": "Conservative variant: forces are the energy gradient, "
+                     "which is what a phonon or a relaxation needs. The "
+                     "'direct' variants predict forces independently and are "
+                     "faster and not usable for either."})
+    if name in ("gpaw-pbe", "gpaw-pbe-fast"):
+        from gpaw import GPAW, PW
+        # Not a surrogate. This is the one level here that solves the
+        # Kohn-Sham equations rather than reproducing something that did, and
+        # kind/surrogate say so — every downstream record inherits it.
+        cutoff, mesh = ((500.0, (8, 8, 8)) if name == "gpaw-pbe"
+                        else (400.0, (6, 6, 6)))
+        return (lambda: GPAW(mode=PW(cutoff), xc="PBE", kpts=mesh,
+                             txt=None, symmetry={"point_group": False}),
+                {"kind": "dft", "method": f"GPAW PBE, PW({cutoff:g} eV)",
+                 "reference": "PBE", "surrogate": False,
+                 "license": "GPL-3.0", "uncertainty": None,
+                 "plane_wave_cutoff_eV": cutoff,
+                 "kpoint_mesh": list(mesh),
+                 "note": "Real plane-wave DFT, not a model of it. The cutoff "
+                         "and the k-point mesh are the two settings that "
+                         "decide whether a number is converged, so they are "
+                         "recorded on the level rather than left implicit.\n\n"
+                         "The mesh is **fixed** rather than set by a k-point "
+                         "density, and that is not a stylistic choice. A "
+                         "density-based mesh changes discretely as a cell "
+                         "changes size, which puts a step in E(V) and "
+                         "destroys anything fitted to it. Silicon, same "
+                         "calculator, only the k-points varying:\n\n"
+                         "  density 2.0 -> -879 GPa   (125 -> 64 k-points)\n"
+                         "  density 2.5 ->  319 GPa   (216 -> 125)\n"
+                         "  density 3.0 ->  125 GPa   (343 -> 216)\n"
+                         "  density 4.0 -> 85.7 GPa   (729 -> 512)\n"
+                         "  fixed 8x8x8 -> 88.7 GPa   (unchanged)\n\n"
+                         "against a PBE literature 88-89. A negative bulk "
+                         "modulus is not a soft crystal, it is a "
+                         "discontinuity. Raising the density only shrinks the "
+                         "relative size of the jump; it never removes it. The "
+                         "plane-wave cutoff, by contrast, was already "
+                         "converged - PW(400) and PW(600) differ by 0.1 GPa - "
+                         "so the whole error was the mesh.\n\n"
+                         "A fixed mesh suits small cells. Register your own "
+                         "level for anything large, where 8x8x8 is wasteful, "
+                         "and keep it fixed across any volume scan.\n\n"
+                         "point_group symmetry is off because matverse hands "
+                         "in displaced and strained cells whose symmetry is "
+                         "lower than the analyser infers from a rounded "
+                         "geometry."})
     raise KeyError(
         f"unknown level {name!r}. Runnable here: "
         f"{sorted(available(check_imports=False))}. Register your own with "

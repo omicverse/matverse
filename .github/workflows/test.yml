@@ -43,7 +43,11 @@ jobs:
           # matverse is claiming to cover — it read 100 modules against a floor
           # of 111 purely because half the add-ons were absent.
           sudo apt-get update -qq && sudo apt-get install -y -qq libxrender1
-          pip install -e ".[dev,analysis,plot,multi,diffusion,defects,alloys,molecules,phonons,screening,generation]"
+          # dft is included: the GPAW test is one H2 molecule in LCAO and
+          # takes about three seconds, and it is the only thing that shows a
+          # real Kohn-Sham calculation still runs. The crystal validations
+          # behind the numbers in the notes take minutes each and stay out.
+          pip install -e ".[dev,analysis,plot,multi,diffusion,defects,alloys,molecules,phonons,screening,generation,potentials,dft]"
 
       - name: Show the environment the results belong to
         run: |
@@ -111,7 +115,7 @@ jobs:
           # docs build that silently skipped those cells would document a
           # matverse nobody runs.
           sudo apt-get update -qq && sudo apt-get install -y -qq libxrender1
-          pip install -e ".[diffusion,defects,alloys,molecules,phonons,screening,generation]"
+          pip install -e ".[diffusion,defects,alloys,molecules,phonons,screening,generation,potentials]"
           pip install -r matverse_guide/requirements.txt
 
       - name: Execute the tutorial notebooks

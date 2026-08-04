@@ -17,6 +17,7 @@ should not need a plotting stack to run.
 from __future__ import annotations
 
 import numpy as np
+import pandas as pd
 from anndata import AnnData
 
 from ._core import grid_of, structures
@@ -1162,3 +1163,99 @@ def distribution(md: AnnData, column: str, by: str | None = None,
         ax.spines[spine].set_visible(False)
     ax._matverse_dropped = dropped
     return ax
+
+
+@register_function(
+    aliases=["space group distribution", "symmetry distribution",
+             "spacegroup bar", "which space groups", "crystal system "
+             "distribution", "how symmetric is this set"],
+    category="pl",
+    description="Distribution of space groups across a dataset, grouped by "
+                "crystal system — what symmetry a generated or screened set "
+                "actually has.",
+    requires={"obs": ["{column}"]},
+    examples=["mv.pl.spacegroups(built)",
+              "mv.pl.spacegroups(md, column='spacegroup_number')",
+              "mv.pl.spacegroups(built, column='requested_space_group')"],
+    related=["mv.gen.from_symmetry", "mv.pp.describe", "mv.pl.distribution"],
+    notes="A generated set has a symmetry distribution, and it is rarely the "
+          "one that was asked for. mv.gen.from_symmetry records both the "
+          "requested group and the one the structure actually has, and "
+          "plotting the two side by side is how the difference becomes "
+          "visible rather than a column nobody reads.\\n\\n"
+          "Bars are grouped and coloured by crystal system rather than "
+          "plotted as 230 flat categories, because the number itself carries "
+          "no order a reader can use — 62 is not 'between' 61 and 63 in any "
+          "sense that matters, but Pnma being orthorhombic does.",
+)
+def spacegroups(md: AnnData, column: str = "spacegroup_number",
+                compare: str | None = None, top: int = 20, ax=None):
+    """Space-group distribution grouped by crystal system. Returns the axis."""
+    if column not in md.obs:
+        raise ValueError(
+            f"obs[{column!r}] absent; run mv.pp.symmetry(md) for "
+            f"'spacegroup_number', or point column= at "
+            f"mv.gen.from_symmetry's 'space_group' — this object has "
+            f"{sorted(md.obs.columns)[:8]}...")
+    if compare is not None and compare not in md.obs:
+        raise ValueError(f"obs[{compare!r}] absent")
+
+    numbers = pd.to_numeric(md.obs[column], errors="coerce").dropna()
+    if numbers.empty:
+        raise ValueError(f"obs[{column!r}] holds no usable space-group number")
+
+    counts = numbers.astype(int).value_counts().sort_values(ascending=False)
+    keep = counts.head(int(top))
+    order = sorted(keep.index)
+
+    ax = _axis(ax)
+    systems = [_crystal_system(n) for n in order]
+    palette = {"triclinic": "#8e44ad", "monoclinic": "#4c72b0",
+               "orthorhombic": "#2a9d8f", "tetragonal": "#e9c46a",
+               "trigonal": "#e76f51", "hexagonal": "#d35400",
+               "cubic": "#c1121f"}
+    positions = np.arange(len(order))
+    width = 0.4 if compare is not None else 0.7
+    ax.bar(positions - (width / 2 if compare is not None else 0),
+           [keep[n] for n in order], width=width,
+           color=[palette[s] for s in systems],
+           label=column if compare is not None else None)
+
+    if compare is not None:
+        other = pd.to_numeric(md.obs[compare], errors="coerce").dropna()
+        other = other.astype(int).value_counts()
+        ax.bar(positions + width / 2, [int(other.get(n, 0)) for n in order],
+               width=width, facecolor="none", edgecolor="#333333",
+               linewidth=0.9, label=compare)
+        ax.legend(frameon=False, fontsize=8)
+
+    ax.set_xticks(positions)
+    ax.set_xticklabels([str(n) for n in order], rotation=90, fontsize=7)
+    ax.set_xlabel("space group number")
+    ax.set_ylabel("materials")
+    for spine in ("top", "right"):
+        ax.spines[spine].set_visible(False)
+
+    seen = list(dict.fromkeys(systems))
+    handles = [_plt().Line2D([], [], color=palette[s], linewidth=6, label=s)
+               for s in seen]
+    ax.add_artist(ax.legend(handles=handles, frameon=False, fontsize=7,
+                            loc="upper right", title="crystal system",
+                            title_fontsize=7))
+    ax._matverse_n_groups = len(order)
+    ax._matverse_dropped = int(len(counts) - len(keep))
+    return ax
+
+
+#: Space-group number ranges, in the international convention.
+_CRYSTAL_SYSTEMS = ((2, "triclinic"), (15, "monoclinic"), (74, "orthorhombic"),
+                    (142, "tetragonal"), (167, "trigonal"), (194, "hexagonal"),
+                    (230, "cubic"))
+
+
+def _crystal_system(number: int) -> str:
+    """The crystal system a space-group number belongs to."""
+    for limit, name in _CRYSTAL_SYSTEMS:
+        if number <= limit:
+            return name
+    return "cubic"
