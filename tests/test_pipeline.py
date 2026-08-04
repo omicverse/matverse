@@ -496,3 +496,58 @@ class TestSpacegroupPlot:
         md = mv.datasets.metals(["Cu"])
         with pytest.raises(ValueError, match="mv.pp.symmetry"):
             mv.pl.spacegroups(md)
+
+
+class TestForcesVanishBySymmetry:
+    """The cheapest true statement about any calculator.
+
+    In perfect diamond silicon every atom sits on a site whose symmetry forces
+    the net force to be exactly zero. A calculator that cannot reproduce that
+    is breaking a symmetry it was never asked to break, and the size of the
+    violation is a quality signal that costs one energy evaluation to measure.
+
+    It is not a hypothetical filter. Measured here on the same cell, the
+    largest force component spans twelve orders of magnitude:
+
+        mace-mpa   1.1e-15      sevennet   4.9e-08      orb      7.6e-04
+        mace-omat  1.5e-15      tensornet  2.2e-07      m3gnet   5.3e-03
+        chgnet     5.9e-06                              GPAW     8.9e-17
+
+    and M3GNet's 5 meV/A is why it returns a silicon bulk modulus of 238 GPa
+    where the others return 82-89 and real PBE returns 88.7. A model that
+    cannot get zero right does not get curvature right either.
+    """
+
+    TOLERANCE = 0.02       # eV/A — loose enough to pass anything usable
+
+    @staticmethod
+    def _installed():
+        levels = mv.calc.available()
+        return [name for name, meta in sorted(levels.items())
+                if "unavailable" not in meta and meta.get("kind") != "dft"]
+
+    def test_at_least_one_calculator_is_installed(self):
+        assert self._installed(), "nothing to check"
+
+    def test_forces_vanish_in_perfect_silicon(self):
+        from ase.build import bulk
+        from matverse.calc import _builtin
+
+        atoms = bulk("Si", "diamond", a=5.43)
+        worst = {}
+        for name in self._installed():
+            if name in ("emt", "lj"):
+                continue          # not parameterised for silicon
+            try:
+                factory, _ = _builtin(name)
+                cell = atoms.copy()
+                cell.calc = factory()
+                worst[name] = float(np.abs(cell.get_forces()).max())
+            except Exception:     # pragma: no cover - backend trouble
+                continue
+        if not worst:
+            pytest.skip("no calculator here handles silicon")
+        offenders = {k: v for k, v in worst.items() if v > self.TOLERANCE}
+        assert not offenders, (
+            f"forces must vanish by symmetry in perfect diamond silicon; "
+            f"these did not: {offenders}")

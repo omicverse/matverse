@@ -147,7 +147,20 @@ def _builtin(name: str):
                          "was fitted to is not a detail: mixing a PBE+U "
                          "surrogate with a PBE one is the same class of error "
                          "as mixing PBE with HSE06, and it is why "
-                         "reference= is recorded on every level."})
+                         "reference= is recorded on every level.\n\n"
+                         "M3GNet specifically is the weakest of the "
+                         "potentials reachable here, and by a margin worth "
+                         "knowing before screening on it. In perfect diamond "
+                         "silicon, where site symmetry forces every force to "
+                         "be exactly zero, it returns 5e-3 eV/A where MACE "
+                         "returns 1e-15 and real DFT returns 9e-17. It gives "
+                         "a silicon bulk modulus of 238 GPa where TensorNet "
+                         "gives 86, ORB 82 and GPAW's PBE 88.7. Both numbers "
+                         "come from the same failure: a model that cannot "
+                         "reproduce zero does not reproduce curvature "
+                         "either. It is kept because a great deal of "
+                         "published work used it and comparisons need it, not "
+                         "because it should be chosen."})
     if name == "orb":
         from orb_models.forcefield import pretrained
         from orb_models.forcefield.calculator import ORBCalculator
