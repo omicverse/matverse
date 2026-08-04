@@ -149,6 +149,22 @@ def two_elements():
     return ["Ti", "O"]
 
 
+def _pbsn_tdb():
+    """pycalphad's Pb-Sn assessment, or a path that will fail cleanly."""
+    import importlib.util
+    if importlib.util.find_spec("pycalphad") is None:
+        return "pycalphad-not-installed.tdb"
+    import pathlib
+
+    import pycalphad
+    found = list(pathlib.Path(pycalphad.__file__).parent.rglob("pbsn.tdb"))
+    return str(found[0]) if found else "pbsn-not-found.tdb"
+
+
+def pbsn_alloys():
+    return mv.data.from_compositions(["Pb0.261Sn0.739", "Pb0.9Sn0.1"])
+
+
 def symmetric():
     """A dataset carrying obs['spacegroup_number'], for mv.pl.spacegroups."""
     md = mv.datasets.metals(["Cu", "Al"])
@@ -857,6 +873,8 @@ def cases(tmp):
         (mv.gen.from_symmetry, perovskite_candidates, (),
          {"space_groups": [221], "seed": 0, "returns": "new"}),
         (mv.pl.spacegroups, symmetric, (), {}),
+        (mv.thermo.calphad, pbsn_alloys, (_pbsn_tdb(),),
+         {"temperature": 450.0}),
         (mv.disorder.cluster_expansion, cu_au_training, (),
          {"parent": cu_au_parent(), "level": "emt",
           "cutoffs": {2: 6.0, 3: 4.5}}),

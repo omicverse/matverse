@@ -1455,3 +1455,88 @@ class TestSelfConsistentPhonons:
             md, level="emt", temperatures=(300.,), supercell=(5, 5, 5),
             cutoff=5.0, n_structures=10, n_iterations=5)
         assert capsys.readouterr().out == ""
+
+
+def _pbsn_database():
+    """pycalphad's own Pb-Sn assessment, which ships with its tests.
+
+    matverse ships no database — assessed ones are years of work and mostly
+    licensed — so the only one available to test against is pycalphad's, and
+    this returns None rather than guessing if the layout changes.
+    """
+    import importlib.util
+    import pathlib
+    if importlib.util.find_spec("pycalphad") is None:
+        return None
+    import pycalphad
+    found = list(pathlib.Path(pycalphad.__file__).parent.rglob("pbsn.tdb"))
+    return str(found[0]) if found else None
+
+
+@pytest.mark.skipif(_pbsn_database() is None,
+                    reason="needs pycalphad and its Pb-Sn assessment")
+class TestCalphad:
+    """Checked against the Pb-Sn eutectic, which is a measured number.
+
+    A CALPHAD database is fitted to measured phase boundaries, so the thing to
+    verify is that the fit is being read correctly — not the thermodynamics,
+    which is somebody else's assessment.
+    """
+
+    ETUECTIC = "Pb0.261Sn0.739"
+
+    def test_it_brackets_the_measured_eutectic(self):
+        """Two solids below, one liquid above. The measured eutectic is 456 K,
+        and 450/455 straddle it."""
+        below = mv.data.from_compositions([self.ETUECTIC])
+        mv.thermo.calphad(below, _pbsn_database(), temperature=450.0)
+        assert below.obs["calphad_n_phases"].iloc[0] == 2
+        assert "LIQUID" not in below.obs["calphad_phases"].iloc[0]
+
+        above = mv.data.from_compositions([self.ETUECTIC])
+        mv.thermo.calphad(above, _pbsn_database(), temperature=455.0)
+        assert above.obs["calphad_phases"].iloc[0] == "LIQUID"
+
+    def test_the_phase_fractions_are_a_partition(self):
+        md = mv.data.from_compositions([self.ETUECTIC, "Pb0.9Sn0.1"])
+        mv.thermo.calphad(md, _pbsn_database(), temperature=450.0)
+        # The major fraction cannot exceed the whole, and a single-phase
+        # material is entirely that phase.
+        assert (md.obs["calphad_major_fraction"] <= 1.0 + 1e-9).all()
+        assert float(md.obs["calphad_major_fraction"].iloc[1]) == \
+            pytest.approx(1.0, abs=1e-6)
+        assert md.obs["calphad_n_phases"].iloc[1] == 1
+
+    def test_an_unassessed_element_is_skipped_not_projected(self):
+        """Dropping copper and renormalising would answer a question about a
+        different material, so the row is left empty and counted."""
+        md = mv.data.from_compositions(["PbSnCu"])
+        with pytest.warns(RuntimeWarning, match="no equilibrium"):
+            mv.thermo.calphad(md, _pbsn_database(), temperature=450.0)
+        assert md.obs["calphad_phases"].iloc[0] == ""
+        assert md.uns["calphad"]["n_skipped"] == 1
+        assert "CU" in md.uns["calphad"]["errors"][0]
+
+    def test_asking_for_an_unassessed_element_is_refused_up_front(self):
+        md = mv.data.from_compositions(["PbSn"])
+        with pytest.raises(ValueError, match="does not assess"):
+            mv.thermo.calphad(md, _pbsn_database(), temperature=450.0,
+                              elements=["PB", "SN", "CU"])
+
+    def test_it_records_the_database_it_read(self):
+        """Two assessments of the same system disagree, so which one produced
+        a number is part of the number."""
+        md = mv.data.from_compositions([self.ETUECTIC])
+        mv.thermo.calphad(md, _pbsn_database(), temperature=450.0)
+        recorded = md.uns["calphad"]
+        assert "pbsn" in recorded["database"].lower()
+        assert recorded["temperature"] == 450.0
+        assert set(recorded["assessed_elements"]) == {"PB", "SN"}
+        assert "error bar" in recorded["note"]
+
+    def test_it_needs_a_formula_column(self):
+        from pymatgen.core import Lattice, Structure
+        md = mv.data.from_structures(
+            [Structure(Lattice.cubic(4.0), ["Pb"], [[0, 0, 0]])])
+        with pytest.raises(ValueError, match="from_compositions"):
+            mv.thermo.calphad(md, _pbsn_database(), temperature=450.0)

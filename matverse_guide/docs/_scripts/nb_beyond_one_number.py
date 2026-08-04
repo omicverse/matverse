@@ -989,4 +989,54 @@ Now the comparison this was for. Run `mv.thermo.hull` at a computed level on the
 same object and the two `e_above_hull` columns sit side by side on the same
 rows, which is the only honest way to ask whether a functional is *right* about
 stability rather than merely self-consistent."""),
+
+    ("markdown", """\
+## A hull is not a phase diagram
+
+`mv.thermo.hull` computes a convex hull **at 0 K** from energies this library
+produced. That extends to compositions nobody has ever assessed, and it says
+nothing about what happens at 800 K, about liquids, or about solution phases.
+
+`mv.thermo.calphad` reads the other kind of answer: parameters fitted to
+*measured* phase boundaries, giving multicomponent equilibrium at temperature.
+Neither supersedes the other — the hull reaches further, CALPHAD is right about
+where it reaches."""),
+
+    ("code", """\
+try:
+    import pathlib
+    import pycalphad
+
+    tdb = next(pathlib.Path(pycalphad.__file__).parent.rglob("pbsn.tdb"))
+    alloys = mv.data.from_compositions(
+        ["Pb0.261Sn0.739", "Pb0.9Sn0.1", "Pb0.1Sn0.9"])
+    alloys.obs_names = ["eutectic", "Pb-rich", "Sn-rich"]
+
+    for temperature in (450.0, 455.0):
+        out = alloys.copy()
+        mv.thermo.calphad(out, str(tdb), temperature=temperature)
+        print(f"--- {temperature:.0f} K ---")
+        print(out.obs[["calphad_phases", "calphad_major_fraction"]]
+              .round(3).to_string())
+except ImportError:
+    print("needs pycalphad; pip install matverse[calphad]")"""),
+
+    ("markdown", """\
+The Pb-Sn eutectic is measured at **456 K**, and those two temperatures
+straddle it: at 450 K the eutectic composition is two solid phases, at 455 K it
+is a single liquid. The off-eutectic compositions melt over a range instead —
+`LIQUID + BCT_A5` is a partial melt, which is what an alloy away from the
+eutectic does.
+
+```{warning}
+**The database is the whole calculation.** matverse ships none; assessed
+databases are years of work and mostly licensed, so you supply one and
+`uns['calphad']` records which. Two assessments of the same system will
+disagree, and that spread is the honest error bar on any number here — not the
+precision of the numbers themselves.
+
+A material containing an element the database does not assess is **skipped and
+counted**, never projected onto the elements that remain. Dropping the copper
+from PbSnCu and renormalising would answer a question about a different alloy.
+```"""),
 ]
