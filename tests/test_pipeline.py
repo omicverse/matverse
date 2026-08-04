@@ -427,10 +427,15 @@ class TestMatglStressUnit:
 class TestRealDFT:
     """One genuine Kohn-Sham calculation, small enough for CI.
 
-    The crystal validations are too slow to run here — a silicon equation of
-    state takes about eight minutes — so those numbers live in the notes as
-    measured values: a relaxed lattice constant of 5.479 A against a PBE
-    literature 5.47, and a bulk modulus of 88.7 GPa against 88-89.
+    This skips in CI, and not because it is slow. GPAW ships no wheel and its
+    26.x sources include C++ headers from files the build compiles as C, so on
+    a stock runner it stops at "fatal error: algorithm: No such file or
+    directory" regardless of libxc, BLAS and build-essential. It builds where
+    the compiler puts the C++ headers on the default include path, which is
+    where the numbers in the notes were measured: a relaxed silicon lattice
+    constant of 5.479 A against a PBE literature 5.47, and a bulk modulus of
+    88.7 GPa against 88-89. Those runs take minutes each and would not belong
+    in CI even if it could install the package.
     """
 
     def test_it_actually_solves_something(self):
