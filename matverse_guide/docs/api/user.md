@@ -12,7 +12,7 @@ agent. Every entry names the state it reads and the state it writes, and each of
 those claims is verified by execution in `tests/test_contracts.py` rather than
 asserted.
 
-Public registry entries listed here: 214
+Public registry entries listed here: 215
 
 Look a function up by intent rather than by name:
 
@@ -274,6 +274,7 @@ Convex hull, reactions, chemical potentials.
    :toctree: reference/
    :nosignatures:
 
+   thermo.calphad
    thermo.chempot_diagram
    thermo.chempot_limits
    thermo.corrections
@@ -649,6 +650,7 @@ arguments — `obs['energy_{level}']` becomes `obs['energy_emt']` when you pass
 | `mv.surf.surface_energy` | `obs['surface_energy_{level}']`, `obs['surface_energy_{level}_off_stoichiometry']` |
 | `mv.surf.surface_energy_chempot` | `facets.obs['surface_energy_{level}']` |
 | `mv.surf.wulff` | `facets.obs['wulff_area_fraction_{level}']`, `bulk.obs['wulff_effective_radius_{level}']`, `bulk.obs['wulff_shape_factor_{level}']` |
+| `mv.thermo.calphad` | `obs['calphad_phases']`, `obs['calphad_n_phases']`, `obs['calphad_major_phase']`, `obs['calphad_major_fraction']`, `uns['calphad']` |
 | `mv.thermo.chempot_diagram` | `obs['chempot_stable_{level}']`, `obs['chempot_window_{level}']`, `uns['chempot_diagram']` |
 | `mv.thermo.chempot_limits` | `uns['chempot_limits']` |
 | `mv.thermo.corrections` | `obs['energy_{level}-{scheme}']`, `obs['energy_per_atom_{level}-{scheme}']`, `obs['correction_{level}-{scheme}']`, `obs['correction_per_atom_{level}-{scheme}']`, `obs['run_type_{level}-{scheme}']`, `uns['levels']['{level}-{scheme}']`, `uns['corrections']` |

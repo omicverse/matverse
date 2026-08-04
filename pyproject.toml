@@ -47,6 +47,9 @@ generation = ["pyxtal"]                              # mv.gen.from_symmetry
 # minutes where a surrogate is milliseconds, which is why it is an extra and
 # why the test suite exercises it on one molecule rather than a crystal.
 dft = ["gpaw"]
+# mv.thermo.calphad. Pinned below 0.11 because 0.11 builds against scipy 1.18,
+# which has no manylinux_2_17 wheel — an older glibc cannot get there.
+calphad = ["pycalphad<0.11"]
 # Further foundation potentials, on top of the mace/sevennet/chgnet already
 # reachable. matgl carries M3GNet and TensorNet at both PBE and r2SCAN.
 potentials = ["matgl", "orb-models"]

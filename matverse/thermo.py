@@ -1198,3 +1198,150 @@ def _locate(defect, bulk):
         # is asking where a defect is in a structure that has none.
         return None
     return None
+
+
+@register_function(
+    aliases=["calphad", "assessed phase diagram", "assessed thermodynamics",
+             "which phases coexist", "phase equilibrium", "tdb file",
+             "finite temperature phases", "solidus", "liquidus", "eutectic"],
+    category="thermo",
+    description="Equilibrium phases at temperature from an assessed CALPHAD "
+                "database — which phases coexist for each composition, and in "
+                "what fraction.",
+    requires={"obs": ["formula"]},
+    produces={"obs": ["calphad_phases", "calphad_n_phases",
+                      "calphad_major_phase", "calphad_major_fraction"],
+              "uns": ["calphad"]},
+    examples=["mv.thermo.calphad(md, 'pbsn.tdb', temperature=450)",
+              "mv.thermo.calphad(md, database, temperature=800, "
+              "elements=['AL', 'NI'])"],
+    related=["mv.thermo.hull", "mv.prop.quasiharmonic",
+             "mv.disorder.monte_carlo"],
+    notes="A different kind of answer from mv.thermo.hull, and worth keeping "
+          "separate from it. The hull is computed here, at 0 K, from energies "
+          "this library produced; CALPHAD reads parameters that were fitted "
+          "to measured phase boundaries, and gives multicomponent equilibrium "
+          "at temperature including liquids and solution phases. Neither "
+          "supersedes the other: the hull extends to compositions nobody has "
+          "assessed, and CALPHAD is right about the ones somebody has.\\n\\n"
+          "**The database is the whole calculation.** matverse ships none — "
+          "assessed databases are the product of years of work and are mostly "
+          "licensed — so a path or a Database object must be supplied, and "
+          "which one was used is recorded in uns['calphad']. Two databases "
+          "for the same system will disagree, and that disagreement is the "
+          "honest error bar on any number here.\\n\\n"
+          "Composition comes from obs['formula'], normalised to mole "
+          "fractions of the database's own elements. A material containing an "
+          "element the database does not assess is skipped and counted rather "
+          "than silently projected onto the elements that remain, which would "
+          "return an answer to a different question.\\n\\n"
+          "Checked against the Pb-Sn eutectic: at x(Sn)=0.739 this gives two "
+          "solid phases at 450 K and a single liquid at 455 K, bracketing the "
+          "measured 456 K.",
+)
+def calphad(md: AnnData, database, temperature: float = 300.0,
+            elements=None, phases=None, pressure: float = 101325.0) -> None:
+    """Equilibrium phases from a CALPHAD database. Deposits; returns ``None``."""
+    try:
+        from pycalphad import Database, equilibrium
+        from pycalphad import variables as v
+    except ImportError as exc:
+        raise ImportError(
+            f"mv.thermo.calphad needs pycalphad: `pip install "
+            f"matverse[calphad]` or `pip install pycalphad`. ({exc})") from exc
+
+    from pymatgen.core.composition import Composition
+
+    if "formula" not in md.obs:
+        raise ValueError(
+            "obs['formula'] absent; run mv.pp.describe(md), or build the "
+            "object with mv.data.from_compositions")
+
+    db = database if isinstance(database, Database) else Database(str(database))
+    assessed = sorted(e for e in db.elements if e not in ("/-", "VA"))
+    wanted = ([str(e).upper() for e in elements] if elements is not None
+              else assessed)
+    missing = sorted(set(wanted) - set(assessed))
+    if missing:
+        raise ValueError(
+            f"the database does not assess {missing}; it covers {assessed}")
+    active = list(phases) if phases is not None else list(db.phases)
+
+    names = np.empty(md.n_obs, dtype=object)
+    counts = np.full(md.n_obs, np.nan)
+    major = np.empty(md.n_obs, dtype=object)
+    major_fraction = np.full(md.n_obs, np.nan)
+    skipped = []
+
+    for i, formula in enumerate(md.obs["formula"].astype(str)):
+        names[i] = ""
+        major[i] = ""
+        try:
+            composition = Composition(formula).fractional_composition
+            present = {str(el).upper(): float(amount)
+                       for el, amount in composition.get_el_amt_dict().items()}
+        except Exception as exc:
+            skipped.append(f"{md.obs_names[i]}: {type(exc).__name__}: {exc}")
+            continue
+
+        outside = sorted(set(present) - set(wanted))
+        if outside:
+            # Dropping the unassessed elements and renormalising would answer
+            # a question about a different material.
+            skipped.append(
+                f"{md.obs_names[i]} ({formula}): contains {outside}, which "
+                f"this database does not assess")
+            continue
+
+        # pycalphad fixes the last element by difference, so only the others
+        # are named as conditions.
+        conditions = {v.T: float(temperature), v.P: float(pressure), v.N: 1}
+        for element in wanted[:-1]:
+            conditions[v.X(element)] = max(present.get(element, 0.0), 1e-9)
+        try:
+            result = equilibrium(db, wanted + ["VA"], active, conditions)
+            found = [str(p).strip()
+                     for p in np.asarray(result.Phase.squeeze()).ravel()
+                     if str(p).strip()]
+            fractions = [float(f) for f, p in
+                         zip(np.asarray(result.NP.squeeze()).ravel(),
+                             np.asarray(result.Phase.squeeze()).ravel())
+                         if str(p).strip()]
+        except Exception as exc:
+            skipped.append(f"{md.obs_names[i]}: {type(exc).__name__}: {exc}")
+            continue
+
+        if not found:
+            skipped.append(f"{md.obs_names[i]}: equilibrium returned no phase")
+            continue
+        order = int(np.argmax(fractions))
+        names[i] = " + ".join(found)
+        counts[i] = len(found)
+        major[i] = found[order]
+        major_fraction[i] = fractions[order]
+
+    md.obs["calphad_phases"] = names.astype(str)
+    md.obs["calphad_n_phases"] = counts
+    md.obs["calphad_major_phase"] = major.astype(str)
+    md.obs["calphad_major_fraction"] = major_fraction
+    md.uns["calphad"] = {
+        "database": str(getattr(database, "__class__", type(database)))
+        if isinstance(database, Database) else str(database),
+        "elements": wanted,
+        "assessed_elements": assessed,
+        "phases": active,
+        "temperature": float(temperature),
+        "pressure": float(pressure),
+        "n_skipped": len(skipped),
+        "errors": skipped[:10],
+        "note": "assessed parameters fitted to measured phase boundaries, "
+                "not energies computed here; a different database for the "
+                "same system will give a different answer, and that spread "
+                "is the error bar",
+    }
+    if skipped:
+        warnings.warn(
+            f"{len(skipped)} of {md.n_obs} materials produced no equilibrium; "
+            f"see uns['calphad']['errors']. First: {skipped[0]}",
+            RuntimeWarning, stacklevel=2)
+    record(md, "thermo.calphad", temperature=temperature, elements=wanted)
