@@ -52,7 +52,9 @@ dft = ["gpaw"]
 calphad = ["pycalphad<0.11"]
 # Further foundation potentials, on top of the mace/sevennet/chgnet already
 # reachable. matgl carries M3GNet and TensorNet at both PBE and r2SCAN.
-potentials = ["matgl", "orb-models"]
+# Every foundation potential mv.calc can reach. The older 'mlip' extra below
+# is a subset of this and is kept only so an existing install does not break.
+potentials = ["matgl", "orb-models", "mace-torch", "chgnet", "sevenn"]
 # mv.prop.phonon_at_temperature. hiphive reaches numba through trainstation,
 # and numba caps numpy below 2.5, so this extra cannot share an environment
 # with the newest numpy. It is tested in its own CI job for that reason rather
@@ -75,7 +77,7 @@ phonons = ["phonopy", "seekpath"]
 defects = ["pymatgen-analysis-defects"]              # interstitial and antisite
                                                      # kinds of mv.pp.defects
 mp = ["mp-api>=0.46.2"]                              # Delta-table data products
-mlip = ["mace-torch"]
+mlip = ["mace-torch"]                                # subset of 'potentials'
 # Batched GPU molecular dynamics. torch-sim-atomistic requires Python >= 3.11
 # (>= 3.12 from its 0.4 line) while matverse's own floor is 3.10, so this extra
 # is installable only on a newer interpreter. mv.md.batched_available() reports
