@@ -43,11 +43,7 @@ jobs:
           # matverse is claiming to cover — it read 100 modules against a floor
           # of 111 purely because half the add-ons were absent.
           sudo apt-get update -qq && sudo apt-get install -y -qq libxrender1
-          # dft is included: the GPAW test is one H2 molecule in LCAO and
-          # takes about three seconds, and it is the only thing that shows a
-          # real Kohn-Sham calculation still runs. The crystal validations
-          # behind the numbers in the notes take minutes each and stay out.
-          pip install -e ".[dev,analysis,plot,multi,diffusion,defects,alloys,molecules,phonons,screening,generation,potentials,dft]"
+          pip install -e ".[dev,analysis,plot,multi,diffusion,defects,alloys,molecules,phonons,screening,generation]"
 
       - name: Show the environment the results belong to
         run: |
@@ -65,6 +61,44 @@ jobs:
         # Printed on every run so a drop is visible in the log, not only in a
         # failing assertion.
         run: pytest tests/test_contracts.py -q -s -k "rate or audit"
+
+  calculators:
+    # GPAW and the torch-backed potentials get a job of their own. GPAW has no
+    # wheel and compiles against libxc and BLAS, which the runner does not
+    # carry by default; matgl and orb-models pull torch, which nothing else in
+    # this matrix needs. Putting either in the main legs would make all three
+    # pay for one job's worth of coverage.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libxc-dev libopenblas-dev
+          pip install -e ".[dev,plot,potentials,dft]"
+
+      - name: Show what is actually installed
+        run: |
+          python -c "
+          import matverse as mv
+          for name, meta in sorted(mv.calc.available().items()):
+              state = meta.get('unavailable', meta.get('method'))
+              print(f'{name:16s} {state}')
+          "
+
+      - name: Test the levels of theory
+        # The GPAW case is one H2 molecule in LCAO, about three seconds. The
+        # crystal validations behind the numbers in the notes take minutes
+        # each and are not run here.
+        run: |
+          pytest tests/test_pipeline.py -q \
+            -k "LevelsOfTheory or MatglStress or RealDFT" --durations=5
 
   anharmonic:
     # A job of its own, because hiphive reaches numba through trainstation and
@@ -115,7 +149,7 @@ jobs:
           # docs build that silently skipped those cells would document a
           # matverse nobody runs.
           sudo apt-get update -qq && sudo apt-get install -y -qq libxrender1
-          pip install -e ".[diffusion,defects,alloys,molecules,phonons,screening,generation,potentials]"
+          pip install -e ".[diffusion,defects,alloys,molecules,phonons,screening,generation]"
           pip install -r matverse_guide/requirements.txt
 
       - name: Execute the tutorial notebooks
