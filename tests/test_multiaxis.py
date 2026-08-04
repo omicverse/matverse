@@ -205,7 +205,21 @@ class TestSitesAxis:
         assert top["element"] == "Al"
 
     def test_mudata_assembly_is_optional_and_works(self, md):
+        """Both halves of the name, which the first version did not test.
+
+        It asserted only that assembly works, and where mudata was absent it
+        raised rather than skipping — so the 'optional' half was never
+        checked and the test failed on exactly the installation it was
+        describing. CI never saw it because the multi extra is always
+        installed there.
+        """
+        import importlib.util
+
         sites = mv.multi.sites(md)
+        if importlib.util.find_spec("mudata") is None:
+            with pytest.raises(ImportError, match="mudata"):
+                mv.multi.to_mudata(md, sites)
+            return
         mdata = mv.multi.to_mudata(md, sites)
         assert set(mdata.mod) == {"materials", "sites"}
         assert mdata["sites"].n_obs == sites.n_obs
