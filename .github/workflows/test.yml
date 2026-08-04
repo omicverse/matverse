@@ -80,7 +80,10 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           sudo apt-get update -qq
-          sudo apt-get install -y -qq libxc-dev libopenblas-dev
+          # libxc and BLAS for GPAW's extension, and build-essential because
+          # GPAW 26 includes C++ headers from sources compiled as C — without
+          # it the build stops at "fatal error: algorithm: No such file".
+          sudo apt-get install -y -qq build-essential libxc-dev libopenblas-dev
           pip install -e ".[dev,plot,potentials,dft]"
 
       - name: Show what is actually installed
