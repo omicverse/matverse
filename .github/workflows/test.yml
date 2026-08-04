@@ -62,6 +62,50 @@ jobs:
         # failing assertion.
         run: pytest tests/test_contracts.py -q -s -k "rate or audit"
 
+  calculators:
+    # The torch-backed potentials get a job of their own: matgl and orb-models
+    # pull torch, which nothing else in this matrix needs, and making all three
+    # main legs carry it to cover one job's worth of tests is a bad trade.
+    #
+    # GPAW is deliberately NOT installed here. It ships no wheel, and its 26.x
+    # sources include C++ headers from files the build compiles as C, so on a
+    # stock runner it stops at "fatal error: algorithm: No such file or
+    # directory" whether or not libxc, BLAS and build-essential are present —
+    # three attempts, same error. It builds on machines whose compiler puts the
+    # C++ headers on the default include path, which is where the real-DFT
+    # numbers in the notes were measured: a silicon lattice constant of 5.479 A
+    # and a bulk modulus of 88.7 GPa. TestRealDFT skips here, and says so
+    # rather than pretending to cover it.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev,plot,potentials]"
+
+      - name: Show what is actually installed
+        run: |
+          python -c "
+          import matverse as mv
+          for name, meta in sorted(mv.calc.available().items()):
+              state = meta.get('unavailable', meta.get('method'))
+              print(f'{name:16s} {state}')
+          "
+
+      - name: Test the levels of theory
+        # MatglStress is the one that matters here: it fails on the version
+        # that leaves matgl's stress in GPa, which is a 160x error nothing
+        # else would catch.
+        run: |
+          pytest tests/test_pipeline.py -q \
+            -k "LevelsOfTheory or MatglStress" --durations=5
+
   anharmonic:
     # A job of its own, because hiphive reaches numba through trainstation and
     # numba caps numpy below 2.5. Installing it alongside the others would

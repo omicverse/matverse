@@ -42,6 +42,14 @@ matminer = ["matminer"]
 cost = ["bibtexparser"]                               # mv.prop.cost price table
 screening = ["smact"]                                # mv.gen.compositions
 generation = ["pyxtal"]                              # mv.gen.from_symmetry
+# Real Kohn-Sham DFT, as a matverse level of theory. GPAW is an ASE
+# calculator, so nothing beyond the registration is needed - but a DFT run is
+# minutes where a surrogate is milliseconds, which is why it is an extra and
+# why the test suite exercises it on one molecule rather than a crystal.
+dft = ["gpaw"]
+# Further foundation potentials, on top of the mace/sevennet/chgnet already
+# reachable. matgl carries M3GNet and TensorNet at both PBE and r2SCAN.
+potentials = ["matgl", "orb-models"]
 # mv.prop.phonon_at_temperature. hiphive reaches numba through trainstation,
 # and numba caps numpy below 2.5, so this extra cannot share an environment
 # with the newest numpy. It is tested in its own CI job for that reason rather

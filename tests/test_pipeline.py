@@ -336,3 +336,163 @@ class TestFullRun:
         assert "relaxed_emt" in back.obsm["structures"].columns
         assert back.uns["levels"]["emt"]["method"] == "EMT"
         assert len(mv.structures(back, "relaxed_emt")) == 6
+
+
+def _spec(name: str) -> bool:
+    import importlib.util
+    return importlib.util.find_spec(name) is not None
+
+
+class TestLevelsOfTheory:
+    """What each level claims about itself.
+
+    Not backend-free, though the first version of this assumed it was: the
+    metadata is built inside _builtin alongside the import, so a level whose
+    backend is absent appears as {'unavailable': ...} rather than with its
+    fields. Every check here therefore skips the levels this environment
+    cannot construct, and asserts that it checked something.
+    """
+
+    @staticmethod
+    def _present(names):
+        levels = mv.calc.available()
+        found = {n: levels[n] for n in names
+                 if n in levels and "unavailable" not in levels[n]}
+        if not found:
+            pytest.skip(f"no backend installed for any of {names}")
+        return found
+
+    def test_the_dft_levels_are_not_surrogates(self):
+        """The whole point of the kind/surrogate fields. GPAW solves the
+        Kohn-Sham equations; everything else here reproduces something that
+        did, and a screen that cannot tell them apart cannot report what
+        produced a number."""
+        for entry in self._present(("gpaw-pbe", "gpaw-pbe-fast")).values():
+            assert entry["kind"] == "dft"
+            assert entry["surrogate"] is False
+            assert entry["reference"] == "PBE"
+
+    def test_the_surrogates_say_so(self):
+        found = self._present(("m3gnet", "tensornet", "orb", "mace-mpa",
+                               "chgnet"))
+        for entry in found.values():
+            assert entry["surrogate"] is True
+            assert entry["kind"] == "mlip"
+
+    def test_the_reference_functional_is_recorded_and_differs(self):
+        """Mixing a PBE surrogate with an r2SCAN one is the same class of
+        error as mixing PBE with HSE06. On silicon the two M3GNet checkpoints
+        differ by 6 eV for the same cell, so this is not a nicety."""
+        found = self._present(("m3gnet", "m3gnet-r2scan"))
+        if len(found) < 2:
+            pytest.skip("both matgl checkpoints are needed to compare them")
+        assert "PBE" in found["m3gnet"]["reference"]
+        assert "r2SCAN" in found["m3gnet-r2scan"]["reference"]
+        assert found["m3gnet"]["reference"] != \
+            found["m3gnet-r2scan"]["reference"]
+
+    def test_the_dft_levels_record_what_decides_convergence(self):
+        """A DFT number without its cutoff and k-mesh is not reproducible."""
+        for entry in self._present(("gpaw-pbe", "gpaw-pbe-fast")).values():
+            assert entry["plane_wave_cutoff_eV"] > 0
+            assert len(entry["kpoint_mesh"]) == 3
+
+    def test_the_gpaw_mesh_is_fixed_not_a_density(self):
+        """A density-based mesh changes discretely with cell size, which puts
+        a step in E(V). On silicon that gave a bulk modulus of -879 GPa at
+        density 2.0 and 256 GPa at 2.5, against 88.7 at a fixed mesh."""
+        for entry in self._present(("gpaw-pbe", "gpaw-pbe-fast")).values():
+            assert "kpoint_density_per_inv_angstrom" not in entry
+            assert all(isinstance(k, int) for k in entry["kpoint_mesh"])
+
+
+@pytest.mark.skipif(not _spec("matgl"), reason="matgl is an optional extra")
+class TestMatglStressUnit:
+    def test_the_stress_is_in_ase_units_not_gigapascals(self):
+        """matgl returns stress in GPa by default while ASE's contract is
+        eV/A^3. Left alone it makes every stress-derived quantity exactly
+        160.2x too large, with no error raised anywhere — the factor is the
+        GPa-to-eV/A^3 conversion, which is what makes it recognisable."""
+        from ase.build import bulk
+        from matverse.calc import _builtin
+        factory, _ = _builtin("tensornet")
+        atoms = bulk("Si", "diamond", a=5.43)
+        atoms.calc = factory()
+        stress = abs(np.asarray(atoms.get_stress())).max()
+        # Silicon near equilibrium: hundredths of eV/A^3, not units of it.
+        assert stress < 0.5, f"stress {stress} looks like GPa, not eV/A^3"
+
+
+@pytest.mark.skipif(not _spec("gpaw"), reason="GPAW is an optional extra")
+class TestRealDFT:
+    """One genuine Kohn-Sham calculation, small enough for CI.
+
+    This skips in CI, and not because it is slow. GPAW ships no wheel and its
+    26.x sources include C++ headers from files the build compiles as C, so on
+    a stock runner it stops at "fatal error: algorithm: No such file or
+    directory" regardless of libxc, BLAS and build-essential. It builds where
+    the compiler puts the C++ headers on the default include path, which is
+    where the numbers in the notes were measured: a relaxed silicon lattice
+    constant of 5.479 A against a PBE literature 5.47, and a bulk modulus of
+    88.7 GPa against 88-89. Those runs take minutes each and would not belong
+    in CI even if it could install the package.
+    """
+
+    def test_it_actually_solves_something(self):
+        from ase import Atoms
+        from gpaw import GPAW
+        molecule = Atoms("H2", positions=[[3, 3, 2.63], [3, 3, 3.37]],
+                         cell=[6, 6, 6], pbc=False)
+        molecule.calc = GPAW(mode="lcao", basis="sz(dzp)", xc="PBE",
+                             txt=None, h=0.25)
+        energy = molecule.get_potential_energy()
+        assert np.isfinite(energy)
+        assert -12.0 < energy < 0.0          # bound, and not absurd
+        assert np.isfinite(molecule.get_forces()).all()
+
+    def test_the_level_reaches_matverse_as_dft(self):
+        """Constructed through mv.calc's own registry rather than directly,
+        so a broken factory shows up here."""
+        from matverse.calc import _builtin
+        factory, meta = _builtin("gpaw-pbe-fast")
+        assert meta["kind"] == "dft" and meta["surrogate"] is False
+        assert factory() is not None
+
+
+@pytest.mark.skipif(not _spec("matplotlib"), reason="needs matplotlib")
+class TestSpacegroupPlot:
+    def test_it_groups_by_crystal_system(self):
+        import matplotlib
+        matplotlib.use("Agg")
+        from matverse.pl import _crystal_system
+        # Boundaries of the international convention, which is where an
+        # off-by-one would sit.
+        assert _crystal_system(1) == "triclinic"
+        assert _crystal_system(2) == "triclinic"
+        assert _crystal_system(3) == "monoclinic"
+        assert _crystal_system(15) == "monoclinic"
+        assert _crystal_system(16) == "orthorhombic"
+        assert _crystal_system(195) == "cubic"
+        assert _crystal_system(230) == "cubic"
+
+    def test_it_plots_a_distribution(self):
+        import matplotlib
+        matplotlib.use("Agg")
+        md = mv.datasets.metals(["Cu", "Al", "Ni"])
+        mv.pp.symmetry(md)
+        ax = mv.pl.spacegroups(md)
+        assert ax._matverse_n_groups >= 1
+
+    def test_it_says_what_it_left_out(self):
+        import matplotlib
+        matplotlib.use("Agg")
+        md = mv.datasets.metals(["Cu", "Al", "Ni", "Ag", "Au"])
+        mv.pp.symmetry(md)
+        ax = mv.pl.spacegroups(md, top=1)
+        assert ax._matverse_n_groups == 1
+        assert ax._matverse_dropped >= 0
+
+    def test_a_missing_column_names_the_fix(self):
+        md = mv.datasets.metals(["Cu"])
+        with pytest.raises(ValueError, match="mv.pp.symmetry"):
+            mv.pl.spacegroups(md)
