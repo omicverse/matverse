@@ -529,6 +529,51 @@ class TestFermiSurface:
         with pytest.raises(ValueError, match="one per row"):
             mv.elec.fermi_surface(md, [bs], level="model")
 
+    def test_the_mesh_is_kept_so_a_plot_need_not_recompute(self):
+        """Fourier interpolation takes minutes. A plotting function that
+        repeated it on every call would not be an interface worth having, so
+        the vertices and faces are stored once."""
+        md = self._area(0.8)
+        meshes = md.uns["fermi_surface"]["model"]["meshes"]
+        assert meshes, "no mesh was kept"
+        sheet = next(iter(meshes.values()))[0]
+        assert np.asarray(sheet["vertices"]).shape[1] == 3
+        assert np.asarray(sheet["faces"]).shape[1] == 3
+        assert sheet["area"] > 0
+
+    def test_keep_mesh_false_stores_nothing(self):
+        """A screen that wants only the numbers should not pay for the mesh."""
+        bs, structure = _free_electron(0.8)
+        md = mv.data.from_structures([structure])
+        mv.elec.fermi_surface(md, [bs], level="model", keep_mesh=False)
+        assert not md.uns["fermi_surface"]["model"]["meshes"]
+        assert np.isfinite(md.obs["fermi_surface_area_model"].iloc[0])
+
+    def test_it_draws_the_stored_sheets(self):
+        pytest.importorskip("matplotlib")
+        import matplotlib
+        matplotlib.use("Agg")
+        md = self._area(0.8)
+        ax = mv.pl.fermi_surface(md, level="model")
+        assert ax._matverse_n_sheets == int(
+            md.obs["fermi_sheets_model"].iloc[0])
+
+    def test_plotting_without_a_mesh_says_which_flag_removed_it(self):
+        pytest.importorskip("matplotlib")
+        import matplotlib
+        matplotlib.use("Agg")
+        bs, structure = _free_electron(0.8)
+        md = mv.data.from_structures([structure])
+        mv.elec.fermi_surface(md, [bs], level="model", keep_mesh=False)
+        with pytest.raises(ValueError, match="keep_mesh=False"):
+            mv.pl.fermi_surface(md, level="model")
+
+    def test_plotting_before_computing_names_the_missing_step(self):
+        pytest.importorskip("matplotlib")
+        md = mv.data.from_compositions(["Na"])
+        with pytest.raises(ValueError, match="mv.elec.fermi_surface"):
+            mv.pl.fermi_surface(md, level="model")
+
     def test_it_records_what_it_did(self):
         md = self._area(0.8, interpolation_factor=4.0)
         recorded = md.uns["fermi_surface"]["model"]

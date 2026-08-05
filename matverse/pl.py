@@ -1259,3 +1259,233 @@ def _crystal_system(number: int) -> str:
         if number <= limit:
             return name
     return "cubic"
+
+
+#: Voigt index pairs, in the order the 6x6 matrix uses.
+_VOIGT_PAIRS = ((0, 0), (1, 1), (2, 2), (1, 2), (0, 2), (0, 1))
+
+
+def _compliance_tensor(stiffness: np.ndarray) -> np.ndarray:
+    """The rank-four compliance S_ijkl from a 6x6 stiffness matrix.
+
+    The Voigt factors are the part worth stating: a compliance matrix carries
+    a half on every shear index and a quarter on a shear-shear pair, where a
+    stiffness matrix carries none. Inverting C and expanding without them
+    gives a tensor that looks right and is wrong by a factor of four on the
+    off-diagonal blocks — which shows up as an anisotropy that is not there.
+    """
+    compact = np.linalg.inv(np.asarray(stiffness, dtype=float).reshape(6, 6))
+    full = np.zeros((3, 3, 3, 3))
+    for a, (i, j) in enumerate(_VOIGT_PAIRS):
+        for b, (k, l) in enumerate(_VOIGT_PAIRS):
+            value = compact[a, b]
+            if a >= 3:
+                value *= 0.5
+            if b >= 3:
+                value *= 0.5
+            for p, q in {(i, j), (j, i)}:
+                for r, s in {(k, l), (l, k)}:
+                    full[p, q, r, s] = value
+    return full
+
+
+def _youngs_along(compliance: np.ndarray, directions: np.ndarray) -> np.ndarray:
+    """Young's modulus along each unit direction: 1 / (n n S n n)."""
+    unit = directions / np.linalg.norm(directions, axis=-1, keepdims=True)
+    denominator = np.einsum("ijkl,...i,...j,...k,...l->...", compliance,
+                            unit, unit, unit, unit)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        return np.where(np.abs(denominator) > 1e-12, 1.0 / denominator, np.nan)
+
+
+@register_function(
+    aliases=["elastic anisotropy", "directional youngs modulus", "young's "
+             "modulus surface", "how anisotropic is it", "plot elastic tensor",
+             "stiffness by direction"],
+    category="pl",
+    description="Young's modulus as a function of direction, in the three "
+                "principal planes — what the full elastic tensor says that "
+                "its isotropic averages do not.",
+    requires={"obsm": ["elastic_tensor_{level}"]},
+    prerequisites=["mv.prop.elastic"],
+    examples=["mv.pl.elastic(md, level='emt')",
+              "mv.pl.elastic(md, level='emt', row='Cu')"],
+    related=["mv.prop.elastic", "mv.pl.spectra", "mv.screen.rank"],
+    notes="mv.prop.elastic computes the whole 6x6 tensor and then reports "
+          "four Voigt-Reuss-Hill averages — bulk, shear and Young's moduli "
+          "and a Poisson ratio. Those are what a screen ranks on, and they "
+          "are all isotropic: they are exactly the part of the tensor that "
+          "survives averaging the anisotropy away. Computing the tensor and "
+          "reading only the averages throws away the reason for computing "
+          "it.\\n\\n"
+          "Copper is the standard illustration and the suite checks against "
+          "it: measured constants give a Young's modulus of 67 GPa along "
+          "[100] and 191 along [111], a factor of 2.9, where the isotropic "
+          "average is a single number near 120. A screen that ranks on the "
+          "average is ranking materials whose stiffness varies threefold "
+          "with direction as though it did not.\\n\\n"
+          "The three curves are sections through the xy, xz and yz planes of "
+          "the **crystal axes**, not of any conventional setting, so compare "
+          "them between materials only when the cells were oriented the same "
+          "way. ax._matverse_anisotropy carries max/min over the sampled "
+          "sphere, which is one for an isotropic solid by construction.",
+)
+def elastic(md: AnnData, level: str = "emt", row=0, n_points: int = 361,
+            ax=None):
+    """Directional Young's modulus in three planes. Returns the axis."""
+    key = f"elastic_tensor_{level}"
+    if key not in md.obsm:
+        raise ValueError(
+            f"obsm[{key!r}] absent; run mv.prop.elastic(md, level={level!r}) "
+            f"first")
+
+    # obs['name'] first, the way mv.pl.structure resolves a row: a matverse
+    # dataset carries the formula there and leaves obs_names as integers, so
+    # looking only at obs_names sends "Cu" to int() and fails with a message
+    # about base 10. The tutorial found this; the unit tests had named their
+    # rows directly and never saw it.
+    labels = [str(x) for x in md.obs.get("name", md.obs_names)]
+    index_names = [str(x) for x in md.obs_names]
+    key_row = str(row)
+    if key_row in labels:
+        index = labels.index(key_row)
+    elif key_row in index_names:
+        index = index_names.index(key_row)
+    else:
+        try:
+            index = int(row)
+        except (TypeError, ValueError):
+            raise ValueError(
+                f"no row {row!r}; this object has names {labels[:8]} and an "
+                f"index of {index_names[:8]}") from None
+    stiffness = np.asarray(md.obsm[key], dtype=float)[index]
+    if not np.isfinite(stiffness).all():
+        raise ValueError(
+            f"the elastic tensor for row {labels[index]!r} is not finite; "
+            f"mv.prop.elastic records a failed row that way")
+
+    compliance = _compliance_tensor(stiffness)
+    angle = np.linspace(0.0, 2.0 * np.pi, int(n_points))
+    planes = {
+        "xy": np.stack([np.cos(angle), np.sin(angle),
+                        np.zeros_like(angle)], axis=-1),
+        "xz": np.stack([np.cos(angle), np.zeros_like(angle),
+                        np.sin(angle)], axis=-1),
+        "yz": np.stack([np.zeros_like(angle), np.cos(angle),
+                        np.sin(angle)], axis=-1),
+    }
+
+    ax = ax if ax is not None else _plt().subplots(
+        figsize=(5.2, 5.2), subplot_kw={"projection": "polar"})[1]
+    colours = ("#4c72b0", "#c1121f", "#2a9d8f")
+    for (label, directions), colour in zip(planes.items(), colours):
+        ax.plot(angle, _youngs_along(compliance, directions), color=colour,
+                linewidth=1.4, label=label)
+
+    # Anisotropy over the sphere rather than over the three sections, so the
+    # number does not depend on which planes happen to be drawn.
+    sphere = _fibonacci_sphere(512)
+    over_sphere = _youngs_along(compliance, sphere)
+    finite = over_sphere[np.isfinite(over_sphere) & (over_sphere > 0)]
+    ratio = float(finite.max() / finite.min()) if finite.size else np.nan
+
+    ax.set_title(f"{labels[index]} — Young's modulus by direction\n"
+                 f"anisotropy {ratio:.2f}", fontsize=10)
+    ax.legend(frameon=False, fontsize=8, loc="upper right",
+              bbox_to_anchor=(1.15, 1.10))
+    ax.grid(True, alpha=0.3)
+    ax._matverse_anisotropy = ratio
+    ax._matverse_extremes = (float(finite.min()), float(finite.max())) \
+        if finite.size else (np.nan, np.nan)
+    return ax
+
+
+def _fibonacci_sphere(count: int) -> np.ndarray:
+    """Roughly equal-area directions on the unit sphere."""
+    index = np.arange(int(count)) + 0.5
+    phi = np.arccos(1.0 - 2.0 * index / count)
+    theta = np.pi * (1.0 + 5.0 ** 0.5) * index
+    return np.stack([np.cos(theta) * np.sin(phi),
+                     np.sin(theta) * np.sin(phi), np.cos(phi)], axis=-1)
+
+
+@register_function(
+    aliases=["plot fermi surface", "draw fermi surface", "fermi surface 3d",
+             "show the fermi surface"],
+    category="pl",
+    description="Draw the Fermi surface sheets stored by "
+                "mv.elec.fermi_surface, in three dimensions.",
+    requires={"uns": ["fermi_surface"]},
+    prerequisites=["mv.elec.fermi_surface"],
+    examples=["mv.pl.fermi_surface(md, level='pbe')",
+              "mv.pl.fermi_surface(md, level='pbe', row='Cu', elevation=20)"],
+    related=["mv.elec.fermi_surface", "mv.pl.bands", "mv.elec.band_features"],
+    notes="Draws the mesh mv.elec.fermi_surface kept, rather than "
+          "recomputing it. The interpolation behind a Fermi surface takes "
+          "minutes, and a plotting function that repeats it on every call is "
+          "not an interface worth having — so the vertices and faces are "
+          "stored once and read here.\\n\\n"
+          "The surface is clipped to the first Brillouin zone when "
+          "mv.elec.fermi_surface was run with wigner_seitz, which is the "
+          "default. A sphere wider than the zone therefore appears with flat "
+          "faces where it crosses the boundary; those faces are physics, not "
+          "a rendering artefact.\\n\\n"
+          "Sheets are coloured separately because a count of them is the "
+          "thing to read off: one closed sheet is a simple metal, several are "
+          "pockets, and none is an insulator, which draws an empty axes "
+          "rather than raising.",
+)
+def fermi_surface(md: AnnData, level: str = "dft", row=0,
+                  azimuth: float = 45.0, elevation: float = 25.0, ax=None):
+    """Fermi surface sheets in three dimensions. Returns the axis."""
+    stored = (md.uns.get("fermi_surface") or {}).get(level)
+    if stored is None:
+        raise ValueError(
+            f"uns['fermi_surface'][{level!r}] absent; run "
+            f"mv.elec.fermi_surface(md, bandstructures, level={level!r}) "
+            f"first")
+    meshes = stored.get("meshes") or {}
+    if not meshes:
+        raise ValueError(
+            "no mesh was kept; mv.elec.fermi_surface was run with "
+            "keep_mesh=False, and the sheets cannot be redrawn without "
+            "repeating the interpolation")
+
+    names = [str(x) for x in md.obs_names]
+    name = str(row) if str(row) in names else names[int(row)]
+    sheets = meshes.get(name)
+    if sheets is None:
+        raise ValueError(
+            f"no Fermi surface was stored for {name!r}; it has "
+            f"{sorted(meshes)}")
+
+    from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+
+    if ax is None:
+        ax = _plt().figure(figsize=(5.4, 5.0)).add_subplot(projection="3d")
+    palette = ("#4c72b0", "#c1121f", "#2a9d8f", "#e9c46a", "#8e44ad")
+    extent = 0.0
+    for index, sheet in enumerate(sheets):
+        vertices = np.asarray(sheet["vertices"], dtype=float)
+        faces = np.asarray(sheet["faces"], dtype=int)
+        if not len(faces):
+            continue
+        collection = Poly3DCollection(
+            vertices[faces], alpha=0.75, linewidths=0.0,
+            facecolor=palette[index % len(palette)])
+        ax.add_collection3d(collection)
+        extent = max(extent, float(np.abs(vertices).max()))
+
+    if extent > 0:
+        for setter in (ax.set_xlim, ax.set_ylim, ax.set_zlim):
+            setter(-extent, extent)
+    ax.set_xlabel("$k_x$"); ax.set_ylabel("$k_y$"); ax.set_zlabel("$k_z$")
+    ax.set_title(f"{name} — {len(sheets)} sheet"
+                 f"{'s' if len(sheets) != 1 else ''}", fontsize=10)
+    ax.view_init(elev=float(elevation), azim=float(azimuth))
+    try:
+        ax.set_box_aspect((1, 1, 1))
+    except Exception:                                      # pragma: no cover
+        pass
+    ax._matverse_n_sheets = len(sheets)
+    return ax

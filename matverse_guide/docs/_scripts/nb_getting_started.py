@@ -384,6 +384,47 @@ comparison["disagreement_%"] = (
 comparison"""),
 
     ("markdown", """\
+### What those four numbers are hiding
+
+`mv.prop.elastic` computes the whole 6×6 stiffness tensor and stores it in
+`obsm`. What it puts in `obs` is four **isotropic averages** — bulk, shear and
+Young's moduli, and a Poisson ratio. Those are the Voigt-Reuss-Hill numbers a
+screen ranks on, and they are precisely the part of the tensor that survives
+averaging the direction dependence away.
+
+`mv.pl.elastic` draws what is left out: Young's modulus as a function of
+direction, in the three principal planes."""),
+
+    ("code", """\
+import matplotlib.pyplot as plt
+
+fig, axes = plt.subplots(1, 3, figsize=(13, 4.6),
+                         subplot_kw={"projection": "polar"})
+for ax, name in zip(axes, ["Cu", "Al", "Ni"]):
+    mv.pl.elastic(metals, level="emt", row=name, ax=ax)
+fig.tight_layout()"""),
+
+    ("markdown", """\
+The four-lobed shape is what a cubic crystal looks like: stiffest along the body
+diagonal, softest along the cube axes. `ax._matverse_anisotropy` is the ratio of
+the largest directional modulus to the smallest over the whole sphere, and it is
+exactly 1 for an isotropic solid.
+
+For copper the measured constants — C₁₁ = 168.4, C₁₂ = 121.4, C₄₄ = 75.4 GPa —
+give **67 GPa along [100] and 191 along [111]**, a factor of 2.9, where the
+isotropic average is a single number near 120. A screen ranked on that average
+is treating a material whose stiffness varies threefold with direction as
+though it did not.
+
+```{note}
+The compliance tensor carries Voigt factors that the stiffness tensor does not
+— a half on every shear index and a quarter on a shear–shear pair. Inverting the
+6×6 and expanding it without them produces a tensor that looks reasonable and
+reports an anisotropy that is not there; an isotropic solid stops being a
+circle. The suite has a test that deliberately drops the factors and asserts
+that the result *does* go wrong, so the check cannot quietly stop checking.
+```
+
 Within 1.1% across seven metals and two independent implementations, and under
 0.4% for six of them.
 
@@ -670,6 +711,17 @@ metals.uns["screens"]["conductive_and_stiff"]"""),
     ("code", """\
 metals.obs[["name", "thermal_conductivity_emt", "bulk_modulus_emt",
             "conductive_and_stiff"]].round(1)"""),
+
+    ("markdown", """\
+A threshold is a decision, and a table of seven rows does not show whether it
+was a sensible one. `mv.pl.distribution` puts the cut where it can be seen
+against the spread it is cutting — `by=` overlays one histogram per category on
+**shared bins**, because two distributions plotted on different bins are not
+being compared."""),
+
+    ("code", """\
+mv.pl.distribution(metals, "bulk_modulus_emt", by="conductive_and_stiff",
+                   bins=8)"""),
 
     ("markdown", """\
 Subset when you actually want the short list — the object is an ordinary
