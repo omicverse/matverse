@@ -55,8 +55,19 @@ UNPROBEABLE: dict[str, str] = {
         "needs dscribe, which imports sparse, which imports numba, "
         "which requires numpy < 2.5; this environment has 2.5.1",
     "mv.elec.transport":
-        "needs BoltzTraP2, which conda-forge carries only to a py310 build; "
-        "absent in this environment",
+        "needs a BoltzTraP2 that runs, which is not the same as one that "
+        "imports. IFermi pulls it in as a dependency, so the package is here "
+        "and its top level touches no netCDF - but BoltzTraP2.dft, which the "
+        "transport path reaches, raises 'numpy.dtype size changed' because "
+        "netcdf4 was built against a different numpy. A rebuild, not a "
+        "missing package.\n\n"
+        "The reason recorded here before said the package was absent. That "
+        "stopped being true the moment IFermi was installed, and because an "
+        "excluded entry is unexamined by construction, nothing noticed - "
+        "which is how a tutorial passing the bands-axis object where a list "
+        "of BandStructures belongs survived unseen. "
+        "test_an_exclusion_reason_naming_an_absent_package_stays_true now "
+        "fails when a reason like that goes stale",
     "mv.mol.functional_groups":
         "needs openbabel's Python bindings, which additionally need "
         "libXrender at runtime; neither is present in this environment",
