@@ -240,3 +240,62 @@ class TestCoverage:
         assert report["covered"] - COVERED_FLOOR < 5, (
             f"{report['covered']} modules are covered but the floor is still "
             f"{COVERED_FLOOR}; raise COVERED_FLOOR")
+
+
+#: Package names as they appear in a coverage reason, mapped to the module
+#: that has to be importable for a claim of absence to still be true.
+_REASON_PACKAGES = {
+    "scikit-image": "skimage", "dscribe": "dscribe", "openbabel": "openbabel",
+    "matminer": "matminer", "pydefect": "pydefect", "numba": "numba",
+    "pyarrow": "pyarrow", "mp-api": "mp_api", "boltztrap2": "BoltzTraP2",
+}
+
+#: Phrases that assert a package is not here.
+_ABSENCE = ("is not installed", "not installed in", "is absent", "absent in",
+            "not present in", "is not present", "cannot import", "ships no "
+            "manylinux_2_17 wheel")
+
+
+def test_a_blocked_reason_naming_an_absent_package_stays_true():
+    """A blocked entry is not revisited, so its reason has to keep being true.
+
+    This is the coverage map's version of the guard on UNPROBEABLE, and it was
+    added because the same thing had already happened here. The Kumagai entry
+    said pip could not install pydefect because scikit-image had no wheel for
+    this glibc. scikit-image arrived as somebody else's dependency, that clause
+    stopped being true, and nothing noticed — the install is still blocked, but
+    by pyarrow, which is a different fact.
+
+    A reason that records the wrong cause is worse than one that records none:
+    it is the reason somebody will act on when they try to unblock it.
+    """
+    import importlib.util
+
+    stale = {}
+    for name, reason in _coverage.BLOCKED.items():
+        lowered = reason.lower()
+        for token, module in _REASON_PACKAGES.items():
+            if importlib.util.find_spec(module) is None:
+                continue                      # genuinely absent, reason stands
+            # The absence has to be claimed *of this package*. A reason may
+            # name several, and say one is present and another is not — an
+            # unscoped search reads the second clause as being about the
+            # first, which is how this check first failed on a reason that
+            # was correct.
+            for at in _positions(lowered, token):
+                window = lowered[max(0, at - 90):at + 90]
+                if any(phrase in window for phrase in _ABSENCE):
+                    stale.setdefault(name, []).append(token)
+                    break
+    assert not stale, (
+        f"these blocked reasons name a package as unavailable that imports "
+        f"here: {stale}. Correct the reason, or move the entry out of BLOCKED "
+        f"if it is no longer blocked")
+
+
+def _positions(text: str, needle: str):
+    """Every index at which ``needle`` occurs."""
+    at = text.find(needle)
+    while at != -1:
+        yield at
+        at = text.find(needle, at + 1)
