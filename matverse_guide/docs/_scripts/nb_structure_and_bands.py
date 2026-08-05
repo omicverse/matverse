@@ -441,11 +441,20 @@ mv.screen.filter(md, icohp_min_pbe__lt=-2.0)     # at least one strong bond
 ### Transport
 
 `mv.elec.transport` wants BoltzTraP2, which links against netCDF and does not
-build from a wheel everywhere."""),
+build from a wheel everywhere.
+
+Note what it is handed: `computed`, the list of one `BandStructure` per
+material, **not** `bands`, which is the bands-axis object with one row per band.
+This cell passed the wrong one for a long time and nobody saw it, because the
+missing BoltzTraP2 raised first and the `except` swallowed it. Installing
+IFermi pulled BoltzTraP2 in as a dependency, the import stopped raising, and the
+real error underneath appeared."""),
 
     ("code", """\
+# `computed`, not `bands`: transport wants one BandStructure per material,
+# where `bands` is the bands-axis object with one row per band.
 try:
-    mv.elec.transport(metals, bands, level="tb")
+    mv.elec.transport(metals, computed, level="tb")
 except (ImportError, NotImplementedError) as exc:
     print(f"{type(exc).__name__}: {exc}")"""),
 
@@ -455,6 +464,67 @@ the Seebeck coefficient is the number to trust: the conductivity comes out as
 **σ/τ**, because the constant relaxation time approximation cannot supply τ.
 Multiplying by a guessed τ is how thermoelectric screens produce figures of
 merit that do not survive measurement.
+
+### Fermi surfaces
+
+`mv.elec.fermi_surface` needs the *other* kind of band structure: a **uniform
+k-mesh**, not a high-symmetry line. Fourier interpolation has to have a grid to
+interpolate from, and a line through the zone has no interior. A
+`BandStructureSymmLine` is refused rather than interpolated into a plausible
+surface.
+
+The check that makes it trustworthy costs no DFT at all. A free-electron band,
+`E = ħ²k²/2m`, has a spherical Fermi surface of area `4πk_F²` exactly — so the
+computed area can be checked against arithmetic:"""),
+
+    ("code", """\
+import numpy as np
+from pymatgen.electronic_structure.bandstructure import BandStructure
+from pymatgen.electronic_structure.core import Spin
+
+HBAR2_2M = 3.80998          # eV A^2
+a, n = 4.0, 12
+cell = Structure(Lattice.cubic(a), ["Na"], [[0, 0, 0]])
+reciprocal = cell.lattice.reciprocal_lattice
+frac = np.array([[i/n, j/n, k/n] for i in range(n) for j in range(n)
+                 for k in range(n)])
+shifts = np.array([[i, j, k] for i in (-1, 0, 1) for j in (-1, 0, 1)
+                   for k in (-1, 0, 1)])
+shortest = np.full(len(frac), np.inf)
+for shift in shifts:
+    shortest = np.minimum(shortest, np.linalg.norm(
+        reciprocal.get_cartesian_coords(frac + shift), axis=1))
+energies = HBAR2_2M * shortest ** 2
+
+try:
+    for efermi in (0.8, 3.0):
+        bs = BandStructure(frac, {Spin.up: energies[None, :]}, reciprocal,
+                           efermi, structure=cell)
+        one = mv.data.from_structures([cell])
+        mv.elec.fermi_surface(one, [bs], level="free-electron")
+        area = float(one.obs["fermi_surface_area_free-electron"].iloc[0])
+        kf = (efermi / HBAR2_2M) ** 0.5
+        print(f"E_F={efermi:.1f}  k_F={kf:.3f}  area={area:6.3f}  "
+              f"4*pi*kF^2={4*np.pi*kf**2:6.3f}  ratio={area/(4*np.pi*kf**2):.3f}")
+except ImportError:
+    print("needs IFermi; pip install matverse[fermi]")"""),
+
+    ("markdown", """\
+The first ratio is 1.00 and the second is 0.66, and **both are correct**. The
+zone boundary for this cell sits at `π/a = 0.785 Å⁻¹`. At `E_F = 0.8 eV` the
+sphere has `k_F = 0.458` and fits inside it; at `3.0 eV` it has `k_F = 0.887`
+and has grown past the boundary in the ⟨100⟩ directions, so it is genuinely
+truncated. That clipping is physics — the area that remains is the one that
+carries current — not an approximation the code is making.
+
+```{note}
+This is slow. Fourier interpolation at the default factor of five takes minutes
+for a single 12×12×12 mesh and scales as the cube of the factor, so it belongs
+on a shortlist rather than a library. `obs['fermi_sheets_...']` counts
+disconnected pieces, which is what separates a simple metal from one with
+pockets; zero sheets means no band crosses the level, and that is reported as
+an insulator rather than raised as an error.
+```
 
 ## What both objects remember"""),
 

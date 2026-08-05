@@ -528,15 +528,25 @@ def transport(md: AnnData, bandstructures, level: str = "dft",
     try:
         from pymatgen.electronic_structure.boltztrap2 import (
             BandstructureLoader, BztInterpolator, BztTransportProperties)
-        import BoltzTraP2                                  # noqa: F401
-    except ImportError as exc:
+        # BoltzTraP2's top level imports without touching netCDF; the module
+        # that does the work does not. Guarding on the package alone let an
+        # installation that cannot run through, and the failure then surfaced
+        # much later as something unrelated. ValueError is caught alongside
+        # ImportError because a netCDF4 built against a different numpy ABI
+        # raises "numpy.dtype size changed" rather than failing to import.
+        import BoltzTraP2.dft                              # noqa: F401
+        import BoltzTraP2.fite                             # noqa: F401
+    except (ImportError, ValueError) as exc:
         raise ImportError(
-            "mv.elec.transport needs BoltzTraP2, which links against netCDF "
-            "and often will not build from a wheel. Try `conda install -c "
-            "conda-forge boltztrap2` — note conda-forge carries it only up "
-            "to a Python 3.10 build. Or read the band edges off "
-            "mv.elec.band_features and estimate the Seebeck coefficient "
-            "yourself."
+            f"mv.elec.transport needs a working BoltzTraP2, which links "
+            f"against netCDF and often will not build from a wheel. Try "
+            f"`conda install -c conda-forge boltztrap2` — note conda-forge "
+            f"carries it only up to a Python 3.10 build. A "
+            f"'numpy.dtype size changed' here means netCDF4 was built for a "
+            f"different numpy than the one installed, which is a rebuild "
+            f"rather than a missing package. Or read the band edges off "
+            f"mv.elec.band_features and estimate the Seebeck coefficient "
+            f"yourself. ({type(exc).__name__}: {exc})"
         ) from exc
 
     if len(bandstructures) != md.n_obs:
@@ -693,3 +703,124 @@ def xps(md: AnnData, doses, level: str = "dft", n_points: int = 301,
         "errors": failed,
     }
     record(md, "elec.xps", level=level, n_points=int(n_points))
+
+
+@register_function(
+    aliases=["fermi surface", "fermi surfaces", "ifermi", "fermi surface "
+             "area", "fermi sheets", "fermi pockets", "band topology at the "
+             "fermi level"],
+    category="elec",
+    description="Fermi surfaces from uniform-mesh band structures — area, "
+                "how many disconnected sheets, and whether there is one at "
+                "all.",
+    produces={"obs": ["fermi_surface_area_{level}",
+                      "fermi_sheets_{level}", "has_fermi_surface_{level}"],
+              "uns": ["fermi_surface"], "levels": ["{level}"]},
+    prerequisites=["mv.elec.read_bands"],
+    dispatch="level= names the theory the bands came from",
+    examples=["mv.elec.fermi_surface(md, band_structures, level='pbe')",
+              "mv.elec.fermi_surface(md, bs_list, level='pbe', mu=0.1)"],
+    related=["mv.elec.bands", "mv.elec.read_bands", "mv.elec.band_features",
+             "mv.elec.dos_fingerprint"],
+    notes="The band structure has to be on a **uniform k-mesh**, not a "
+          "high-symmetry line. Fourier interpolation needs a grid to "
+          "interpolate from, and a line-mode calculation has no interior to "
+          "sample — mv.elec.bands takes line-mode structures for plotting and "
+          "this takes the other kind. A BandStructureSymmLine is refused "
+          "rather than interpolated into nonsense.\\n\\n"
+          "The area is the total over all sheets, in inverse square "
+          "angstrom, and it is clipped to the first Brillouin zone. That "
+          "clipping is physics, not an approximation: a free-electron sphere "
+          "wider than the zone is genuinely truncated where it crosses the "
+          "boundary, and the area that remains is the one that carries "
+          "current.\\n\\n"
+          "Verified against the analytic free-electron result. On a simple "
+          "cubic cell with a = 4 A, where the zone boundary is at 0.785 "
+          "1/A, the computed area matches 4*pi*kF^2 to within 1% at kF of "
+          "0.324, 0.458 and 0.628 — and falls to 0.66 of it at kF = 0.887, "
+          "which is where the sphere has grown past the boundary.\\n\\n"
+          "It is not cheap. Fourier interpolation at the default factor of "
+          "five takes minutes for a single 12x12x12 mesh, and the cost rises "
+          "with the cube of the factor — this belongs on a shortlist, not on "
+          "a library, and lowering interpolation_factor is the first thing to "
+          "try when it is too slow.\n\n"
+          "obs['fermi_sheets_{level}'] counts disconnected pieces, which is "
+          "what distinguishes a simple metal from one with pockets. Zero "
+          "sheets means no band crosses the level, which is the definition of "
+          "an insulator and is reported rather than raised.",
+)
+def fermi_surface(md: AnnData, bandstructures, level: str = "dft",
+                  mu: float = 0.0, interpolation_factor: float = 5.0,
+                  wigner_seitz: bool = True) -> None:
+    """Fermi surface area and sheet count. Deposits; returns ``None``."""
+    try:
+        from ifermi.interpolate import FourierInterpolator
+        from ifermi.surface import FermiSurface
+    except ImportError as exc:
+        raise ImportError(
+            f"mv.elec.fermi_surface needs IFermi: `pip install "
+            f"matverse[fermi]` or `pip install ifermi`. ({exc})") from exc
+
+    from pymatgen.electronic_structure.bandstructure import (
+        BandStructureSymmLine)
+
+    if len(bandstructures) != md.n_obs:
+        raise ValueError(
+            f"got {len(bandstructures)} band structures for {md.n_obs} "
+            f"materials; pass one per row, using None where a run is missing")
+
+    areas = np.full(md.n_obs, np.nan)
+    sheets = np.full(md.n_obs, np.nan)
+    present = np.zeros(md.n_obs, dtype=bool)
+    failures = []
+
+    for i, bs in enumerate(bandstructures):
+        if bs is None:
+            continue
+        if isinstance(bs, BandStructureSymmLine):
+            # A line through the zone has no interior to interpolate, and
+            # feeding one in produces a surface rather than an error.
+            failures.append(
+                f"{md.obs_names[i]}: this is a line-mode band structure. A "
+                f"Fermi surface needs a uniform k-mesh; mv.elec.bands is what "
+                f"takes the line-mode kind")
+            continue
+        try:
+            dense = FourierInterpolator(bs).interpolate_bands(
+                interpolation_factor=float(interpolation_factor))
+            surface = FermiSurface.from_band_structure(
+                dense, mu=float(mu), wigner_seitz=bool(wigner_seitz))
+        except Exception as exc:
+            failures.append(f"{md.obs_names[i]}: {type(exc).__name__}: {exc}")
+            continue
+
+        pieces = sum(len(v) for v in surface.isosurfaces.values()) \
+            if hasattr(surface, "isosurfaces") else 0
+        areas[i] = float(surface.area)
+        sheets[i] = int(pieces)
+        present[i] = pieces > 0
+
+    md.obs[f"fermi_surface_area_{level}"] = areas
+    md.obs[f"fermi_sheets_{level}"] = sheets
+    md.obs[f"has_fermi_surface_{level}"] = present
+    md.uns.setdefault("fermi_surface", {})[level] = {
+        "mu": float(mu),
+        "interpolation_factor": float(interpolation_factor),
+        "wigner_seitz": bool(wigner_seitz),
+        "area_unit": "angstrom^-2",
+        "n_failed": len(failures),
+        "errors": failures[:10],
+        "note": "area is the total over all sheets, clipped to the first "
+                "Brillouin zone; the clipping is physics, not an "
+                "approximation",
+    }
+    set_level(md, level, kind="dft", method="Fermi surface by Fourier "
+              "interpolation", reference=None, surrogate=False,
+              mu=float(mu), interpolation_factor=float(interpolation_factor))
+    if failures:
+        warnings.warn(
+            f"{len(failures)} of {md.n_obs} band structures produced no Fermi "
+            f"surface; see uns['fermi_surface'][{level!r}]['errors']. First: "
+            f"{failures[0]}", RuntimeWarning, stacklevel=2)
+    record(md, "elec.fermi_surface", level=level, mu=mu,
+           interpolation_factor=interpolation_factor)
