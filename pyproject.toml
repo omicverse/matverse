@@ -50,6 +50,10 @@ dft = ["gpaw"]
 # mv.thermo.calphad. Pinned below 0.11 because 0.11 builds against scipy 1.18,
 # which has no manylinux_2_17 wheel — an older glibc cannot get there.
 calphad = ["pycalphad<0.11"]
+# mv.elec.fermi_surface. IFermi pulls BoltzTraP2, which needs cmake at build
+# time and netcdf4 below 1.7 — 1.7.4 has no wheel for an older glibc and its
+# source build wants netCDF headers that are not there.
+fermi = ["ifermi", "netcdf4<1.7", "cmake"]
 # Further foundation potentials, on top of the mace/sevennet/chgnet already
 # reachable. matgl carries M3GNet and TensorNet at both PBE and r2SCAN.
 # Every foundation potential mv.calc can reach. The older 'mlip' extra below

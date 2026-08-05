@@ -322,8 +322,18 @@ class TestXPS:
 
 
 def _has_boltztrap2() -> bool:
+    """Whether transport can actually run, not whether the package is there.
+
+    BoltzTraP2's top level imports without touching netCDF; the modules that
+    do the work do not. Checking only the package let this test run against an
+    installation that raises the moment it is used — which is exactly what
+    happened once IFermi pulled BoltzTraP2 in as a dependency. The submodules
+    below are the ones mv.elec.transport reaches, and a netCDF4 built against
+    a different numpy raises ValueError here rather than ImportError.
+    """
     try:
-        import BoltzTraP2  # noqa: F401
+        import BoltzTraP2.dft  # noqa: F401
+        import BoltzTraP2.fite  # noqa: F401
         from pymatgen.electronic_structure.boltztrap2 import (  # noqa: F401
             BztTransportProperties)
     except Exception:
@@ -413,3 +423,116 @@ class TestTransport:
         assert np.isnan(float(md.obs["seebeck_m"].iloc[1]))
         assert any("no band structure" in e
                    for e in md.uns["transport"]["m"]["errors"])
+
+
+def _has_ifermi() -> bool:
+    import importlib.util
+    return importlib.util.find_spec("ifermi") is not None
+
+
+def _free_electron(efermi: float, a: float = 4.0, n: int = 12,
+                   offset: float = 0.0):
+    """A free-electron band on a uniform mesh, whose Fermi surface is known.
+
+    E = hbar^2 k^2 / 2m gives a spherical surface of radius kF, so the area is
+    4 pi kF^2 exactly — as long as the sphere fits inside the Brillouin zone.
+    That makes it the one case where a computed Fermi surface can be checked
+    against arithmetic rather than against another code.
+    """
+    from pymatgen.core import Lattice, Structure
+    from pymatgen.electronic_structure.bandstructure import BandStructure
+    from pymatgen.electronic_structure.core import Spin
+
+    structure = Structure(Lattice.cubic(a), ["Na"], [[0, 0, 0]])
+    reciprocal = structure.lattice.reciprocal_lattice
+    fractional = np.array([[i / n, j / n, k / n]
+                           for i in range(n) for j in range(n)
+                           for k in range(n)])
+    # Nearest periodic image, so |k| is measured from Gamma in the first zone.
+    shifts = np.array([[i, j, k] for i in (-1, 0, 1) for j in (-1, 0, 1)
+                       for k in (-1, 0, 1)])
+    shortest = np.full(len(fractional), np.inf)
+    for shift in shifts:
+        shortest = np.minimum(shortest, np.linalg.norm(
+            reciprocal.get_cartesian_coords(fractional + shift), axis=1))
+    energies = _HBAR2_OVER_2M * shortest ** 2 + offset
+    return BandStructure(fractional, {Spin.up: energies[None, :]},
+                         reciprocal, efermi, structure=structure), structure
+
+
+#: hbar^2 / 2m in eV angstrom^2.
+_HBAR2_OVER_2M = 3.80998
+
+
+@pytest.mark.skipif(not _has_ifermi(), reason="IFermi is an optional extra")
+class TestFermiSurface:
+    ZONE_BOUNDARY = np.pi / 4.0        # 1/A, for the a = 4 A cell
+
+    @staticmethod
+    def _area(efermi, **kwargs):
+        bs, structure = _free_electron(efermi)
+        md = mv.data.from_structures([structure])
+        mv.elec.fermi_surface(md, [bs], level="model", **kwargs)
+        return md
+
+    @pytest.mark.parametrize("efermi", [0.4, 0.8, 1.5])
+    def test_it_reproduces_the_free_electron_sphere(self, efermi):
+        """Within the zone the answer is 4 pi kF^2 and nothing else."""
+        md = self._area(efermi)
+        radius = (efermi / _HBAR2_OVER_2M) ** 0.5
+        assert radius < self.ZONE_BOUNDARY, "this case must fit in the zone"
+        area = float(md.obs["fermi_surface_area_model"].iloc[0])
+        assert area == pytest.approx(4 * np.pi * radius ** 2, rel=0.05)
+
+    def test_a_sphere_wider_than_the_zone_is_clipped(self):
+        """Not an approximation. A free-electron sphere that has grown past
+        the boundary is genuinely truncated, and the area left is the one that
+        carries current — 0.66 of the sphere here."""
+        efermi = 3.0
+        radius = (efermi / _HBAR2_OVER_2M) ** 0.5
+        assert radius > self.ZONE_BOUNDARY, "this case must exceed the zone"
+        area = float(self._area(efermi).obs["fermi_surface_area_model"].iloc[0])
+        assert area < 4 * np.pi * radius ** 2 * 0.9
+
+    def test_an_insulator_is_reported_not_raised(self):
+        """No band crosses the level. Zero sheets is the answer, not an
+        error."""
+        md = self._area(0.0)          # every state above the level
+        bs, structure = _free_electron(0.0, offset=20.0)
+        out = mv.data.from_structures([structure])
+        mv.elec.fermi_surface(out, [bs], level="model")
+        assert out.obs["has_fermi_surface_model"].iloc[0] is np.False_ or \
+            not bool(out.obs["has_fermi_surface_model"].iloc[0])
+        assert float(out.obs["fermi_sheets_model"].iloc[0]) == 0
+
+    def test_a_line_mode_band_structure_is_refused(self):
+        """Fourier interpolation needs a grid. A high-symmetry line has no
+        interior, and feeding one in produces a surface rather than an
+        error."""
+        from pymatgen.electronic_structure.bandstructure import (
+            BandStructureSymmLine)
+        from pymatgen.electronic_structure.core import Spin
+
+        bs, structure = _free_electron(1.0)
+        line = BandStructureSymmLine.__new__(BandStructureSymmLine)
+        for name, value in vars(bs).items():
+            setattr(line, name, value)
+        line.branches = []
+        md = mv.data.from_structures([structure])
+        with pytest.warns(RuntimeWarning, match="uniform k-mesh"):
+            mv.elec.fermi_surface(md, [line], level="model")
+        assert np.isnan(float(md.obs["fermi_surface_area_model"].iloc[0]))
+
+    def test_one_structure_per_row_is_required(self):
+        bs, structure = _free_electron(1.0)
+        md = mv.data.from_structures([structure, structure])
+        with pytest.raises(ValueError, match="one per row"):
+            mv.elec.fermi_surface(md, [bs], level="model")
+
+    def test_it_records_what_it_did(self):
+        md = self._area(0.8, interpolation_factor=4.0)
+        recorded = md.uns["fermi_surface"]["model"]
+        assert recorded["interpolation_factor"] == 4.0
+        assert recorded["area_unit"] == "angstrom^-2"
+        assert recorded["wigner_seitz"] is True
+        assert md.uns["levels"]["model"]["surrogate"] is False

@@ -161,6 +161,37 @@ def _pbsn_tdb():
     return str(found[0]) if found else "pbsn-not-found.tdb"
 
 
+def _free_electron_cell(n: int = 8):
+    """A uniform-mesh free-electron band, which is what a Fermi surface needs."""
+    from pymatgen.core import Lattice, Structure
+    from pymatgen.electronic_structure.bandstructure import BandStructure
+    from pymatgen.electronic_structure.core import Spin
+
+    structure = Structure(Lattice.cubic(4.0), ["Na"], [[0, 0, 0]])
+    reciprocal = structure.lattice.reciprocal_lattice
+    fractional = np.array([[i / n, j / n, k / n]
+                           for i in range(n) for j in range(n)
+                           for k in range(n)])
+    shifts = np.array([[i, j, k] for i in (-1, 0, 1) for j in (-1, 0, 1)
+                       for k in (-1, 0, 1)])
+    shortest = np.full(len(fractional), np.inf)
+    for shift in shifts:
+        shortest = np.minimum(shortest, np.linalg.norm(
+            reciprocal.get_cartesian_coords(fractional + shift), axis=1))
+    energies = 3.80998 * shortest ** 2
+    return structure, BandStructure(
+        fractional, {Spin.up: energies[None, :]}, reciprocal, 0.8,
+        structure=structure)
+
+
+def _free_electron_bands():
+    return [_free_electron_cell()[1]]
+
+
+def free_electron_metal():
+    return mv.data.from_structures([_free_electron_cell()[0]])
+
+
 def pbsn_alloys():
     return mv.data.from_compositions(["Pb0.261Sn0.739", "Pb0.9Sn0.1"])
 
@@ -875,6 +906,11 @@ def cases(tmp):
         (mv.pl.spacegroups, symmetric, (), {}),
         (mv.thermo.calphad, pbsn_alloys, (_pbsn_tdb(),),
          {"temperature": 450.0}),
+        # Small mesh and a low interpolation factor: the probe checks the
+        # contract, and the physics is checked in test_electronic.py.
+        (mv.elec.fermi_surface, free_electron_metal,
+         (_free_electron_bands(),), {"level": "model",
+                                     "interpolation_factor": 2.0}),
         (mv.disorder.cluster_expansion, cu_au_training, (),
          {"parent": cu_au_parent(), "level": "emt",
           "cutoffs": {2: 6.0, 3: 4.5}}),
