@@ -39,6 +39,15 @@ NAMES_PROBED_IN_TEST_CONTRACTS = frozenset({
 
 # Entries that make claims no offline probe can decide, and why. Anything not
 # listed here must be probed; the coverage test enforces it.
+#
+# This is *not* the place for an entry that merely needs an optional backend.
+# probe_call already records an ImportError as undecided rather than failed, so
+# such an entry can carry a real case and simply be skipped where the backend
+# is absent. Putting one here instead means it goes unchecked even on machines
+# that could check it — mv.mol.functional_groups sat here while CI had
+# openbabel installed the whole time, and mv.elec.transport sat here on a
+# reason that had stopped being true. What belongs here is what no environment
+# can decide: a network call, a real VASP or LOBSTER output, a scheduler.
 UNPROBEABLE: dict[str, str] = {
     "mv.data.from_mp": "queries the Materials Project over the network",
     "mv.data.from_optimade": "queries an OPTIMADE provider over the network",
@@ -49,17 +58,23 @@ UNPROBEABLE: dict[str, str] = {
     "mv.dft.read_dos": "parses vasprun.xml from a real VASP run",
     "mv.elec.read_bands": "parses vasprun.xml from a real VASP run",
     "mv.elec.cohp": "parses ICOHPLIST.lobster from a real LOBSTER run",
-    "mv.feat.matminer": "matminer is not installed in this environment",
-    "mv.feat.soap": "dscribe is not installed in this environment",
     "mv.pp.locate_defect":
         "needs dscribe, which imports sparse, which imports numba, "
         "which requires numpy < 2.5; this environment has 2.5.1",
     "mv.elec.transport":
-        "needs BoltzTraP2, which conda-forge carries only to a py310 build; "
-        "absent in this environment",
-    "mv.mol.functional_groups":
-        "needs openbabel's Python bindings, which additionally need "
-        "libXrender at runtime; neither is present in this environment",
+        "needs a BoltzTraP2 that runs, which is not the same as one that "
+        "imports. IFermi pulls it in as a dependency, so the package is here "
+        "and its top level touches no netCDF - but BoltzTraP2.dft, which the "
+        "transport path reaches, raises 'numpy.dtype size changed' because "
+        "netcdf4 was built against a different numpy. A rebuild, not a "
+        "missing package.\n\n"
+        "The reason recorded here before said the package was absent. That "
+        "stopped being true the moment IFermi was installed, and because an "
+        "excluded entry is unexamined by construction, nothing noticed - "
+        "which is how a tutorial passing the bands-axis object where a list "
+        "of BandStructures belongs survived unseen. "
+        "test_an_exclusion_reason_naming_an_absent_package_stays_true now "
+        "fails when a reason like that goes stale",
     "mv.feat.embed": "needs a registered third-party embedding model",
     "mv.utils.submit": "would submit a real job to the scheduler",
     "mv.disorder.sqs": "needs ATAT's mcsqs on PATH, which is not installed",
@@ -896,6 +911,17 @@ def cases(tmp):
         (mv.neb.hops, one_metal, ("Cu",), {"returns": "new"}),
 
         (mv.disorder.sro, one_metal, (), {}),
+        # Not in UNPROBEABLE: openbabel is an optional backend, and the probe
+        # already records a missing one as undecided. Excluding it instead
+        # meant the entry went unchecked even where openbabel is installed,
+        # which is the state CI is in.
+        (mv.mol.functional_groups, molecules, (), {}),
+        # Same reasoning: dscribe and matminer are optional backends, and the
+        # probe treats a missing one as undecided. They were excluded on
+        # "not installed in this environment", which is a claim about one
+        # machine rather than about the entry.
+        (mv.feat.soap, described, (), {"r_cut": 4.0, "n_max": 2, "l_max": 2}),
+        (mv.feat.matminer, described, (), {}),
         # Constructors: the probe hands the fixture in as the first argument,
         # and for these that argument is the list itself, not a dataset.
         (mv.data.from_compositions, formulas, (), {"returns": "new"}),

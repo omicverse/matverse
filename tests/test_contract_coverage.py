@@ -142,3 +142,50 @@ class TestQualifiedContainers:
         text = mv.describe("mv.env.summarise")
         assert "md.obs['mean_coordination']" in text
         assert "sites.obs['coordination_number']" in text
+
+
+#: Package names as they appear in an UNPROBEABLE reason, mapped to the module
+#: that has to be importable for that reason to still be true.
+_REASON_PACKAGES = {
+    "dscribe": "dscribe", "openbabel": "openbabel", "matminer": "matminer",
+    "pydefect": "pydefect", "smol": "smol", "smact": "smact",
+    "pyxtal": "pyxtal", "hiphive": "hiphive", "phono3py": "phono3py",
+    "gpaw": "gpaw", "pycalphad": "pycalphad", "ifermi": "ifermi",
+    "mudata": "mudata", "mp-api": "mp_api", "matgl": "matgl",
+}
+
+
+def test_an_exclusion_reason_naming_an_absent_package_stays_true():
+    """An entry excluded from probing is unexamined by construction, so the
+    reason had better keep being true.
+
+    mv.elec.transport was excluded because BoltzTraP2 was 'absent in this
+    environment'. Installing IFermi pulled BoltzTraP2 in, the reason stopped
+    being true, and nothing noticed — which is how a tutorial calling that
+    same function with the bands-axis object where a list of BandStructures
+    belongs survived. The ImportError was raised first and the cell's except
+    swallowed it.
+
+    This fails when a reason claims a package is missing and it imports. The
+    fix is to reword the reason or to start probing the entry, and which one
+    depends on whether the thing actually runs — an installed package that
+    raises on use is still a valid exclusion, but for a different reason than
+    the one recorded.
+    """
+    import importlib.util
+
+    stale = {}
+    for name, reason in UNPROBEABLE.items():
+        lowered = reason.lower()
+        for token, module in _REASON_PACKAGES.items():
+            if token not in lowered:
+                continue
+            if not any(word in lowered for word in
+                       ("not installed", "is absent", "absent in", "not present",
+                        "neither is present")):
+                continue
+            if importlib.util.find_spec(module) is not None:
+                stale[name] = f"{token} imports here, but the reason says it does not"
+    assert not stale, (
+        f"these exclusion reasons have gone stale: {stale}. Reword them, or "
+        f"probe the entry now that its backend is available")
