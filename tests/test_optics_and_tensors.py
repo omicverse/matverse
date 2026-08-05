@@ -572,3 +572,136 @@ class TestPiezoFromDFPT:
         mv.prop.piezo_from_dfpt(md, bec, ist, fcm, level="mydfpt")
         assert "mydfpt" in mv.levels_used(md)
         assert "DFPT" in md.uns["levels"]["mydfpt"]["note"]
+
+
+def _has_matplotlib() -> bool:
+    import importlib.util
+    return importlib.util.find_spec("matplotlib") is not None
+
+
+def _cubic_stiffness(c11: float, c12: float, c44: float) -> np.ndarray:
+    """A 6x6 cubic stiffness matrix, flattened the way mv.prop.elastic stores it."""
+    C = np.zeros((6, 6))
+    C[:3, :3] = c12
+    np.fill_diagonal(C[:3, :3], c11)
+    for i in range(3, 6):
+        C[i, i] = c44
+    return C
+
+
+def _isotropic_stiffness(youngs: float, poisson: float) -> np.ndarray:
+    c11 = youngs * (1 - poisson) / ((1 + poisson) * (1 - 2 * poisson))
+    c12 = youngs * poisson / ((1 + poisson) * (1 - 2 * poisson))
+    return _cubic_stiffness(c11, c12, (c11 - c12) / 2)
+
+
+@pytest.mark.skipif(not _has_matplotlib(), reason="needs matplotlib")
+class TestElasticAnisotropy:
+    """What the full tensor says that its isotropic averages do not.
+
+    Checked against copper, whose measured constants give a Young's modulus
+    that varies by nearly a factor of three with direction — a fact that four
+    Voigt-Reuss-Hill averages cannot carry.
+    """
+
+    @staticmethod
+    def _object(matrix, name="x"):
+        md = mv.data.from_compositions(["Cu"])
+        md.obs_names = [name]
+        md.obsm["elastic_tensor_exp"] = matrix.reshape(1, 36)
+        return md
+
+    def test_an_isotropic_solid_is_a_circle(self):
+        """Anisotropy is one by construction, and every direction gives back
+        the Young's modulus that was put in."""
+        import matplotlib
+        matplotlib.use("Agg")
+        md = self._object(_isotropic_stiffness(100.0, 0.3))
+        ax = mv.pl.elastic(md, level="exp")
+        assert ax._matverse_anisotropy == pytest.approx(1.0, abs=1e-9)
+        low, high = ax._matverse_extremes
+        assert low == pytest.approx(100.0, rel=1e-6)
+        assert high == pytest.approx(100.0, rel=1e-6)
+
+    def test_copper_reproduces_the_measured_directional_moduli(self):
+        """C11=168.4, C12=121.4, C44=75.4 GPa give 66.7 along [100] and 191.1
+        along [111]. Those are the numbers to hit; the isotropic average is a
+        single value near 120 and carries neither."""
+        import matplotlib
+        matplotlib.use("Agg")
+        from matverse.pl import _compliance_tensor, _youngs_along
+
+        compliance = _compliance_tensor(_cubic_stiffness(168.4, 121.4, 75.4))
+        along = lambda d: float(_youngs_along(compliance, np.array(d, float)))
+        assert along([1, 0, 0]) == pytest.approx(66.7, rel=0.01)
+        assert along([1, 1, 0]) == pytest.approx(130.3, rel=0.01)
+        assert along([1, 1, 1]) == pytest.approx(191.1, rel=0.01)
+
+        md = self._object(_cubic_stiffness(168.4, 121.4, 75.4), name="Cu")
+        assert mv.pl.elastic(md, level="exp")._matverse_anisotropy == \
+            pytest.approx(2.87, rel=0.02)
+
+    def test_the_voigt_factors_are_not_optional(self):
+        """A compliance matrix carries a half on every shear index where a
+        stiffness matrix carries none. Expanding the inverse without them
+        gives a tensor that looks plausible and reports an anisotropy that is
+        not there — an isotropic solid stops being a circle."""
+        from matverse.pl import _VOIGT_PAIRS, _youngs_along
+
+        stiffness = _isotropic_stiffness(100.0, 0.3)
+        compact = np.linalg.inv(stiffness)
+        naive = np.zeros((3, 3, 3, 3))
+        for a, (i, j) in enumerate(_VOIGT_PAIRS):
+            for b, (k, l) in enumerate(_VOIGT_PAIRS):
+                for p, q in {(i, j), (j, i)}:
+                    for r, s in {(k, l), (l, k)}:
+                        naive[p, q, r, s] = compact[a, b]   # no factors
+        directions = np.array([[1, 0, 0], [1, 1, 1]], dtype=float)
+        wrong = _youngs_along(naive, directions)
+        assert abs(wrong[0] - wrong[1]) > 1.0, (
+            "without the Voigt factors an isotropic solid should look "
+            "anisotropic; if this passes, the test is not testing anything")
+
+    def test_it_names_the_missing_step(self):
+        md = mv.data.from_compositions(["Cu"])
+        with pytest.raises(ValueError, match="mv.prop.elastic"):
+            mv.pl.elastic(md, level="exp")
+
+    def test_a_failed_row_is_refused_rather_than_plotted(self):
+        """mv.prop.elastic records a row it could not compute as NaN, and a
+        polar plot of NaN is an empty circle that looks like a result."""
+        import matplotlib
+        matplotlib.use("Agg")
+        md = self._object(np.full((6, 6), np.nan))
+        with pytest.raises(ValueError, match="not finite"):
+            mv.pl.elastic(md, level="exp")
+
+    def test_a_row_resolves_by_the_name_column_not_only_the_index(self):
+        """A matverse dataset puts the formula in obs['name'] and leaves
+        obs_names as integers. Looking only at obs_names sent 'Cu' to int()
+        and failed with a message about base 10.
+
+        The unit tests missed it because they named their own rows; executing
+        the tutorial found it on the first run. Both kinds of check earn their
+        place, and this is the one that would have."""
+        import matplotlib
+        matplotlib.use("Agg")
+        md = self._object(_cubic_stiffness(168.4, 121.4, 75.4), name="0")
+        md.obs["name"] = ["Cu"]
+        assert mv.pl.elastic(md, level="exp", row="Cu") is not None
+
+    def test_an_unknown_row_says_what_the_object_has(self):
+        import matplotlib
+        matplotlib.use("Agg")
+        md = self._object(_cubic_stiffness(168.4, 121.4, 75.4), name="0")
+        md.obs["name"] = ["Cu"]
+        with pytest.raises(ValueError, match="no row"):
+            mv.pl.elastic(md, level="exp", row="Xx")
+
+    def test_a_row_can_be_named_or_indexed(self):
+        import matplotlib
+        matplotlib.use("Agg")
+        md = self._object(_cubic_stiffness(168.4, 121.4, 75.4), name="Cu")
+        assert mv.pl.elastic(md, level="exp", row="Cu")._matverse_anisotropy \
+            == pytest.approx(
+                mv.pl.elastic(md, level="exp", row=0)._matverse_anisotropy)

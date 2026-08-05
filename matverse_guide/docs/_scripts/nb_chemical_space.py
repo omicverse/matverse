@@ -475,7 +475,17 @@ except (ImportError, NameError, ValueError) as exc:
 It also works on any dataset that has been through `mv.pp.symmetry`, which now
 records `spacegroup_number` and `spacegroup_symbol` alongside the crystal system
 and point group — the analyser was already being built, so the group itself cost
-nothing to report and is the one label everybody actually cites.
+nothing to report and is the one label everybody actually cites."""),
+
+    ("code", """\
+mv.pp.symmetry(md)
+mv.pl.spacegroups(md)"""),
+
+    ("markdown", """\
+On a screening library rather than a generated set, the same plot answers a
+different question: how much of the chemical space being searched is cubic, and
+whether the search has quietly concentrated on one crystal system. The bars are
+grouped by system for exactly that reading.
 
 ```{seealso}
 [Beyond one number](beyond_one_number.ipynb) covers the results that are not a

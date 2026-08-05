@@ -211,6 +211,27 @@ def pbsn_alloys():
     return mv.data.from_compositions(["Pb0.261Sn0.739", "Pb0.9Sn0.1"])
 
 
+def stiff():
+    """A dataset carrying a full elastic tensor, for mv.pl.elastic."""
+    md = mv.data.from_compositions(["Cu"])
+    C = np.zeros((6, 6))
+    C[:3, :3] = 121.4
+    np.fill_diagonal(C[:3, :3], 168.4)
+    for i in range(3, 6):
+        C[i, i] = 75.4
+    md.obsm["elastic_tensor_exp"] = C.reshape(1, 36)
+    return md
+
+
+def fermi_computed():
+    """A dataset whose Fermi surface has already been computed and kept."""
+    structure, band_structure = _free_electron_cell()
+    md = mv.data.from_structures([structure])
+    mv.elec.fermi_surface(md, [band_structure], level="model",
+                          interpolation_factor=2.0)
+    return md
+
+
 def symmetric():
     """A dataset carrying obs['spacegroup_number'], for mv.pl.spacegroups."""
     md = mv.datasets.metals(["Cu", "Al"])
@@ -930,6 +951,9 @@ def cases(tmp):
         (mv.gen.from_symmetry, perovskite_candidates, (),
          {"space_groups": [221], "seed": 0, "returns": "new"}),
         (mv.pl.spacegroups, symmetric, (), {}),
+        (mv.pl.elastic, stiff, (), {"level": "exp"}),
+        # Skipped where IFermi is absent, like any optional backend.
+        (mv.pl.fermi_surface, fermi_computed, (), {"level": "model"}),
         (mv.thermo.calphad, pbsn_alloys, (_pbsn_tdb(),),
          {"temperature": 450.0}),
         # Small mesh and a low interpolation factor: the probe checks the

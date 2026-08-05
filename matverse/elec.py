@@ -744,6 +744,13 @@ def xps(md: AnnData, doses, level: str = "dft", n_points: int = 301,
           "with the cube of the factor — this belongs on a shortlist, not on "
           "a library, and lowering interpolation_factor is the first thing to "
           "try when it is too slow.\n\n"
+          "keep_mesh stores each sheet's vertices and faces in "
+          "uns['fermi_surface'][level]['meshes'], which is what "
+          "mv.pl.fermi_surface draws. A few hundred kilobytes buys not having "
+          "to repeat the interpolation, and the alternative — a plotting "
+          "function that recomputes for minutes every time it is called — is "
+          "not an interface worth having. Pass keep_mesh=False for a screen "
+          "that only wants the numbers.\n\n"
           "obs['fermi_sheets_{level}'] counts disconnected pieces, which is "
           "what distinguishes a simple metal from one with pockets. Zero "
           "sheets means no band crosses the level, which is the definition of "
@@ -751,7 +758,7 @@ def xps(md: AnnData, doses, level: str = "dft", n_points: int = 301,
 )
 def fermi_surface(md: AnnData, bandstructures, level: str = "dft",
                   mu: float = 0.0, interpolation_factor: float = 5.0,
-                  wigner_seitz: bool = True) -> None:
+                  wigner_seitz: bool = True, keep_mesh: bool = True) -> None:
     """Fermi surface area and sheet count. Deposits; returns ``None``."""
     try:
         from ifermi.interpolate import FourierInterpolator
@@ -772,6 +779,7 @@ def fermi_surface(md: AnnData, bandstructures, level: str = "dft",
     areas = np.full(md.n_obs, np.nan)
     sheets = np.full(md.n_obs, np.nan)
     present = np.zeros(md.n_obs, dtype=bool)
+    meshes: dict = {}
     failures = []
 
     for i, bs in enumerate(bandstructures):
@@ -794,11 +802,25 @@ def fermi_surface(md: AnnData, bandstructures, level: str = "dft",
             failures.append(f"{md.obs_names[i]}: {type(exc).__name__}: {exc}")
             continue
 
-        pieces = sum(len(v) for v in surface.isosurfaces.values()) \
-            if hasattr(surface, "isosurfaces") else 0
+        collected = []
+        for spin, isosurfaces in getattr(surface, "isosurfaces", {}).items():
+            for sheet in isosurfaces:
+                # Vertices and faces are the surface. Keeping them costs a few
+                # hundred kilobytes and means mv.pl.fermi_surface can draw it
+                # without repeating an interpolation that takes minutes.
+                collected.append({
+                    "spin": str(spin),
+                    "band": int(getattr(sheet, "band_idx", -1)),
+                    "area": float(sheet.area),
+                    "vertices": np.asarray(sheet.vertices, dtype=float),
+                    "faces": np.asarray(sheet.faces, dtype=int),
+                })
+        pieces = len(collected)
         areas[i] = float(surface.area)
         sheets[i] = int(pieces)
         present[i] = pieces > 0
+        if keep_mesh:
+            meshes[str(md.obs_names[i])] = collected
 
     md.obs[f"fermi_surface_area_{level}"] = areas
     md.obs[f"fermi_sheets_{level}"] = sheets
@@ -808,6 +830,7 @@ def fermi_surface(md: AnnData, bandstructures, level: str = "dft",
         "interpolation_factor": float(interpolation_factor),
         "wigner_seitz": bool(wigner_seitz),
         "area_unit": "angstrom^-2",
+        "meshes": meshes,
         "n_failed": len(failures),
         "errors": failures[:10],
         "note": "area is the total over all sheets, clipped to the first "

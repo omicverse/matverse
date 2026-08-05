@@ -526,6 +526,39 @@ pockets; zero sheets means no band crosses the level, and that is reported as
 an insulator rather than raised as an error.
 ```
 
+Because that interpolation is expensive, `mv.elec.fermi_surface` keeps each
+sheet's vertices and faces in `uns`, and `mv.pl.fermi_surface` draws the stored
+mesh instead of repeating the work. A plotting function that recomputed for
+minutes on every call would not be an interface worth having; a few hundred
+kilobytes buys it away."""),
+
+    ("code", """\
+try:
+    import matplotlib.pyplot as plt
+
+    surfaces = mv.data.from_structures([cell, cell])
+    surfaces.obs_names = ["inside the zone", "clipped by the zone"]
+    both = [BandStructure(frac, {Spin.up: energies[None, :]}, reciprocal, ef,
+                          structure=cell) for ef in (0.8, 3.0)]
+    mv.elec.fermi_surface(surfaces, both, level="free-electron",
+                          interpolation_factor=3)
+
+    figure = plt.figure(figsize=(11, 5))
+    for position, name in enumerate(surfaces.obs_names, start=1):
+        panel = figure.add_subplot(1, 2, position, projection="3d")
+        mv.pl.fermi_surface(surfaces, level="free-electron", row=name,
+                            ax=panel)
+    figure.tight_layout()
+except ImportError:
+    print("needs IFermi; pip install matverse[fermi]")"""),
+
+    ("markdown", """\
+The left surface is a sphere. The right one is the same sphere at a higher Fermi
+level, and the **flat circular faces** are where it has grown past the zone
+boundary and been truncated. Those faces are physics, not a rendering artefact —
+the sphere genuinely stops there, and the area that remains is the one that
+carries current.
+
 ## What both objects remember"""),
 
     ("code", """\
