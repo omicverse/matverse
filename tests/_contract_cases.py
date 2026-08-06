@@ -232,6 +232,58 @@ def fermi_computed():
     return md
 
 
+def lithium_metal():
+    from pymatgen.core import Lattice, Structure
+    md = mv.data.from_structures([Structure(
+        Lattice.cubic(3.51), ["Li", "Li"], [[0, 0, 0], [.5, .5, .5]])])
+    md.obs["energy_ref"] = [-3.7474]
+    return md
+
+
+def olivine_pair():
+    """LiFePO4 and its delithiated framework, with energies supplied."""
+    cathode = mv.datasets.load("battery_cathodes")[:1].copy()
+    lithiated = mv.structures(cathode, "input")[0]
+    delithiated = lithiated.copy()
+    delithiated.remove_species(["Li"])
+    md = mv.data.from_structures([lithiated, delithiated])
+    md.obs_names = ["LiFePO4", "FePO4"]
+    md.obs["energy_ref"] = [-210.8473, -189.3663]
+    return md
+
+
+def with_rdf():
+    md = mv.datasets.load("simple")[:2].copy()
+    mv.pp.describe(md)
+    mv.prop.rdf(md, r_max=6.0, step=0.1)
+    return md
+
+
+def vibrating():
+    md = mv.datasets.metals(["Cu"])
+    mv.pp.describe(md)
+    mv.prop.phonon(md, level="emt", supercell=(1, 1, 1))
+    return md
+
+
+def adsorbing():
+    """Synthetic binding energies across a set of surfaces."""
+    n = 6
+    md = mv.data.from_compositions([f"Pt{i + 1}" for i in range(n)])
+    oxygen = np.linspace(-2.5, 0.5, n)
+    md.obs["E_O"] = oxygen
+    md.obs["E_OH"] = 0.5 * oxygen - 0.10
+    return md
+
+
+def transporting():
+    md = mv.data.from_compositions(["Bi2Te3"])
+    md.obs["seebeck_x"] = [200e-6]
+    md.obs["sigma_over_tau_x"] = [1e18]
+    md.obs["thermal_conductivity_x"] = [1.0]
+    return md
+
+
 def symmetric():
     """A dataset carrying obs['spacegroup_number'], for mv.pl.spacegroups."""
     md = mv.datasets.metals(["Cu", "Al"])
@@ -951,6 +1003,18 @@ def cases(tmp):
         (mv.gen.from_symmetry, perovskite_candidates, (),
          {"space_groups": [221], "seed": 0, "returns": "new"}),
         (mv.pl.spacegroups, symmetric, (), {}),
+        (mv.thermo.voltage, olivine_pair, (),
+         {"working_ion": "Li", "level": "ref", "reference": lithium_metal()}),
+        (mv.thermo.theoretical_capacity, olivine, (), {"working_ion": "Li"}),
+        (mv.prop.scattering, with_rdf, (), {"level": "calc", "q_max": 8.0,
+                                            "n_points": 20}),
+        (mv.prop.superconductivity, vibrating, (),
+         {"level": "emt", "coupling": 1.0}),
+        (mv.surf.scaling, adsorbing, (), {"x": "E_O", "y": "E_OH"}),
+        (mv.surf.volcano, adsorbing, (),
+         {"descriptor": "E_O", "optimum": -1.6}),
+        (mv.prop.zt, transporting, (),
+         {"level": "x", "relaxation_time": 1e-14}),
         (mv.pl.elastic, stiff, (), {"level": "exp"}),
         # Skipped where IFermi is absent, like any optional backend.
         (mv.pl.fermi_surface, fermi_computed, (), {"level": "model"}),

@@ -260,6 +260,55 @@ right distance, because that is set by the potential — and loses everything
 beyond it. Short-range order without long-range order is the definition of a
 glass, and this is what it looks like as a measurement.
 
+### What a diffractometer would actually see
+
+g(r) is not what a total-scattering experiment reports. `mv.prop.scattering`
+applies the two standard transforms — the structure factor S(q) and the reduced
+pair distribution function G(r) — so a quenched structure made here can be
+compared against a measured one."""),
+
+    ("code", """\
+mv.prop.scattering(copper, level="amorphous", source="amorphous_emt",
+                   q_max=12.0)
+
+q = mv.grid_of(copper, "structure_factor")
+fig, axes = plt.subplots(1, 2, figsize=(11, 3.8))
+axes[0].plot(q, copper.obsm["structure_factor_amorphous"][0], linewidth=1.0)
+axes[0].axhline(1.0, linestyle="--", color="#888", linewidth=0.8)
+axes[0].set_xlabel("q (Å⁻¹)"); axes[0].set_ylabel("S(q)")
+axes[0].set_title("structure factor")
+
+r_pdf = mv.grid_of(copper, "pdf")
+axes[1].plot(r_pdf, copper.obsm["pdf_amorphous"][0], linewidth=1.0)
+axes[1].axhline(0.0, linestyle="--", color="#888", linewidth=0.8)
+axes[1].set_xlabel("r (Å)"); axes[1].set_ylabel("G(r)")
+axes[1].set_title("reduced pair distribution")
+fig.tight_layout()"""),
+
+    ("markdown", """\
+Both are definitions rather than models:
+
+$$S(q) = 1 + \\frac{4\\pi\\rho}{q}\\int r\\,[g(r)-1]\\,\\sin(qr)\\,\\mathrm{d}r
+\\qquad G(r) = 4\\pi r \\rho\\,[g(r)-1]$$
+
+which makes them checkable. For an ideal gas, g = 1 everywhere and S(q) comes
+back as 1.000000 at every q; for a hard-sphere exclusion the transform has a
+closed form and this reproduces it.
+
+```{warning}
+**This is a technique for disordered matter, and applying it to a crystal
+produces nonsense.** A crystal's g(r) never decays to one, so truncating it at
+`r_max` and transforming produces termination ripple larger than any real peak
+— on the four textbook structures in `mv.datasets` the apparent "first peak" of
+S(q) is entirely ripple. `mv.prop.xrd` is the function for a crystalline
+diffraction pattern.
+
+The accuracy also follows the r grid `mv.prop.rdf` produced, linearly: against
+the hard-sphere closed form the error is 0.24 at a step of 0.10 Å, 0.12 at 0.05,
+and 0.012 at 0.005. The default is fine for a shape and coarse for a comparison
+against a measurement.
+```
+
 ## What the object remembers"""),
 
     ("code", """\

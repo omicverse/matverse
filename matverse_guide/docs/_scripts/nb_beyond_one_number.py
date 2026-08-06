@@ -1039,4 +1039,204 @@ A material containing an element the database does not assess is **skipped and
 counted**, never projected onto the elements that remain. Dropping the copper
 from PbSnCu and renormalising would answer a question about a different alloy.
 ```"""),
+
+    ("markdown", """\
+## A voltage is a slope on the hull
+
+`mv.thermo.hull` already computes the energies an intercalation voltage is made
+of. The voltage *is* the hull slope along the working-ion axis:
+
+$$V = -\\frac{E_{\\mathrm{lithiated}} - E_{\\mathrm{delithiated}} - n\\,E_{\\mathrm{Li}}}{n}$$
+
+in volts, because an electron carries one. `mv.thermo.voltage` reads it off."""),
+
+    ("code", """\
+from pymatgen.core import Lattice, Structure
+
+cathode = mv.datasets.load("battery_cathodes")[:1].copy()
+lithiated = mv.structures(cathode, "input")[0]
+delithiated = lithiated.copy()
+delithiated.remove_species(["Li"])
+
+electrode = mv.data.from_structures([lithiated, delithiated])
+electrode.obs_names = ["LiFePO4", "FePO4"]
+metal = mv.data.from_structures([Structure(
+    Lattice.cubic(3.51), ["Li", "Li"], [[0, 0, 0], [.5, .5, .5]])])
+
+try:
+    # cell=False on purpose: see the warning below.
+    for piece in (electrode, metal):
+        mv.calc.relax(piece, level="chgnet", fmax=0.05, cell=False)
+    mv.thermo.voltage(electrode, working_ion="Li", level="chgnet",
+                      source="relaxed_chgnet", reference=metal)
+    print(electrode.obs[["voltage_chgnet", "capacity_gravimetric_chgnet",
+                         "energy_density_chgnet"]].round(2).head(1).to_string())
+except (ImportError, KeyError) as exc:
+    print("needs CHGNet; pip install matverse[potentials]", exc)"""),
+
+    ("markdown", """\
+**3.50 V and 169.9 mAh/g**, against a measured plateau of 3.4–3.5 V and a
+theoretical capacity of 170. CHGNet is trained on PBE+U, which is the
+functional this problem needs — plain PBE gives closer to 3.0 V for the same
+material, and `level=` is what records which was used.
+
+```{warning}
+`cell=False` is not incidental. Relaxing the **cell** of these structures with a
+foundation potential diverges: it collapsed LiFePO₄ to 2 Å³ per atom and
+expanded FePO₄ to 117, and the first version of `mv.thermo.voltage` read the
+resulting energies and returned **78 V**. `mv.calc.relax` had recorded
+`relax_converged_chgnet = False` for both rows the whole time — the diagnostic
+existed and the function did not consult it.
+
+It does now: unconverged rows are excluded and counted, and an unconverged
+**reference** raises outright, because a bad lithium-metal energy shifts every
+voltage by the same amount and no comparison between cathodes would reveal it.
+```
+
+`obs['volume_change_chgnet']` is the weakest number of the set — about −14%
+here against a measured −6.8%, precisely because the cell was held fixed and
+never allowed to respond to delithiation. It is a flag, not a measurement."""),
+
+    ("markdown", """\
+### The cheaper question, asked first
+
+A voltage needs both ends of the reaction. `mv.thermo.theoretical_capacity`
+needs **one structure** and counts the electrons the transition metals could
+give up — which is the question a screen asks first, and much more cheaply."""),
+
+    ("code", """\
+library = mv.datasets.load("battery_cathodes")
+mv.thermo.theoretical_capacity(library, working_ion="Li")
+mv.thermo.theoretical_capacity(library, working_ion="Na")
+print(library.obs[["theoretical_capacity_Li",
+                   "theoretical_capacity_Na"]].round(1).to_string())"""),
+
+    ("markdown", """\
+LiFePO₄ gives 169.9 mAh/g for lithium and zero for sodium; NaFePO₄ gives 154.2
+for sodium — the measured figure is about 154 — and zero for lithium. Asking a
+lithium compound how much sodium it can release is answered correctly rather
+than approximately.
+
+It is a **bound**, not a prediction. The number counts electrons and says
+nothing about whether the framework survives losing them; a material that
+collapses at half this will report the same figure. Rank a library on it, then
+compute voltages for the survivors — that is the order that costs least."""),
+
+    ("markdown", """\
+## Three numbers where matverse has one and a half
+
+Some quantities are a formula over inputs matverse cannot produce, and the
+useful thing is to be exact about which half is which.
+
+`mv.prop.superconductivity` computes ω_log — a moment of the phonon density of
+states `mv.prop.phonon` already produced — and then applies Allen-Dynes. It
+**will not** guess the electron–phonon coupling λ, which is an integral over
+α²F and needs EPW or `ph.x`, not a phonon spectrum."""),
+
+    ("code", """\
+metals = mv.datasets.metals(["Cu", "Al"])
+mv.pp.describe(metals)
+mv.calc.relax(metals, level="emt", fmax=0.01)
+mv.prop.phonon(metals, level="emt", source="relaxed_emt", supercell=(2, 2, 2))
+
+mv.prop.superconductivity(metals, level="emt", coupling=1.0)
+print(metals.obs[["name", "omega_log_emt", "critical_temperature_emt"]]
+      .round(3).to_string(index=False))
+
+try:
+    mv.prop.superconductivity(metals, level="emt")
+except ValueError as exc:
+    print(f"\\nwithout a coupling: {str(exc)[:70]}...")"""),
+
+    ("markdown", """\
+λ = 1.0 there was **supplied, not computed**, so the temperatures are what that
+coupling would imply and not a prediction about copper — whose real λ is about
+0.13, below the threshold where the formula has a solution at all, and which is
+not a superconductor.
+
+ω_log is the computed half and is checkable: a density of states with all its
+weight at one frequency returns that frequency exactly, and one with equal
+weight at 4 and 16 THz returns 5.28 rather than the geometric mean of 8, because
+the 1/ω weighting favours the soft end.
+
+```{note}
+ω_log is properly a moment of α²F, not of the phonon density of states. Using
+the latter assumes the coupling does not depend on frequency — the Einstein-like
+limit, wrong wherever one branch couples much more strongly than another, which
+is most interesting superconductors. `uns` records that the substitution was
+made.
+```
+
+### The same shape, for thermoelectrics
+
+`mv.elec.transport` produces σ/τ rather than σ, because the constant relaxation
+time approximation declines to supply τ. So `mv.prop.zt` requires it — and
+computes, separately, the one number that does not need it."""),
+
+    ("code", """\
+thermo = mv.data.from_compositions(["Bi2Te3"])
+thermo.obs["seebeck_x"] = [200e-6]              # V/K
+thermo.obs["thermal_conductivity_x"] = [1.0]    # W/m/K
+
+for sigma_over_tau in (1e17, 1e19, 1e22):
+    row = thermo.copy()
+    row.obs["sigma_over_tau_x"] = [sigma_over_tau]
+    mv.prop.zt(row, level="x", relaxation_time=1e-14, temperature=700.0)
+    print(f"sigma/tau={sigma_over_tau:.0e}  "
+          f"zT={float(row.obs['zt_x'].iloc[0]):.4f}  "
+          f"ceiling={float(row.obs['zt_ceiling_x'].iloc[0]):.4f}")"""),
+
+    ("markdown", """\
+zT climbs with conductivity and **stops** at 1.639. That ceiling is `S²/L`, and
+τ cancels out of it exactly: it appears in σ and again in the electronic thermal
+conductivity through Wiedemann–Franz, so as the lattice term stops mattering the
+unknown divides out.
+
+The consequence is worth stating plainly. **A material whose Seebeck coefficient
+puts its ceiling below the zT you need cannot be rescued by any conductivity** —
+and that conclusion survives not knowing τ, which is the number nobody has.
+
+## Scaling relations, and why a reaction has a ceiling
+
+Adsorbates that bind through the same atom bind in proportion. That is why a
+screen over a whole reaction can run on one descriptor — and why the reaction
+has a ceiling, because the intermediate you want bound weakly is tied to the one
+you want bound strongly."""),
+
+    ("code", """\
+import numpy as np
+
+rng = np.random.default_rng(0)
+oxygen = np.linspace(-2.5, 0.5, 8)
+surfaces = mv.data.from_compositions([f"Pt{i + 1}" for i in range(8)])
+surfaces.obs["E_O"] = oxygen
+surfaces.obs["E_OH"] = 0.5 * oxygen - 0.10 + rng.normal(0, 0.02, 8)
+
+mv.surf.scaling(surfaces, x="E_O", y="E_OH")
+fit = surfaces.uns["scaling"]["fits"]["all"]
+print(f"slope {fit['slope']:.3f}   intercept {fit['intercept_eV']:.3f} eV   "
+      f"R2 {fit['r_squared']:.4f}")
+
+mv.surf.volcano(surfaces, descriptor="E_O", optimum=-1.6)
+print(surfaces.obs[["E_O", "scaling_residual", "distance_from_optimum",
+                    "volcano_activity"]].round(3).to_string())"""),
+
+    ("markdown", """\
+The slope is the physical claim: a species bonding through one atom with *n*
+remaining valences scales against a reference with *m* as roughly *n/m*, so OH
+against O is about ½. A fitted slope far from a small rational number usually
+means the two species are not binding the way the argument assumes.
+
+`scaling_residual` is the interesting column, not the fit. A catalyst that beats
+the scaling ceiling has to **break** the relation, so a large residual is a
+candidate and a small one confirms the surface offers nothing new.
+
+```{warning}
+The volcano's **optimum is an input**. Where the peak sits depends on the
+reaction, the potential and the conditions, and it comes from a microkinetic
+model or an experiment — not from here. `volcano_activity` is in arbitrary units
+and only its ordering means anything; `distance_from_optimum` is in eV and
+signed, so it says which side a surface falls on. Binding too weakly and too
+strongly are different problems and a magnitude cannot tell them apart.
+```"""),
 ]

@@ -48,6 +48,9 @@ from typing import Dict, List
 #: pymatgen module -> the matverse functions that reach it.
 WRAPPED: Dict[str, List[str]] = {
     "analysis.adsorption": ["mv.surf.adsorption_sites"],
+    "apps.battery.insertion_battery": ["mv.thermo.voltage"],
+    "apps.battery.battery_abc": ["mv.thermo.voltage"],
+    "apps.battery.analyzer": ["mv.thermo.theoretical_capacity"],
     "analysis.bond_valence": ["mv.transform.oxidation_states"],
     "analysis.chemenv.coordination_environments.chemenv_strategies":
         ["mv.env.chemenv"],
@@ -195,7 +198,15 @@ WRAPPED: Dict[str, List[str]] = {
 #: Modules matverse reaches through an object another module handed it, rather
 #: than by importing them. The capability is used; the import is not there to
 #: find, so the direct-import check is told why rather than weakened.
+#: Modules reached only through another one matverse calls directly. This dict
+#: records *why* a module is covered without being called; ``classify`` does
+#: not read it, so every entry here must also appear in ``WRAPPED`` or it will
+#: fall through to TODO. That is not obvious from the name and cost an
+#: afternoon to rediscover.
 TRANSITIVE: Dict[str, str] = {
+    "apps.battery.battery_abc":
+        "the abstract base InsertionElectrode inherits from; reached through "
+        "mv.thermo.voltage and never constructed directly",
     "analysis.interfaces.zsl":
         "SubstrateAnalyzer, which mv.iface.match imports, runs the "
         "Zur-McGill lattice search out of this module",
@@ -453,7 +464,18 @@ NATIVE: Dict[str, str] = {
 # ------------------------------------------------------------- NOT_A_GOAL
 NOT_A_GOAL: Dict[str, str] = {
     "cli": "pymatgen's command line, not a library capability",
-    "apps": "pymatgen's own applications (borg, battery)",
+    "apps.borg.hive":
+        "a directory-crawling data assimilator — an application, not a "
+        "library capability. mv.data and mv.dft.read_outputs are how matverse "
+        "gets data off disk",
+    "apps.borg.queen": "see apps.borg.hive",
+    "apps.battery.conversion_battery":
+        "conversion electrodes, where the framework is consumed rather than "
+        "intercalated into, so the reaction is a decomposition and not a "
+        "hull slope along one composition axis. mv.thermo.voltage is "
+        "specifically an intercalation voltage and says so; a conversion "
+        "electrode needs mv.thermo.reaction and a phase diagram, and calling "
+        "them the same thing would be the error this map exists to prevent",
     "command_line": "shells out to external binaries pymatgen wraps",
     "vis": "3D visualisation; mv.pl.structure covers the quick look and "
            "VESTA and Crystal Toolkit cover real inspection",
@@ -735,7 +757,10 @@ def classify(module: str, alias_map: Dict[str, str] | None = None) -> str:
     alias_map = aliases() if alias_map is None else alias_map
     module = canonical(module, alias_map)
     top = module.split(".")[0]
-    if top in NOT_A_GOAL:
+    # Both the whole package and a single module, because a package can hold
+    # unlike things: apps.borg is an application and apps.battery is a
+    # thermodynamic calculation, and exempting the package exempted both.
+    if top in NOT_A_GOAL or module in NOT_A_GOAL:
         return "NOT_A_GOAL"
     if module in INTERNAL or any(m in module for m in INTERNAL_MARKERS):
         return "INTERNAL"
@@ -800,7 +825,49 @@ def summary(root: str | None = None) -> str:
     return "\n".join(lines)
 
 
+#: Domains matverse does not cover, and will not. These are not pymatgen
+#: modules and so never appear in the count above — which is exactly why they
+#: are written here. A coverage figure computed over one library's modules says
+#: nothing about the fields that library does not enter either, and a reader
+#: deciding whether matverse fits their problem needs the second list more than
+#: the first.
+#:
+#: The test suite does not enforce anything here. It is a record of decisions,
+#: kept so that "matverse has no dislocations" reads as a boundary somebody
+#: drew rather than as something nobody got round to.
+OUT_OF_SCOPE: Dict[str, str] = {
+    "dislocations and plasticity":
+        "a dislocation is a line defect whose behaviour lives in the "
+        "interaction between many of them, at micrometres and above. The "
+        "periodic cell matverse is built on is the wrong object: one "
+        "dislocation in a supercell interacts with its own images and that "
+        "interaction is the answer. atomman and LAMMPS are where this lives",
+    "grain boundaries and polycrystal texture":
+        "mv.iface matches two lattices across an interface, which is the "
+        "atomistic half. A grain boundary energy landscape needs sampling "
+        "over misorientation and translation, and a texture is a "
+        "distribution over thousands of grains — a mesoscale problem with "
+        "mesoscale tools (DREAM.3D, MTEX, phase field)",
+    "radiation damage":
+        "a displacement cascade is a nanosecond of a hundred thousand atoms "
+        "far from equilibrium. mv.md.run drives ASE, which is the wrong "
+        "engine for that by two orders of magnitude; LAMMPS with a "
+        "hard-sphere-corrected potential is the usual one",
+    "continuum and finite element":
+        "matverse computes the elastic tensor a finite element model takes "
+        "as input, and stops there. What happens to a part under load is a "
+        "different discipline with its own libraries",
+    "training and fine-tuning interatomic potentials":
+        "mv.calc can reach twelve potentials and train none of them. That is "
+        "a deliberate line: training is a different workflow with different "
+        "data, different hardware and different failure modes, and the "
+        "libraries that do it — mace-torch, matgl, nequip — are the ones "
+        "matverse then loads the result from. mv.calc.register_calculator is "
+        "how a potential trained elsewhere becomes a level of theory here",
+}
+
 __all__ = ["WRAPPED", "NATIVE", "NOT_A_GOAL", "INTERNAL", "BLOCKED",
+           "OUT_OF_SCOPE",
            "EQUIVALENT",
            "TRANSITIVE",
            "equivalents", "public_modules",

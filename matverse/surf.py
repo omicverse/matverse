@@ -29,6 +29,8 @@ ranking and fatal in a Wulff construction.
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 import pandas as pd
 from anndata import AnnData
@@ -583,3 +585,167 @@ def adsorption_energy(configs: AnnData, clean: AnnData, reference: float,
 
 __all__ = ["slabs", "surface_energy", "wulff", "adsorption_sites",
            "adsorption_energy"]
+
+
+@register_function(
+    aliases=["scaling relation", "brønsted-evans-polanyi", "BEP", "linear "
+             "scaling", "adsorbate scaling", "descriptor for catalysis"],
+    category="surf",
+    description="Fit the linear relation between two adsorbates' binding "
+                "energies across a set of surfaces — the reason one descriptor "
+                "can stand for a whole reaction.",
+    requires={"obs": ["{x}", "{y}"]},
+    produces={"obs": ["scaling_residual"], "uns": ["scaling"]},
+    prerequisites=["mv.surf.adsorption_energy"],
+    examples=["mv.surf.scaling(md, x='adsorption_energy_O_emt', "
+              "y='adsorption_energy_OH_emt')",
+              "mv.surf.scaling(md, x='E_O', y='E_OOH', group='facet')"],
+    related=["mv.surf.adsorption_energy", "mv.surf.volcano",
+             "mv.screen.rank", "mv.pl.parity"],
+    notes="Adsorbates that bind through the same atom bind in proportion: on "
+          "a metal that holds oxygen tightly, hydroxyl is held tightly too, "
+          "and the ratio is set by how many bonds each makes rather than by "
+          "which metal it is. That is why a screen over a whole reaction can "
+          "be run on one number, and it is also why the reaction has a "
+          "ceiling — the intermediate you want to bind weakly is tied to the "
+          "one you want to bind strongly.\\n\\n"
+          "The slope is the physical claim. A species bonding through one "
+          "atom with n remaining valences scales against a reference species "
+          "with m as roughly n/m: OH against O is about 1/2, OOH against O "
+          "about 1/2 as well, and a fitted slope far from a small rational "
+          "number usually means the two species are not binding the way the "
+          "argument assumes.\\n\\n"
+          "obs['scaling_residual'] is where a surface departs from the line, "
+          "and it is the interesting column rather than the fit. A catalyst "
+          "that beats the scaling ceiling has to break the relation, so a "
+          "large residual is a candidate and a small one is a confirmation "
+          "that this surface offers nothing new.\\n\\n"
+          "Fitted by least squares on whatever rows carry both columns; rows "
+          "missing either are excluded and counted rather than imputed.",
+)
+def scaling(md: AnnData, x: str, y: str, group: str | None = None) -> None:
+    """Linear scaling between two adsorbates. Deposits; returns ``None``."""
+    for column in (x, y):
+        if column not in md.obs:
+            raise ValueError(
+                f"obs[{column!r}] absent; run mv.surf.adsorption_energy for "
+                f"each adsorbate first, or point x=/y= at the columns that "
+                f"hold them — this object has "
+                f"{[c for c in md.obs.columns if 'adsorption' in c][:6]}")
+    if group is not None and group not in md.obs:
+        raise ValueError(f"obs[{group!r}] absent")
+
+    left = pd.to_numeric(md.obs[x], errors="coerce").to_numpy(dtype=float)
+    right = pd.to_numeric(md.obs[y], errors="coerce").to_numpy(dtype=float)
+    labels = (md.obs[group].astype(str).to_numpy() if group is not None
+              else np.full(md.n_obs, "all", dtype=object))
+
+    residual = np.full(md.n_obs, np.nan)
+    fits, skipped = {}, 0
+
+    for label in dict.fromkeys(labels):
+        mask = (labels == label) & np.isfinite(left) & np.isfinite(right)
+        if mask.sum() < 3:
+            skipped += int(mask.sum())
+            continue
+        slope, intercept = np.polyfit(left[mask], right[mask], 1)
+        predicted = slope * left[mask] + intercept
+        residual[mask] = right[mask] - predicted
+        spread = right[mask] - right[mask].mean()
+        total = float((spread ** 2).sum())
+        fits[str(label)] = {
+            "slope": float(slope),
+            "intercept_eV": float(intercept),
+            "rmse_eV": float(np.sqrt(np.mean((right[mask] - predicted) ** 2))),
+            "r_squared": float(1.0 - ((right[mask] - predicted) ** 2).sum()
+                               / total) if total > 0 else float("nan"),
+            "n_points": int(mask.sum()),
+        }
+
+    md.obs["scaling_residual"] = residual
+    md.uns["scaling"] = {
+        "x": str(x), "y": str(y), "group": group,
+        "fits": fits,
+        "n_excluded": int(np.isnan(residual).sum()),
+        "note": "least squares on rows carrying both columns; the residual is "
+                "the departure from the line and is the column worth reading",
+    }
+    if not fits:
+        raise ValueError(
+            f"no group had three points with both {x!r} and {y!r}; a line "
+            f"through two points is not a scaling relation")
+    if skipped:
+        warnings.warn(
+            f"{skipped} rows are in groups too small to fit and have no "
+            f"residual; a scaling relation needs at least three surfaces",
+            RuntimeWarning, stacklevel=2)
+    record(md, "surf.scaling", x=x, y=y, group=group)
+
+
+@register_function(
+    aliases=["volcano", "volcano plot", "sabatier", "activity descriptor",
+             "catalytic activity", "optimal binding"],
+    category="surf",
+    description="Sabatier activity against a binding-energy descriptor — the "
+                "volcano — with the optimum and each surface's distance from "
+                "it.",
+    requires={"obs": ["{descriptor}"]},
+    produces={"obs": ["volcano_activity", "distance_from_optimum"],
+              "uns": ["volcano"]},
+    prerequisites=["mv.surf.adsorption_energy"],
+    examples=["mv.surf.volcano(md, descriptor='adsorption_energy_O_emt', "
+              "optimum=-1.6)",
+              "mv.surf.volcano(md, descriptor='E_O', optimum=-1.6, "
+              "slopes=(1.0, -1.0))"],
+    related=["mv.surf.scaling", "mv.surf.adsorption_energy",
+             "mv.screen.rank", "mv.pl.scatter"],
+    notes="Sabatier's argument in one column: bind the intermediate too "
+          "weakly and it never forms, too strongly and it never leaves, so "
+          "activity peaks somewhere in between. The two limits are lines with "
+          "opposite slopes in the binding energy, and the activity is "
+          "whichever is smaller — a minimum of two straight lines, which is "
+          "why the plot is a peak with straight flanks rather than a "
+          "curve.\\n\\n"
+          "**The optimum is an input, not a result.** Where the peak sits "
+          "depends on the reaction, the potential and the conditions, and it "
+          "comes from a microkinetic model or from experiment. Passing one "
+          "and reading the ranking is legitimate; treating the ranking as a "
+          "prediction of turnover is not, and the difference is that "
+          "everything here is a *relative* ordering of surfaces against an "
+          "optimum somebody else established.\\n\\n"
+          "The activity is in arbitrary units and only its ordering means "
+          "anything. obs['distance_from_optimum'] is the honest column: it is "
+          "in electronvolts, it says which side the surface falls on through "
+          "its sign, and it does not pretend to be a rate.",
+)
+def volcano(md: AnnData, descriptor: str, optimum: float,
+            slopes: tuple = (1.0, -1.0)) -> None:
+    """Sabatier activity against a descriptor. Deposits; returns ``None``."""
+    if descriptor not in md.obs:
+        raise ValueError(
+            f"obs[{descriptor!r}] absent; this object has "
+            f"{[c for c in md.obs.columns if 'adsorption' in c][:6]}")
+    if len(slopes) != 2 or slopes[0] <= 0 or slopes[1] >= 0:
+        raise ValueError(
+            f"slopes={slopes} must be one positive and one negative — the "
+            f"two limbs of a volcano have opposite signs, and giving them the "
+            f"same sign produces a straight line dressed as a peak")
+
+    values = pd.to_numeric(md.obs[descriptor], errors="coerce").to_numpy(
+        dtype=float)
+    offset = values - float(optimum)
+    weak, strong = float(slopes[0]), float(slopes[1])
+    activity = np.minimum(weak * offset, strong * offset)
+
+    md.obs["volcano_activity"] = activity
+    md.obs["distance_from_optimum"] = offset
+    md.uns["volcano"] = {
+        "descriptor": str(descriptor),
+        "optimum": float(optimum),
+        "slopes": [weak, strong],
+        "optimum_source": "supplied by the caller; not derived here",
+        "n_missing": int(np.isnan(values).sum()),
+        "note": "activity is in arbitrary units and only its ordering is "
+                "meaningful; distance_from_optimum is in eV and signed",
+    }
+    record(md, "surf.volcano", descriptor=descriptor, optimum=optimum)
