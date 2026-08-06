@@ -1540,3 +1540,406 @@ class TestCalphad:
             [Structure(Lattice.cubic(4.0), ["Pb"], [[0, 0, 0]])])
         with pytest.raises(ValueError, match="from_compositions"):
             mv.thermo.calphad(md, _pbsn_database(), temperature=450.0)
+
+
+def _olivine_pair():
+    """LiFePO4 and its delithiated framework, plus a lithium reference.
+
+    The energies are supplied directly rather than computed, so the test says
+    something about the voltage arithmetic rather than about a potential. The
+    values are what CHGNet gives for a positions-only relaxation, which
+    reproduces the measured plateau.
+    """
+    from pymatgen.core import Lattice, Structure
+
+    lifepo4 = mv.datasets.load("battery_cathodes")[:1].copy()
+    lithiated = mv.structures(lifepo4, "input")[0]
+    delithiated = lithiated.copy()
+    delithiated.remove_species(["Li"])
+
+    cathode = mv.data.from_structures([lithiated, delithiated])
+    cathode.obs_names = ["LiFePO4", "FePO4"]
+    cathode.obs["energy_ref"] = [-210.8473, -189.3663]
+    cathode.obs["relax_converged_ref"] = [True, True]
+
+    metal = mv.data.from_structures([Structure(
+        Lattice.cubic(3.51), ["Li", "Li"], [[0, 0, 0], [.5, .5, .5]])])
+    metal.obs["energy_ref"] = [-3.7474]
+    metal.obs["relax_converged_ref"] = [True]
+    return cathode, metal
+
+
+class TestIntercalationVoltage:
+    """Checked against a measured plateau, not against another code.
+
+    LiFePO4 discharges at 3.4-3.5 V with a theoretical capacity of 170 mAh/g.
+    Those are the numbers to hit.
+    """
+
+    def test_it_reproduces_the_lifepo4_plateau(self):
+        cathode, metal = _olivine_pair()
+        mv.thermo.voltage(cathode, working_ion="Li", level="ref",
+                          reference=metal)
+        assert float(cathode.obs["voltage_ref"].iloc[0]) == \
+            pytest.approx(3.5, abs=0.15)
+        assert float(cathode.obs["capacity_gravimetric_ref"].iloc[0]) == \
+            pytest.approx(170.0, rel=0.02)
+
+    def test_every_row_of_a_framework_carries_its_voltage(self):
+        """The voltage belongs to the pair, so both rows report it — a screen
+        sorting on the column should not have to know which row is which."""
+        cathode, metal = _olivine_pair()
+        mv.thermo.voltage(cathode, working_ion="Li", level="ref",
+                          reference=metal)
+        values = cathode.obs["voltage_ref"].to_numpy(dtype=float)
+        assert np.isfinite(values).all()
+        assert values[0] == pytest.approx(values[1])
+
+    def test_an_unconverged_row_is_excluded_not_averaged_in(self):
+        """The bug this was written after: reading energy_{level} without
+        checking relax_converged_{level} gave 78 V for LiFePO4, from a cell a
+        foundation potential had collapsed to 2 cubic angstrom per atom. The
+        diagnostic was False the whole time."""
+        cathode, metal = _olivine_pair()
+        cathode.obs["relax_converged_ref"] = [True, False]
+        with pytest.warns(RuntimeWarning, match="did not converge"):
+            mv.thermo.voltage(cathode, working_ion="Li", level="ref",
+                              reference=metal)
+        assert np.isnan(float(cathode.obs["voltage_ref"].iloc[0]))
+        assert "FePO4" in cathode.uns["electrode"]["ref"]["unconverged"]
+
+    def test_an_unconverged_reference_is_refused_outright(self):
+        """A bad reference shifts every voltage by the same amount, so no
+        comparison between cathodes reveals it. That makes it worse than a bad
+        cathode, and it raises rather than warns."""
+        cathode, metal = _olivine_pair()
+        metal.obs["relax_converged_ref"] = [False]
+        with pytest.raises(ValueError, match="reference did not converge"):
+            mv.thermo.voltage(cathode, working_ion="Li", level="ref",
+                              reference=metal)
+
+    def test_a_missing_reference_is_refused_rather_than_guessed(self):
+        cathode, _ = _olivine_pair()
+        with pytest.raises(ValueError, match="reference= is required"):
+            mv.thermo.voltage(cathode, working_ion="Li", level="ref")
+
+    def test_two_frameworks_are_not_averaged_together(self):
+        """Li and Na analogues of the same framework are different electrodes.
+        Grouping by what is left when the working ion is removed keeps them
+        apart; without it they become one meaningless average."""
+        cathode, metal = _olivine_pair()
+        extra = mv.datasets.load("battery_cathodes")[1:2].copy()
+        merged = mv.data.from_structures(
+            list(mv.structures(cathode, "input"))
+            + list(mv.structures(extra, "input")))
+        merged.obs_names = ["LiFePO4", "FePO4", "NaFePO4"]
+        merged.obs["energy_ref"] = [-210.8473, -189.3663, -205.0]
+        merged.obs["relax_converged_ref"] = [True, True, True]
+        with pytest.warns(RuntimeWarning, match="no voltage"):
+            mv.thermo.voltage(merged, working_ion="Li", level="ref",
+                              reference=metal)
+        # The sodium analogue has no lithium pair, so it gets no voltage.
+        assert np.isnan(float(merged.obs["voltage_ref"].iloc[2]))
+        assert np.isfinite(float(merged.obs["voltage_ref"].iloc[0]))
+
+    def test_it_needs_energies(self):
+        cathode, metal = _olivine_pair()
+        del cathode.obs["energy_ref"]
+        with pytest.raises(ValueError, match="mv.calc.relax"):
+            mv.thermo.voltage(cathode, working_ion="Li", level="ref",
+                              reference=metal)
+
+
+class TestScattering:
+    """S(q) and G(r) are definitions, so they can be checked against closed
+    forms rather than against another code."""
+
+    SIGMA = 3.0
+    DENSITY = 0.05
+
+    @classmethod
+    def _hard_sphere(cls, step=0.005, r_max=20.0):
+        from matverse._core import deposit_grid
+        from pymatgen.core import Lattice, Structure
+
+        side = (400 / cls.DENSITY) ** (1 / 3)
+        rng = np.random.default_rng(0)
+        cell = Structure(Lattice.cubic(side), ["Ar"] * 400, rng.random((400, 3)))
+        md = mv.data.from_structures([cell])
+        r = np.arange(step, r_max, step)
+        g = np.where(r < cls.SIGMA, 0.0, 1.0)
+        deposit_grid(md, "rdf", "test", g[None, :], r, unit="angstrom")
+        return md, r
+
+    @classmethod
+    def _analytic(cls, q):
+        """S(q) for a step g(r): 1 - 4 pi rho / q^3 [sin(qd) - qd cos(qd)]."""
+        d = cls.SIGMA
+        return 1.0 - 4 * np.pi * cls.DENSITY / q ** 3 * (
+            np.sin(q * d) - q * d * np.cos(q * d))
+
+    def test_an_ideal_gas_has_a_structure_factor_of_one(self):
+        """g = 1 everywhere means no structure, and S(q) says so exactly."""
+        from matverse._core import deposit_grid, grid_of
+        from pymatgen.core import Lattice, Structure
+
+        cell = Structure(Lattice.cubic(20.0), ["Ar"], [[0, 0, 0]])
+        md = mv.data.from_structures([cell])
+        r = np.arange(0.01, 20.0, 0.005)
+        deposit_grid(md, "rdf", "ideal", np.ones((1, r.size)), r,
+                     unit="angstrom")
+        mv.prop.scattering(md, level="ideal", q_max=12.0, n_points=40)
+        factor = md.obsm["structure_factor_ideal"][0]
+        assert factor == pytest.approx(np.ones_like(factor), abs=1e-6)
+
+    def test_it_reproduces_the_hard_sphere_transform(self):
+        from matverse._core import grid_of
+
+        md, _ = self._hard_sphere()
+        mv.prop.scattering(md, level="test", q_max=12.0, n_points=60)
+        q = grid_of(md, "structure_factor")
+        computed = md.obsm["structure_factor_test"][0]
+        assert np.abs(computed - self._analytic(q)).max() < 0.03
+
+    def test_the_error_follows_the_r_grid_it_was_given(self):
+        """The integral is quadrature on whatever mv.prop.rdf produced, so a
+        coarser step is a worse S(q) — linearly. Stated in the notes as 0.24,
+        0.12, 0.048 and 0.012 for steps of 0.10, 0.05, 0.02 and 0.005, and
+        asserted here as monotone so the claim cannot rot."""
+        from matverse._core import grid_of
+
+        errors = []
+        for step in (0.10, 0.02):
+            md, _ = self._hard_sphere(step=step)
+            mv.prop.scattering(md, level="test", q_max=12.0, n_points=60)
+            q = grid_of(md, "structure_factor")
+            errors.append(float(np.abs(
+                md.obsm["structure_factor_test"][0] - self._analytic(q)).max()))
+        assert errors[0] > errors[1] * 2
+
+    def test_the_reduced_pdf_is_the_definition(self):
+        """G(r) = 4 pi r rho [g(r) - 1], with nothing fitted."""
+        md, r = self._hard_sphere()
+        mv.prop.scattering(md, level="test", q_max=12.0, n_points=20)
+        reduced = md.obsm["pdf_test"][0]
+        inside = r < self.SIGMA
+        assert reduced[inside] == pytest.approx(
+            -4 * np.pi * r[inside] * self.DENSITY, rel=1e-6)
+        assert reduced[r > self.SIGMA] == pytest.approx(0.0, abs=1e-12)
+
+    def test_it_names_the_missing_step(self):
+        md = mv.data.from_compositions(["Ar"])
+        with pytest.raises(ValueError, match="mv.prop.rdf"):
+            mv.prop.scattering(md, level="nothing")
+
+
+class TestSuperconductivity:
+    """Half computed, half supplied, and the tests keep the halves apart."""
+
+    @staticmethod
+    def _with_dos(frequencies, weights=None, f_max=20.0, n=4000):
+        from matverse._core import deposit_grid
+        from pymatgen.core import Lattice, Structure
+
+        grid = np.linspace(0.1, f_max, n)
+        density = np.zeros_like(grid)
+        for j, centre in enumerate(np.atleast_1d(frequencies)):
+            height = 1.0 if weights is None else weights[j]
+            density += height * np.exp(-0.5 * ((grid - centre) / 0.02) ** 2)
+        md = mv.data.from_structures(
+            [Structure(Lattice.cubic(3.6), ["Cu"], [[0, 0, 0]])])
+        deposit_grid(md, "phonon_dos", "test", density[None, :], grid,
+                     unit="THz")
+        return md
+
+    def test_a_single_frequency_returns_itself(self):
+        """omega_log of a delta at w0 is w0, by construction."""
+        for centre in (3.0, 8.0):
+            md = self._with_dos(centre)
+            mv.prop.superconductivity(md, level="test", coupling=1.0)
+            assert float(md.obs["omega_log_test"].iloc[0]) == \
+                pytest.approx(centre, rel=1e-3)
+
+    def test_the_soft_end_is_weighted_more(self):
+        """The 1/omega weighting puts the logarithmic average of 4 and 16 THz
+        below their geometric mean of 8."""
+        md = self._with_dos([4.0, 16.0])
+        mv.prop.superconductivity(md, level="test", coupling=1.0)
+        value = float(md.obs["omega_log_test"].iloc[0])
+        assert value < 8.0
+        assert value == pytest.approx(5.28, rel=0.02)
+
+    def test_coupling_has_no_default(self):
+        """matverse cannot compute lambda, and a guessed one produces a
+        temperature that reads as a prediction."""
+        md = self._with_dos(6.0)
+        with pytest.raises(ValueError, match="coupling="):
+            mv.prop.superconductivity(md, level="test")
+
+    def test_tc_vanishes_at_the_formula_s_own_limit(self):
+        """As lambda approaches mu*(1 + 0.62 lambda) the exponent diverges.
+        That is where the formula stops having a solution, not where
+        superconductivity stops, and it returns exactly zero rather than an
+        overflow."""
+        from matverse.prop import _allen_dynes
+
+        assert _allen_dynes(0.10, 232.0, 252.0, 0.13) == 0.0
+        assert _allen_dynes(0.05, 232.0, 252.0, 0.13) == 0.0
+        assert _allen_dynes(1.00, 232.0, 252.0, 0.13) > 1.0
+
+    def test_the_strong_coupling_factors_are_included(self):
+        """Allen-Dynes with f1 and f2, not bare McMillan. They agree within a
+        few per cent at lambda = 0.5 and differ by a third at lambda = 3;
+        leaving them out is the usual reason a strong-coupling estimate comes
+        out low."""
+        from matverse.prop import _allen_dynes
+
+        def mcmillan(lam, w_log, mu=0.13):
+            return w_log / 1.2 * np.exp(
+                -1.04 * (1 + lam) / (lam - mu * (1 + 0.62 * lam)))
+
+        weak = _allen_dynes(0.5, 100.0, 150.0, 0.13) / mcmillan(0.5, 100.0)
+        strong = _allen_dynes(3.0, 100.0, 150.0, 0.13) / mcmillan(3.0, 100.0)
+        assert weak == pytest.approx(1.0, abs=0.05)
+        assert strong > 1.25
+
+    def test_it_records_that_the_dos_stood_in_for_alpha2F(self):
+        md = self._with_dos(6.0)
+        mv.prop.superconductivity(md, level="test", coupling=1.0)
+        recorded = md.uns["superconductivity"]["test"]
+        assert "alpha^2 F" in recorded["spectral_function"]
+        assert "not computed here" in recorded["coupling_source"]
+
+
+class TestCatalysisScaling:
+    """A scaling relation is a straight line, so a synthetic one with a known
+    slope says whether the fit is a fit."""
+
+    @staticmethod
+    def _surfaces(slope=0.5, intercept=-0.10, noise=0.02, n=8):
+        rng = np.random.default_rng(0)
+        oxygen = np.linspace(-2.5, 0.5, n)
+        md = mv.data.from_compositions([f"Pt{i + 1}" for i in range(n)])
+        md.obs["E_O"] = oxygen
+        md.obs["E_OH"] = slope * oxygen + intercept + rng.normal(0, noise, n)
+        return md
+
+    def test_it_recovers_a_known_slope(self):
+        md = self._surfaces()
+        mv.surf.scaling(md, x="E_O", y="E_OH")
+        fit = md.uns["scaling"]["fits"]["all"]
+        assert fit["slope"] == pytest.approx(0.5, abs=0.02)
+        assert fit["intercept_eV"] == pytest.approx(-0.10, abs=0.03)
+        assert fit["r_squared"] > 0.99
+
+    def test_the_residual_is_the_departure_from_the_line(self):
+        """The interesting column: a surface that beats the scaling ceiling
+        has to break the relation, so the residual is the candidate signal
+        and the fit is the background."""
+        md = self._surfaces()
+        mv.surf.scaling(md, x="E_O", y="E_OH")
+        residual = md.obs["scaling_residual"].to_numpy(dtype=float)
+        predicted = (md.uns["scaling"]["fits"]["all"]["slope"]
+                     * md.obs["E_O"].to_numpy(dtype=float)
+                     + md.uns["scaling"]["fits"]["all"]["intercept_eV"])
+        assert residual == pytest.approx(
+            md.obs["E_OH"].to_numpy(dtype=float) - predicted, abs=1e-9)
+
+    def test_two_points_are_not_a_scaling_relation(self):
+        md = self._surfaces(n=2)
+        with pytest.raises(ValueError, match="not a scaling relation"):
+            mv.surf.scaling(md, x="E_O", y="E_OH")
+
+    def test_a_missing_column_lists_what_is_there(self):
+        md = self._surfaces()
+        with pytest.raises(ValueError, match="mv.surf.adsorption_energy"):
+            mv.surf.scaling(md, x="E_O", y="E_nothing")
+
+
+class TestVolcano:
+    @staticmethod
+    def _surfaces():
+        md = mv.data.from_compositions([f"Pt{i + 1}" for i in range(8)])
+        md.obs["E_O"] = np.linspace(-2.5, 0.5, 8)
+        return md
+
+    def test_the_peak_sits_at_the_optimum(self):
+        md = self._surfaces()
+        mv.surf.volcano(md, descriptor="E_O", optimum=-1.6)
+        best = int(np.argmax(md.obs["volcano_activity"].to_numpy(dtype=float)))
+        distances = np.abs(md.obs["distance_from_optimum"].to_numpy(float))
+        assert best == int(np.argmin(distances))
+
+    def test_the_distance_is_signed_so_the_side_is_readable(self):
+        """Binding too weakly and too strongly are different problems, and a
+        magnitude cannot tell them apart."""
+        md = self._surfaces()
+        mv.surf.volcano(md, descriptor="E_O", optimum=-1.6)
+        offset = md.obs["distance_from_optimum"].to_numpy(dtype=float)
+        assert offset.min() < 0 < offset.max()
+
+    def test_slopes_of_the_same_sign_are_refused(self):
+        """Two limbs with the same sign is a straight line dressed as a
+        peak."""
+        md = self._surfaces()
+        with pytest.raises(ValueError, match="opposite"):
+            mv.surf.volcano(md, descriptor="E_O", optimum=-1.6,
+                            slopes=(1.0, 1.0))
+
+    def test_it_records_that_the_optimum_came_from_outside(self):
+        md = self._surfaces()
+        mv.surf.volcano(md, descriptor="E_O", optimum=-1.6)
+        assert "not derived here" in md.uns["volcano"]["optimum_source"]
+
+
+class TestFigureOfMerit:
+    """zT needs a relaxation time nobody has. The ceiling does not, and that
+    is the point of computing it separately."""
+
+    @staticmethod
+    def _transport(seebeck=200e-6, sigma_over_tau=1e18, lattice=None):
+        md = mv.data.from_compositions(["Bi2Te3"])
+        md.obs["seebeck_x"] = [seebeck]
+        md.obs["sigma_over_tau_x"] = [sigma_over_tau]
+        if lattice is not None:
+            md.obs["thermal_conductivity_x"] = [lattice]
+        return md
+
+    def test_the_ceiling_needs_no_relaxation_time(self):
+        """tau cancels between sigma and the electronic thermal conductivity,
+        so S^2 / L survives not knowing it. At 200 microvolts per kelvin that
+        is 1.639."""
+        md = self._transport(lattice=1.0)
+        mv.prop.zt(md, level="x", relaxation_time=1e-14, temperature=700.0)
+        assert float(md.obs["zt_ceiling_x"].iloc[0]) == \
+            pytest.approx(1.639, rel=0.01)
+
+    def test_zt_approaches_the_ceiling_as_the_lattice_stops_mattering(self):
+        """Checked across four decades of conductivity: 0.027, 0.24, 1.03,
+        1.55 and then 1.6384 against an analytic 1.6393."""
+        values = []
+        for sigma in (1e17, 1e18, 1e19, 1e22):
+            md = self._transport(sigma_over_tau=sigma, lattice=1.0)
+            mv.prop.zt(md, level="x", relaxation_time=1e-14, temperature=700.0)
+            values.append(float(md.obs["zt_x"].iloc[0]))
+        assert values == sorted(values), "zT must rise with conductivity"
+        ceiling = float(md.obs["zt_ceiling_x"].iloc[0])
+        assert values[-1] == pytest.approx(ceiling, rel=0.01)
+        assert values[-1] < ceiling, "the ceiling is approached, not crossed"
+
+    def test_the_relaxation_time_has_no_default(self):
+        md = self._transport(lattice=1.0)
+        with pytest.raises(ValueError, match="relaxation_time="):
+            mv.prop.zt(md, level="x")
+
+    def test_a_missing_lattice_conductivity_is_warned_about(self):
+        """Counting only the electronic part flatters every material, so the
+        omission is said out loud rather than absorbed."""
+        md = self._transport()
+        with pytest.warns(RuntimeWarning, match="overestimate"):
+            mv.prop.zt(md, level="x", relaxation_time=1e-14)
+
+    def test_it_needs_transport_first(self):
+        md = mv.data.from_compositions(["Bi2Te3"])
+        with pytest.raises(ValueError, match="mv.elec.transport"):
+            mv.prop.zt(md, level="x", relaxation_time=1e-14)

@@ -2858,3 +2858,363 @@ def _stabilisation(grid: np.ndarray, counts: np.ndarray):
     if bool(clean[np.argmax(known)]):
         return np.nan, "already stable at the lowest temperature scanned"
     return float(grid[clean][0]), "stabilised within the scanned range"
+
+
+@register_function(
+    aliases=["structure factor", "scattering", "S(q)", "pair distribution "
+             "function", "PDF", "total scattering", "reduced pair "
+             "distribution", "what a diffractometer sees"],
+    category="prop",
+    description="The two standard transforms of the pair correlation — the "
+                "structure factor S(q) and the reduced pair distribution "
+                "function G(r) — from a radial distribution already computed.",
+    requires={"obsm": ["{quantity}_{level}"], "uns": ["grids"],
+              "structures": ["{source}"]},
+    produces={"obsm": ["structure_factor_{level}", "pdf_{level}"],
+              "uns": ["grids", "scattering"]},
+    prerequisites=["mv.prop.rdf"],
+    examples=["mv.prop.scattering(md, level='calc')",
+              "mv.prop.scattering(md, level='emt', quantity='rdf_md', "
+              "q_max=20.0)"],
+    related=["mv.prop.rdf", "mv.md.rdf", "mv.md.melt_quench",
+             "mv.exp.attach", "mv.prop.compare_grids"],
+    notes="mv.md.melt_quench can build an amorphous structure and mv.prop.rdf "
+          "can describe it, but g(r) is not what a total-scattering "
+          "experiment reports. S(q) is, and G(r) is what a measured pattern "
+          "is usually Fourier-transformed into — so without these an "
+          "amorphous structure could be made here and never compared with a "
+          "measurement of one.\\n\\n"
+          "Both are definitions rather than models:\\n\\n"
+          "  S(q) = 1 + (4 pi rho / q) * INT r [g(r) - 1] sin(qr) dr\\n"
+          "  G(r) = 4 pi r rho [g(r) - 1]\\n\\n"
+          "which makes them checkable rather than merely plausible. For an "
+          "ideal gas, g = 1 everywhere and S(q) comes back as 1.000000 at "
+          "every q. For a hard-sphere exclusion, where g is zero below a "
+          "diameter and one above, the transform has a closed form and this "
+          "reproduces it to 7e-3.\\n\\n"
+          "Two honest limits, and mv.prop.rdf controls both.\\n\\n"
+          "**Truncation.** g(r) is only known out to r_max, and the Fourier "
+          "transform of a truncated function rings: the oscillations below "
+          "roughly 2 pi / r_max are termination ripple, not structure. A "
+          "window function would hide them, which is why there is not one. "
+          "This bites hardest on a **crystal**, whose g(r) never decays to "
+          "one — on the four textbook structures in mv.datasets the ripple is "
+          "larger than any real peak, and S(q) from a crystal computed this "
+          "way should not be read as a diffraction pattern. mv.prop.xrd is "
+          "the function for that. Total scattering is a technique for "
+          "disordered matter, where g(r) reaches one within a few angstrom "
+          "and the transform is well behaved.\\n\\n"
+          "**Quadrature.** The integral is evaluated on whatever r grid "
+          "mv.prop.rdf produced, and the error falls linearly with its step: "
+          "against the closed form for hard spheres it is 0.24 at a step of "
+          "0.10 angstrom, 0.12 at 0.05, 0.048 at 0.02 and 0.012 at 0.005. "
+          "The default step of 0.05 is fine for a shape and coarse for a "
+          "comparison against a measurement; pass a smaller one to "
+          "mv.prop.rdf when that matters.\\n\\n"
+          "The number density comes from the structures, so an object whose "
+          "rows are of different densities gets a different rho for each, "
+          "which is correct and is why this needs source= as well as the "
+          "stored g(r).",
+)
+def scattering(md: AnnData, level: str = "calc", quantity: str = "rdf",
+               source: str = "input", q_max: float = 15.0,
+               n_points: int = 300) -> None:
+    """Structure factor and reduced PDF. Deposits; returns ``None``."""
+    from ._core import grid_of
+
+    key = f"{quantity}_{level}"
+    if key not in md.obsm:
+        raise ValueError(
+            f"obsm[{key!r}] absent; run mv.prop.rdf(md, level={level!r}) "
+            f"first, or point quantity= at the block that holds g(r) — "
+            f"mv.md.rdf stores it as 'rdf_md'")
+
+    distance = np.asarray(grid_of(md, quantity), dtype=float)
+    pair = np.asarray(md.obsm[key], dtype=float)
+    q = np.linspace(max(2.0 * np.pi / max(distance.max(), 1.0), 0.2),
+                    float(q_max), int(n_points))
+
+    densities = np.array([len(s) / s.volume for s in structures(md, source)],
+                         dtype=float)
+    if len(densities) != md.n_obs:
+        raise ValueError("one structure per row is needed for the density")
+
+    factor = np.full((md.n_obs, q.size), np.nan)
+    reduced = np.full((md.n_obs, distance.size), np.nan)
+    for i, (g, rho) in enumerate(zip(pair, densities)):
+        if not np.isfinite(g).all():
+            continue
+        integrand = distance * (g - 1.0)
+        # One quadrature per q rather than an FFT: the r grid is whatever
+        # mv.prop.rdf chose and need not be uniform or start at zero.
+        transform = np.array(
+            [np.trapezoid(integrand * np.sin(value * distance), distance)
+             for value in q])
+        factor[i] = 1.0 + 4.0 * np.pi * rho / q * transform
+        reduced[i] = 4.0 * np.pi * distance * rho * (g - 1.0)
+
+    deposit_grid(md, "structure_factor", level, factor, q,
+                 unit="angstrom^-1", value_unit="dimensionless",
+                 source_quantity=quantity)
+    deposit_grid(md, "pdf", level, reduced, distance, unit="angstrom",
+                 value_unit="angstrom^-2", source_quantity=quantity)
+    md.uns.setdefault("scattering", {})[level] = {
+        "quantity": str(quantity),
+        "r_max": float(distance.max()),
+        "q_max": float(q_max),
+        "number_density": densities.tolist(),
+        "note": "S(q) and G(r) are definitions, not fits; the oscillations "
+                "below about 2 pi / r_max are termination ripple from the "
+                "finite range of g(r) and not structure",
+    }
+    record(md, "prop.scattering", level=level, quantity=quantity,
+           q_max=q_max)
+
+
+#: Terahertz to kelvin, for a phonon frequency read as a temperature.
+_THZ_TO_KELVIN = 47.9924
+
+@register_function(
+    aliases=["superconductivity", "allen-dynes", "superconducting "
+             "transition", "Tc", "mcmillan", "omega log", "electron-phonon",
+             "phonon logarithmic average"],
+    category="prop",
+    description="The logarithmic phonon average from a computed density of "
+                "states, and the Allen-Dynes critical temperature it implies "
+                "for a coupling strength you supply.",
+    requires={"obsm": ["phonon_dos_{level}"], "uns": ["grids"]},
+    produces={"obs": ["omega_log_{level}", "omega_2_{level}",
+                      "critical_temperature_{level}"],
+              "uns": ["superconductivity"]},
+    prerequisites=["mv.prop.phonon"],
+    examples=["mv.prop.superconductivity(md, level='emt', coupling=1.0)",
+              "mv.prop.superconductivity(md, level='emt', coupling=1.5, "
+              "mu_star=0.10)"],
+    related=["mv.prop.phonon", "mv.prop.dispersion", "mv.elec.bands"],
+    notes="Half of this is computed and half is supplied, and the division "
+          "matters more than the formula.\\n\\n"
+          "**Computed.** omega_log and omega_2 are moments of the phonon "
+          "density of states mv.prop.phonon already produced. A density with "
+          "all its weight at one frequency returns that frequency exactly; a "
+          "density with equal weight at 4 and 16 THz returns 5.28 rather than "
+          "the geometric mean of 8, because the 1/omega weighting favours the "
+          "soft end. Both are checked that way.\\n\\n"
+          "**Supplied.** coupling= is lambda, the electron-phonon coupling "
+          "constant, and matverse cannot compute it. It is an integral over "
+          "the Eliashberg function alpha^2 F, which needs the electron-phonon "
+          "matrix elements — EPW, or Quantum ESPRESSO's ph.x, not a phonon "
+          "density of states. Passing a guess produces a temperature that "
+          "looks like a prediction and is not, which is why there is no "
+          "default.\\n\\n"
+          "**The approximation in between.** omega_log is properly a moment "
+          "of alpha^2 F, not of F. Using the phonon density of states in its "
+          "place assumes the coupling does not depend on frequency, which is "
+          "the Einstein-like limit and is wrong wherever one branch couples "
+          "much more strongly than another — which is most interesting "
+          "superconductors. uns records that this substitution was made.\\n\\n"
+          "The formula is Allen-Dynes with the strong-coupling factors f1 and "
+          "f2, not bare McMillan: they are within 2% of each other at lambda "
+          "= 0.5 and differ by 36% at lambda = 3, and leaving them out is the "
+          "usual reason a strong-coupling estimate comes out low. Tc goes to "
+          "exactly zero as lambda approaches mu*(1 + 0.62 lambda), which is "
+          "where the formula stops having a solution rather than where "
+          "superconductivity stops.\\n\\n"
+          "No claim is made here that this reproduces a measured Tc. That "
+          "would need lambda and omega_log that belong to each other, and "
+          "published pairs are usually fitted to the transition they are "
+          "then compared against.",
+)
+def superconductivity(md: AnnData, level: str = "emt",
+                      coupling: float | None = None,
+                      mu_star: float = 0.13) -> None:
+    """Allen-Dynes critical temperature. Deposits; returns ``None``."""
+    key = f"phonon_dos_{level}"
+    if key not in md.obsm:
+        raise ValueError(
+            f"obsm[{key!r}] absent; run mv.prop.phonon(md, level={level!r}) "
+            f"first")
+    if coupling is None:
+        raise ValueError(
+            "coupling= (the electron-phonon constant lambda) is required and "
+            "has no default. matverse cannot compute it — it is an integral "
+            "over the Eliashberg function, which needs electron-phonon "
+            "matrix elements from EPW or ph.x, not a phonon density of "
+            "states. A guessed lambda gives a temperature that reads as a "
+            "prediction")
+
+    from ._core import grid_of
+
+    grid = np.asarray(grid_of(md, "phonon_dos"), dtype=float)
+    dos = np.asarray(md.obsm[key], dtype=float)
+    lam = float(coupling)
+    mu = float(mu_star)
+
+    log_average = np.full(md.n_obs, np.nan)
+    second = np.full(md.n_obs, np.nan)
+    critical = np.full(md.n_obs, np.nan)
+
+    for i, row in enumerate(dos):
+        usable = (grid > 1e-9) & np.isfinite(row) & (row > 0)
+        if usable.sum() < 2:
+            continue
+        frequency, weight = grid[usable], row[usable]
+        norm = np.trapezoid(weight / frequency, frequency)
+        if not norm > 0:
+            continue
+        w_log = float(np.exp(np.trapezoid(
+            weight / frequency * np.log(frequency), frequency) / norm))
+        w_2 = float(np.sqrt(np.trapezoid(
+            weight / frequency * frequency ** 2, frequency) / norm))
+        log_average[i] = w_log
+        second[i] = w_2
+        critical[i] = _allen_dynes(lam, w_log * _THZ_TO_KELVIN,
+                                   w_2 * _THZ_TO_KELVIN, mu)
+
+    md.obs[f"omega_log_{level}"] = log_average
+    md.obs[f"omega_2_{level}"] = second
+    md.obs[f"critical_temperature_{level}"] = critical
+    md.uns.setdefault("superconductivity", {})[level] = {
+        "coupling": lam,
+        "mu_star": mu,
+        "frequency_unit": "THz",
+        "temperature_unit": "K",
+        "coupling_source": "supplied by the caller; not computed here",
+        "spectral_function": "the phonon density of states was used in place "
+                             "of alpha^2 F, which assumes the coupling does "
+                             "not depend on frequency",
+        "formula": "Allen-Dynes with the f1 and f2 strong-coupling factors",
+    }
+    record(md, "prop.superconductivity", level=level, coupling=lam,
+           mu_star=mu)
+
+
+def _allen_dynes(lam: float, omega_log: float, omega_2: float,
+                 mu_star: float) -> float:
+    """Allen-Dynes Tc in kelvin, with the strong-coupling corrections."""
+    denominator = lam - mu_star * (1.0 + 0.62 * lam)
+    if denominator <= 0:
+        # Below this the exponent diverges; the formula has stopped having a
+        # solution, which is not the same as superconductivity stopping.
+        return 0.0
+    lambda_1 = 2.46 * (1.0 + 3.8 * mu_star)
+    ratio = omega_2 / omega_log if omega_log > 0 else 1.0
+    lambda_2 = 1.82 * (1.0 + 6.3 * mu_star) * ratio
+    f1 = (1.0 + (lam / lambda_1) ** 1.5) ** (1.0 / 3.0)
+    f2 = 1.0 + (ratio - 1.0) * lam ** 2 / (lam ** 2 + lambda_2 ** 2)
+    return float(f1 * f2 * omega_log / 1.2
+                 * np.exp(-1.04 * (1.0 + lam) / denominator))
+
+
+#: Sommerfeld value of the Lorenz number, in W ohm / K^2.
+_LORENZ = 2.44e-8
+
+
+@register_function(
+    aliases=["zT", "figure of merit", "thermoelectric figure of merit",
+             "thermoelectric efficiency", "how good a thermoelectric"],
+    category="prop",
+    description="The thermoelectric figure of merit from the Seebeck "
+                "coefficient, conductivity and thermal conductivity already "
+                "computed — and the ceiling that needs none of them.",
+    requires={"obs": ["seebeck_{level}", "sigma_over_tau_{level}"]},
+    produces={"obs": ["zt_{level}", "zt_ceiling_{level}",
+                      "kappa_electronic_{level}"],
+              "uns": ["figure_of_merit"]},
+    prerequisites=["mv.elec.transport"],
+    examples=["mv.prop.zt(md, level='pbe', relaxation_time=1e-14)",
+              "mv.prop.zt(md, level='pbe', relaxation_time=1e-14, "
+              "temperature=700.0)"],
+    related=["mv.elec.transport", "mv.prop.thermal_conductivity",
+             "mv.prop.kappa_bte", "mv.screen.pareto"],
+    notes="zT = S^2 sigma T / kappa needs three numbers and matverse has one "
+          "and a half of them honestly.\\n\\n"
+          "S is computed. sigma is not: mv.elec.transport works in the "
+          "constant relaxation time approximation and produces sigma/tau, "
+          "because tau is what that approximation declines to supply. So "
+          "relaxation_time= is required here and has no default, in the same "
+          "way coupling= is required by mv.prop.superconductivity — a guessed "
+          "tau produces a figure of merit that reads as a prediction.\\n\\n"
+          "**The ceiling needs no tau at all, and is the number to trust.** "
+          "tau appears in sigma and again in the electronic thermal "
+          "conductivity through Wiedemann-Franz, so as the lattice term stops "
+          "mattering it cancels exactly and zT approaches S^2 / L, with L the "
+          "Lorenz number. That limit is checked: at 200 microvolts per kelvin "
+          "the computed zT climbs 0.027, 0.24, 1.03, 1.55 as sigma goes up by "
+          "decades and settles at 1.6384 against an analytic 1.6393. A "
+          "material whose Seebeck coefficient puts its ceiling below the zT "
+          "you need cannot be rescued by any conductivity, and that "
+          "conclusion survives not knowing tau.\\n\\n"
+          "kappa is the third number and the weakest. Without "
+          "mv.prop.thermal_conductivity having run this uses only the "
+          "electronic part, which flatters every material; with it, the "
+          "lattice part is the Slack model, which its own notes call an "
+          "order-of-magnitude estimate. Between a guessed tau and an "
+          "order-of-magnitude kappa, a zT from this belongs in a ranking and "
+          "not in a paper.",
+)
+def zt(md: AnnData, level: str = "dft", relaxation_time: float | None = None,
+       temperature: float = 300.0) -> None:
+    """Thermoelectric figure of merit. Deposits; returns ``None``."""
+    seebeck_key = f"seebeck_{level}"
+    sigma_key = f"sigma_over_tau_{level}"
+    for key in (seebeck_key, sigma_key):
+        if key not in md.obs:
+            raise ValueError(
+                f"obs[{key!r}] absent; run mv.elec.transport(md, "
+                f"bandstructures, level={level!r}) first")
+    if relaxation_time is None:
+        raise ValueError(
+            "relaxation_time= is required and has no default. "
+            "mv.elec.transport works in the constant relaxation time "
+            "approximation, which produces sigma/tau precisely because it "
+            "cannot supply tau; a guessed one gives a figure of merit that "
+            "reads as a prediction. obs['zt_ceiling_{level}'] is computed "
+            "regardless and needs no tau — pass any tau to get it, or read "
+            "the Seebeck coefficient directly")
+
+    tau = float(relaxation_time)
+    kelvin = float(temperature)
+    seebeck = pd.to_numeric(md.obs[seebeck_key], errors="coerce").to_numpy(
+        dtype=float)
+    sigma = pd.to_numeric(md.obs[sigma_key], errors="coerce").to_numpy(
+        dtype=float) * tau
+
+    electronic = _LORENZ * sigma * kelvin
+    lattice_key = f"thermal_conductivity_{level}"
+    lattice = (pd.to_numeric(md.obs[lattice_key], errors="coerce").to_numpy(
+        dtype=float) if lattice_key in md.obs else np.zeros(md.n_obs))
+
+    total = lattice + electronic
+    with np.errstate(divide="ignore", invalid="ignore"):
+        merit = np.where(total > 0,
+                         seebeck ** 2 * sigma * kelvin / total, np.nan)
+    ceiling = seebeck ** 2 / _LORENZ
+
+    md.obs[f"zt_{level}"] = merit
+    md.obs[f"zt_ceiling_{level}"] = ceiling
+    md.obs[f"kappa_electronic_{level}"] = electronic
+    md.uns.setdefault("figure_of_merit", {})[level] = {
+        "temperature": kelvin,
+        "relaxation_time_s": tau,
+        "relaxation_time_source": "supplied by the caller; the constant "
+                                  "relaxation time approximation cannot "
+                                  "produce it",
+        "lattice_thermal_conductivity": ("from mv.prop.thermal_conductivity"
+                                         if lattice_key in md.obs else
+                                         "absent — only the electronic part "
+                                         "is counted, which flatters every "
+                                         "material"),
+        "lorenz_number": _LORENZ,
+        "ceiling_note": "zt_ceiling is S^2 / L, the value zT approaches when "
+                        "the lattice term stops mattering; tau cancels "
+                        "between sigma and the electronic thermal "
+                        "conductivity, so this one number needs no tau",
+    }
+    if lattice_key not in md.obs:
+        warnings.warn(
+            f"obs[{lattice_key!r}] absent, so only the electronic thermal "
+            f"conductivity is counted and every zT here is an overestimate. "
+            f"Run mv.prop.thermal_conductivity for the lattice part",
+            RuntimeWarning, stacklevel=2)
+    record(md, "prop.zt", level=level, relaxation_time=tau,
+           temperature=kelvin)

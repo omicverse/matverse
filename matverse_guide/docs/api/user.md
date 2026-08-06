@@ -12,7 +12,7 @@ agent. Every entry names the state it reads and the state it writes, and each of
 those claims is verified by execution in `tests/test_contracts.py` rather than
 asserted.
 
-Public registry entries listed here: 218
+Public registry entries listed here: 225
 
 Look a function up by intent rather than by name:
 
@@ -183,11 +183,14 @@ Derived properties, including curves stored on a shared grid.
    prop.polarization
    prop.quasiharmonic
    prop.rdf
+   prop.scattering
    prop.slme
+   prop.superconductivity
    prop.supply_risk
    prop.tem
    prop.thermal_conductivity
    prop.xrd
+   prop.zt
 ```
 
 
@@ -258,9 +261,11 @@ Slabs, surface energies, equilibrium shapes and adsorption.
 
    surf.adsorption_energy
    surf.adsorption_sites
+   surf.scaling
    surf.slabs
    surf.surface_energy
    surf.surface_energy_chempot
+   surf.volcano
    surf.wulff
 ```
 
@@ -284,6 +289,8 @@ Convex hull, reactions, chemical potentials.
    thermo.pourbaix
    thermo.reaction
    thermo.references_from_mp
+   thermo.theoretical_capacity
+   thermo.voltage
 ```
 
 
@@ -628,11 +635,14 @@ arguments — `obs['energy_{level}']` becomes `obs['energy_emt']` when you pass
 | `mv.prop.polarization` | `obs['polarization_a']`, `obs['polarization_b']`, `obs['polarization_c']`, `uns['polarization']` |
 | `mv.prop.quasiharmonic` | `obs['thermal_expansion_qha_{level}']`, `obs['gruneisen_{level}']`, `obs['debye_temperature_qha_{level}']`, `obs['heat_capacity_300K_{level}']`, `obsm['gibbs_{level}']`, `obsm['thermal_expansion_{level}']`, `uns['grids']`, `uns['levels']['{level}']` |
 | `mv.prop.rdf` | `obsm['rdf_{level}']`, `uns['grids']`, `uns['levels']['{level}']` |
+| `mv.prop.scattering` | `obsm['structure_factor_{level}']`, `obsm['pdf_{level}']`, `uns['grids']`, `uns['scattering']` |
 | `mv.prop.slme` | `obs['slme_{level}']`, `obs['sq_limit_{level}']` |
+| `mv.prop.superconductivity` | `obs['omega_log_{level}']`, `obs['omega_2_{level}']`, `obs['critical_temperature_{level}']`, `uns['superconductivity']` |
 | `mv.prop.supply_risk` | `obs['hhi_production']`, `obs['hhi_reserve']`, `obs['supply_risk']` |
 | `mv.prop.tem` | `obsm['tem_{level}']`, `uns['grids']`, `obs['tem_n_reflections_{level}']`, `obs['tem_strongest_{level}']`, `obs['tem_zone_axis']`, `uns['levels']['{level}']` |
 | `mv.prop.thermal_conductivity` | `obs['debye_temperature_{level}']`, `obs['gruneisen_{level}']`, `obs['sound_velocity_{level}']`, `obs['thermal_conductivity_{level}']` |
 | `mv.prop.xrd` | `obsm['xrd_{level}']`, `uns['grids']`, `uns['levels']['{level}']` |
+| `mv.prop.zt` | `obs['zt_{level}']`, `obs['zt_ceiling_{level}']`, `obs['kappa_electronic_{level}']`, `uns['figure_of_merit']` |
 | `mv.md.conductivity` | `obs['conductivity_{species}_{level}']` |
 | `mv.md.melt_quench` | `obsm['structures']['amorphous_{level}']`, `obs['amorphous_density_{level}']`, `obs['amorphous_density_ratio_{level}']`, `uns['levels']['{level}']` |
 | `mv.md.occupancy` | `obs['occupied_fraction_{level}']`, `obs['occupancy_entropy_{level}']`, `obs['occupancy_peak_{level}']` |
@@ -650,8 +660,10 @@ arguments — `obs['energy_{level}']` becomes `obs['energy_emt']` when you pass
 | `mv.neb.hop_endpoints` | `obsm['structures']['{key_added}_initial']`, `obsm['structures']['{key_added}_final']`, `obs['hop_distance']`, `obs['hop_species']` |
 | `mv.neb.percolation` | `obs['percolation_dimensionality_{species}']`, `obs['percolation_threshold_{species}']`, `obs['percolation_sites_{species}']` |
 | `mv.surf.adsorption_energy` | `obs['adsorption_energy_{level}']`, `obs['is_best_site_{level}']` |
+| `mv.surf.scaling` | `obs['scaling_residual']`, `uns['scaling']` |
 | `mv.surf.surface_energy` | `obs['surface_energy_{level}']`, `obs['surface_energy_{level}_off_stoichiometry']` |
 | `mv.surf.surface_energy_chempot` | `facets.obs['surface_energy_{level}']` |
+| `mv.surf.volcano` | `obs['volcano_activity']`, `obs['distance_from_optimum']`, `uns['volcano']` |
 | `mv.surf.wulff` | `facets.obs['wulff_area_fraction_{level}']`, `bulk.obs['wulff_effective_radius_{level}']`, `bulk.obs['wulff_shape_factor_{level}']` |
 | `mv.thermo.calphad` | `obs['calphad_phases']`, `obs['calphad_n_phases']`, `obs['calphad_major_phase']`, `obs['calphad_major_fraction']`, `uns['calphad']` |
 | `mv.thermo.chempot_diagram` | `obs['chempot_stable_{level}']`, `obs['chempot_window_{level}']`, `uns['chempot_diagram']` |
@@ -662,6 +674,8 @@ arguments — `obs['energy_{level}']` becomes `obs['energy_emt']` when you pass
 | `mv.thermo.hull` | `obs['e_above_hull_{level}']`, `obs['is_stable_{level}']`, `obs['formation_energy_{level}']`, `obs['decomposes_to_{level}']`, `uns['phase_diagram']` |
 | `mv.thermo.pourbaix` | `obs['pourbaix_decomposition']`, `uns['pourbaix']` |
 | `mv.thermo.reaction` | `uns['reactions']` |
+| `mv.thermo.theoretical_capacity` | `obs['max_ion_removal_{working_ion}']`, `obs['max_ion_insertion_{working_ion}']`, `obs['theoretical_capacity_{working_ion}']`, `obs['theoretical_capacity_volumetric_{working_ion}']`, `uns['theoretical_capacity']` |
+| `mv.thermo.voltage` | `obs['voltage_{level}']`, `obs['capacity_gravimetric_{level}']`, `obs['capacity_volumetric_{level}']`, `obs['energy_density_{level}']`, `obs['volume_change_{level}']`, `uns['electrode']` |
 | `mv.dft.read_dos` | `obsm['dos_{level}']`, `obs['band_gap_{level}']`, `obs['is_direct_gap_{level}']`, `obs['vbm_{level}']`, `obs['cbm_{level}']`, `obs['fermi_level_{level}']`, `obs['dos_at_fermi_{level}']`, `obs['is_metal_{level}']`, `uns['grids']`, `uns['levels']['{level}']` |
 | `mv.dft.read_outputs` | `obs['energy_{level}']`, `obs['energy_per_atom_{level}']`, `obs['band_gap_{level}']`, `obs['converged_{level}']`, `obsm['structures']['relaxed_{level}']`, `uns['levels']['{level}']`, `uns['dft']` |
 | `mv.dft.write_inputs` | `obs['dft_directory']`, `written to disk`, `uns['dft']` |

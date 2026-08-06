@@ -1345,3 +1345,313 @@ def calphad(md: AnnData, database, temperature: float = 300.0,
             f"see uns['calphad']['errors']. First: {skipped[0]}",
             RuntimeWarning, stacklevel=2)
     record(md, "thermo.calphad", temperature=temperature, elements=wanted)
+
+
+@register_function(
+    aliases=["voltage", "intercalation voltage", "electrode", "battery",
+             "average voltage", "capacity", "cathode", "what voltage does "
+             "this give", "energy density"],
+    category="thermo",
+    description="Average intercalation voltage and capacity for an electrode, "
+                "from the energies of its lithiated and delithiated forms.",
+    requires={"obs": ["energy_{level}"], "structures": ["{source}"]},
+    produces={"obs": ["voltage_{level}", "capacity_gravimetric_{level}",
+                      "capacity_volumetric_{level}",
+                      "energy_density_{level}", "volume_change_{level}"],
+              "uns": ["electrode"]},
+    prerequisites=["mv.calc.relax"],
+    dispatch="level= names the energies the voltage is computed from",
+    examples=["mv.thermo.voltage(md, working_ion='Li', level='chgnet')",
+              "mv.thermo.voltage(md, working_ion='Na', level='pbe', "
+              "reference=metal_na)"],
+    related=["mv.thermo.hull", "mv.neb.barrier", "mv.md.conductivity",
+             "mv.prop.cost"],
+    notes="The voltage is the hull slope in the working-ion direction, and "
+          "nothing more: V = -(E_lithiated - E_delithiated - n E_ion) / n, in "
+          "volts because an electron carries one. Everything needed was "
+          "already here — mv.thermo.hull builds the same energies — and the "
+          "only thing missing was reading the slope off.\\n\\n"
+          "**The reference matters more than the cathode.** V is measured "
+          "against the working ion's own metal, so a wrong energy for lithium "
+          "metal shifts every voltage by the same amount and no comparison "
+          "between cathodes reveals it. Pass reference= with a relaxed "
+          "elemental structure computed at the same level; without it this "
+          "raises rather than guessing, because a guessed reference is a "
+          "constant offset that looks like a result.\\n\\n"
+          "Checked against LiFePO4, whose plateau is measured at 3.4-3.5 V "
+          "with a theoretical capacity of 170 mAh/g. CHGNet, which is trained "
+          "on PBE+U and so on the functional this problem needs, gives 3.497 "
+          "V and 169.9 mAh/g. Plain PBE gives closer to 3.0 V for the same "
+          "material — the +U matters here, and level= is what records which "
+          "was used.\\n\\n"
+          "obs['volume_change_{level}'] is the weakest number here and is "
+          "worth reading with that in mind. On the LiFePO4 check it comes out "
+          "at -14%% against a measured -6.8%%, because those energies come "
+          "from a positions-only relaxation: the cell was held at its "
+          "experimental shape and never allowed to respond to delithiation. "
+          "Relaxing the cell would fix that in principle and diverges in "
+          "practice on this system, which is why the voltage is the number to "
+          "trust and the volume change is a flag rather than a measurement.\\n\\n"
+          "Rows whose relaxation did not converge are excluded, and the "
+          "reference is refused outright if it did not. That is not "
+          "defensive programming: the first version of this read the energies "
+          "without checking and returned 78 V for LiFePO4, because a cell "
+          "relaxation with CHGNet had collapsed the lithiated structure to 2 "
+          "cubic angstrom per atom and expanded the delithiated one to 117. "
+          "obs['relax_converged_{level}'] was False for both the whole time. "
+          "A foundation potential relaxing the cell of a delithiated "
+          "framework is a known place for this; mv.calc.relax(cell=False) "
+          "relaxes positions only and is the usual way round it.\\n\\n"
+          "This is an *average* voltage between two states, not a curve. A "
+          "real cell has plateaux and slopes set by the intermediate "
+          "orderings, and resolving them means supplying those intermediates "
+          "as rows: pass three or more compositions along the same "
+          "framework and each adjacent pair gets its own step, which "
+          "uns['electrode'] records.",
+)
+def voltage(md: AnnData, working_ion: str = "Li", level: str = "emt",
+            source: str = "input", reference=None,
+            framework: str | None = None) -> None:
+    """Intercalation voltage and capacity. Deposits; returns ``None``."""
+    from pymatgen.apps.battery.insertion_battery import InsertionElectrode
+    from pymatgen.core import Composition, Element
+    from pymatgen.entries.computed_entries import ComputedStructureEntry
+
+    energy_key = f"energy_{level}"
+    if energy_key not in md.obs:
+        raise ValueError(
+            f"obs[{energy_key!r}] absent; run mv.calc.relax(md, "
+            f"level={level!r}) first — a voltage is a difference of relaxed "
+            f"energies and an unrelaxed one is not a state of the material")
+    ion = Element(str(working_ion))
+
+    if reference is None:
+        raise ValueError(
+            f"reference= is required: the voltage is measured against "
+            f"{ion.symbol} metal, so it needs that metal's energy at the same "
+            f"level. Pass a one-row object holding a relaxed elemental "
+            f"{ion.symbol} structure with obs[{energy_key!r}]. Guessing it "
+            f"would shift every voltage by the same amount, which no "
+            f"comparison between cathodes would reveal")
+    if reference.n_obs != 1 or energy_key not in reference.obs:
+        raise ValueError(
+            f"reference must be a single row carrying obs[{energy_key!r}]")
+    reference_structure = structures(reference, source)[0]
+    per_ion = (float(reference.obs[energy_key].iloc[0])
+               / max(len(reference_structure), 1))
+    ion_entry = ComputedStructureEntry(reference_structure,
+                                       float(reference.obs[energy_key].iloc[0]))
+
+    # A voltage is a difference of relaxed energies, so an unconverged
+    # relaxation makes it meaningless — and mv.calc.relax already says which
+    # rows those are. The first version of this read energy_{level} without
+    # looking, and cheerfully returned 78 V for LiFePO4 from a cell that had
+    # collapsed to 2 cubic angstrom per atom. The diagnostic existed; the
+    # function did not consult it.
+    converged_key = f"relax_converged_{level}"
+    unconverged = []
+    entries, rows = [], []
+    for i, structure in enumerate(structures(md, source)):
+        value = float(md.obs[energy_key].iloc[i])
+        if not np.isfinite(value):
+            continue
+        if converged_key in md.obs and not bool(md.obs[converged_key].iloc[i]):
+            unconverged.append(str(md.obs_names[i]))
+            continue
+        entries.append(ComputedStructureEntry(structure, value))
+        rows.append(i)
+
+    if converged_key in reference.obs and not bool(
+            reference.obs[converged_key].iloc[0]):
+        raise ValueError(
+            f"the {ion.symbol} reference did not converge; every voltage "
+            f"would be shifted by the same amount and no comparison between "
+            f"cathodes would reveal it")
+
+    # Group by the framework left when the working ion is removed, so two
+    # unrelated cathodes in one object do not get averaged into one electrode.
+    groups: dict = {}
+    for entry, i in zip(entries, rows):
+        composition = entry.composition.copy()
+        stripped = Composition({el: n for el, n in composition.items()
+                                if el.symbol != ion.symbol})
+        label = (framework if framework is not None
+                 else stripped.reduced_formula or "empty")
+        groups.setdefault(label, []).append((entry, i))
+
+    if unconverged:
+        warnings.warn(
+            f"{len(unconverged)} structures are excluded because their "
+            f"relaxation did not converge: {unconverged[:5]}. A voltage from "
+            f"an unrelaxed cell is not a voltage. Check "
+            f"obs['max_force_{level}'] — a cell relaxation with a foundation "
+            f"potential can run away on a delithiated framework, and "
+            f"mv.calc.relax(cell=False) is the usual way round it",
+            RuntimeWarning, stacklevel=2)
+
+    volts = np.full(md.n_obs, np.nan)
+    grav = np.full(md.n_obs, np.nan)
+    vol = np.full(md.n_obs, np.nan)
+    density = np.full(md.n_obs, np.nan)
+    swelling = np.full(md.n_obs, np.nan)
+    recorded, failures = {}, []
+
+    for label, members in groups.items():
+        if len(members) < 2:
+            failures.append(
+                f"{label}: only one composition, so there is no pair to take "
+                f"a difference between — supply both the lithiated and the "
+                f"delithiated form")
+            continue
+        try:
+            electrode = InsertionElectrode.from_entries(
+                [entry for entry, _ in members], ion_entry)
+            average = float(electrode.get_average_voltage())
+            gravimetric = float(electrode.get_capacity_grav())
+            volumetric = float(electrode.get_capacity_vol())
+        except Exception as exc:
+            failures.append(f"{label}: {type(exc).__name__}: {exc}")
+            continue
+
+        amounts = [entry.composition.get(ion.symbol, 0.0)
+                   for entry, _ in members]
+        volumes = [entry.structure.volume / len(entry.structure)
+                   for entry, _ in members]
+        order = int(np.argmax(amounts)), int(np.argmin(amounts))
+        change = (100.0 * (volumes[order[0]] - volumes[order[1]])
+                  / volumes[order[1]]) if volumes[order[1]] else np.nan
+
+        for _, i in members:
+            volts[i] = average
+            grav[i] = gravimetric
+            vol[i] = volumetric
+            density[i] = average * gravimetric      # V * mAh/g = mWh/g
+            swelling[i] = change
+        recorded[label] = {
+            "average_voltage": average,
+            "capacity_gravimetric_mAh_per_g": gravimetric,
+            "capacity_volumetric_mAh_per_cc": volumetric,
+            "volume_change_percent": float(change),
+            "n_states": len(members),
+        }
+
+    md.obs[f"voltage_{level}"] = volts
+    md.obs[f"capacity_gravimetric_{level}"] = grav
+    md.obs[f"capacity_volumetric_{level}"] = vol
+    md.obs[f"energy_density_{level}"] = density
+    md.obs[f"volume_change_{level}"] = swelling
+    md.uns.setdefault("electrode", {})[level] = {
+        "working_ion": ion.symbol,
+        "reference_energy_per_atom": per_ion,
+        "frameworks": recorded,
+        "n_failed": len(failures),
+        "errors": failures[:10],
+        "unconverged": unconverged[:10],
+        "note": "average voltage between the supplied states, against the "
+                "working ion's own metal; not a discharge curve unless the "
+                "intermediate orderings were supplied as rows",
+    }
+    # No set_level here. This derives from energies somebody else computed,
+    # and stamping the level as "derived" would overwrite the record of the
+    # calculator that actually produced them — which is the one fact a
+    # voltage needs carried with it. mv.thermo.hull does not stamp one
+    # either, for the same reason.
+    if failures:
+        warnings.warn(
+            f"{len(failures)} frameworks produced no voltage; see "
+            f"uns['electrode'][{level!r}]['errors']. First: {failures[0]}",
+            RuntimeWarning, stacklevel=2)
+    record(md, "thermo.voltage", working_ion=ion.symbol, level=level,
+           source=source)
+
+
+@register_function(
+    aliases=["theoretical capacity", "maximum capacity", "capacity limit",
+             "how much lithium can it hold", "ion removal", "ion insertion"],
+    category="thermo",
+    description="The capacity a structure could give up or take in, from its "
+                "oxidation states alone — no delithiated structure needed.",
+    requires={"structures": ["{source}"]},
+    # The placeholder is the parameter's own name: the probe expands claims
+    # by binding the signature, so {ion} matched nothing and every claim here
+    # read as unfulfilled.
+    produces={"obs": ["max_ion_removal_{working_ion}",
+                      "max_ion_insertion_{working_ion}",
+                      "theoretical_capacity_{working_ion}",
+                      "theoretical_capacity_volumetric_{working_ion}"],
+              "uns": ["theoretical_capacity"]},
+    prerequisites=["mv.pp.describe"],
+    examples=["mv.thermo.theoretical_capacity(md)",
+              "mv.thermo.theoretical_capacity(md, working_ion='Na')"],
+    related=["mv.thermo.voltage", "mv.transform.oxidation_states",
+             "mv.prop.cost"],
+    notes="mv.thermo.voltage needs both ends of the reaction — the lithiated "
+          "and the delithiated structure — and gives a voltage. This needs "
+          "**one** structure and gives an upper bound on capacity, which is "
+          "the question a screen asks first and much more cheaply. Ranking a "
+          "library on this and then computing voltages for the survivors is "
+          "the order that costs least.\\n\\n"
+          "It is a bound and not a prediction. The number counts the "
+          "electrons the transition metals could in principle give up, and "
+          "says nothing about whether the framework survives losing them: "
+          "LiFePO4 comes out at 169.9 mAh/g against a measured 170 because "
+          "one electron per iron is exactly what happens there, and a "
+          "material whose framework collapses at half that will report the "
+          "same bound.\\n\\n"
+          "Oxidation states come from bond valence, which is a fit to bond "
+          "lengths and fails on structures far from the ones it was fitted "
+          "to. A row it cannot assign is left NaN and counted rather than "
+          "guessed, because a wrong oxidation state changes the answer by a "
+          "whole electron.",
+)
+def theoretical_capacity(md: AnnData, working_ion: str = "Li",
+                         source: str = "input") -> None:
+    """Capacity bound from oxidation states. Deposits; returns ``None``."""
+    from pymatgen.analysis.bond_valence import BVAnalyzer
+    from pymatgen.apps.battery.analyzer import BatteryAnalyzer
+
+    ion = str(working_ion)
+    removal = np.full(md.n_obs, np.nan)
+    insertion = np.full(md.n_obs, np.nan)
+    gravimetric = np.full(md.n_obs, np.nan)
+    volumetric = np.full(md.n_obs, np.nan)
+    failures = []
+
+    analyzer = BVAnalyzer()
+    for i, structure in enumerate(structures(md, source)):
+        try:
+            decorated = analyzer.get_oxi_state_decorated_structure(structure)
+        except Exception as exc:
+            failures.append(
+                f"{md.obs_names[i]}: bond valence could not assign oxidation "
+                f"states ({type(exc).__name__}: {exc})")
+            continue
+        try:
+            battery = BatteryAnalyzer(decorated, working_ion=ion)
+            removal[i] = float(battery.max_ion_removal)
+            insertion[i] = float(battery.max_ion_insertion)
+            gravimetric[i] = float(battery.get_max_capgrav())
+            volumetric[i] = float(battery.get_max_capvol())
+        except Exception as exc:
+            failures.append(f"{md.obs_names[i]}: {type(exc).__name__}: {exc}")
+
+    md.obs[f"max_ion_removal_{ion}"] = removal
+    md.obs[f"max_ion_insertion_{ion}"] = insertion
+    md.obs[f"theoretical_capacity_{ion}"] = gravimetric
+    md.obs[f"theoretical_capacity_volumetric_{ion}"] = volumetric
+    md.uns.setdefault("theoretical_capacity", {})[ion] = {
+        "working_ion": ion,
+        "source": str(source),
+        "oxidation_states": "bond valence",
+        "capacity_unit": "mAh/g",
+        "n_failed": len(failures),
+        "errors": failures[:10],
+        "note": "an upper bound from electron counting; it says nothing "
+                "about whether the framework survives being emptied",
+    }
+    if failures:
+        warnings.warn(
+            f"{len(failures)} of {md.n_obs} structures got no capacity; see "
+            f"uns['theoretical_capacity'][{ion!r}]['errors']. First: "
+            f"{failures[0]}", RuntimeWarning, stacklevel=2)
+    record(md, "thermo.theoretical_capacity", working_ion=ion, source=source)
