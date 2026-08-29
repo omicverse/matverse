@@ -1,5 +1,62 @@
 # Release notes
 
+## v0.1.72
+
+**First PyPI release since v0.1.14.** The fifty-seven development versions in
+between were never published; this entry summarises what changed for an
+installer, not each increment.
+
+### The registry roughly doubled
+
+226 registered functions across 27 namespaces. The additions cluster where the
+library was thinnest at v0.1.14:
+
+- **Electronic structure** — `mv.elec.transport` (BoltzTraP2 semiclassical
+  transport), `mv.elec.xps`, `mv.elec.fermi_surface`, `mv.elec.cohp` and
+  LOBSTER-decided coordination (`mv.env.lobster`).
+- **Defects** — `mv.pp.locate_defect`, the completed Freysoldt correction
+  (potential-alignment half included), `mv.prop.capture` and
+  `mv.prop.configuration_coordinate` for killer-defect analysis.
+- **Magnetism** — `mv.mag.exchange` (Heisenberg couplings and an ordering
+  temperature), `mv.mag.symmetry` (what the moments cost in symmetry).
+- **Disorder** — `mv.disorder.cluster_expansion` and `monte_carlo`:
+  order-disorder transitions from a fitted lattice Hamiltonian.
+- **Thermodynamics** — `mv.thermo.calphad` (assessed equilibria beside the 0 K
+  hull), `mv.thermo.fit_corrections` (derive your own MP2020),
+  `mv.prop.phonon_at_temperature` (self-consistent phonons; the 0 K stability
+  answer is often the wrong one).
+- **Generation** — `mv.gen.from_symmetry` (PyXtal Wyckoff filling) and
+  `mv.gen.compositions`: a dataset before there is a structure.
+- **Molecules** — `mv.mol.quasirrho`, `dissociation`, `functional_groups`.
+- **Applications** — battery voltage/capacity, scattering S(q)/G(r), SLME,
+  piezoelectricity, supply risk: formulas over quantities the object already
+  carried, now read off (v0.1.72 closes six such domains).
+
+### Real DFT joined the levels
+
+GPAW registers as `gpaw-pbe` / `gpaw-pbe-fast` with `kind="dft"`,
+`surrogate=False` — the one level that solves the Kohn–Sham equations is
+distinguishable from the ones trained to reproduce one. m3gnet,
+m3gnet-r2scan, tensornet and orb sit alongside, and phonopy is driven
+directly for a real dispersion.
+
+### The coverage program
+
+An enforced pymatgen coverage meter drove coverage from 32.7% of in-scope
+modules to 109 of 121 (90.1%; 10 open gaps and 2 blocked, each with its
+reason recorded), and the audit it forced surfaced real matverse bugs along
+the way — silent unit errors, a relaxation bug, corrections found by
+cross-checking against upstream implementations. Where upstream is broken or
+stale the quantity is computed from its definition and checked against
+something implementation-independent. Every registered function is now called
+in a tutorial, and a test says so.
+
+### Breaking changes against a v0.1.14 `h5ad`
+
+None known — the substrate conventions (composition `X`, structure variants in
+`obsm`, levels in `uns['levels']`) are unchanged since the v0.1.14 layout.
+
+
 ## v0.1.42
 
 **106 of 136 in-scope pymatgen modules, 77.9%.** 10 open gaps, 20 blocked.
