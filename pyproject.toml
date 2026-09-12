@@ -87,7 +87,12 @@ mlip = ["mace-torch"]                                # subset of 'potentials'
 # is installable only on a newer interpreter. mv.md.batched_available() reports
 # which situation an installation is in, and the ASE path works regardless.
 batched = ["torch-sim-atomistic"]
-dev = ["pytest", "build", "twine"]
+# bibtexparser: pymatgen reads the citations of its elemental price table with
+# the v1 API (`bibtexparser.bparser`), which v2 (2026) removed; pymatgen does
+# not pin it, so an unconstrained install on a fresh interpreter picks 2.x and
+# `mv.prop.cost` / prototype matching fail at import. Pin it where the test
+# environment is assembled.
+dev = ["pytest", "build", "twine", "bibtexparser<2"]
 
 [project.urls]
 Homepage = "https://github.com/omicverse/matverse"
