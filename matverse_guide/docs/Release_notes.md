@@ -1,5 +1,37 @@
 # Release notes
 
+## Unreleased
+
+### Six plots the analysis namespaces produced data for and `mv.pl` could not draw
+
+- `mv.pl.phonon` — the DOS from `mv.prop.phonon`, in THz, with the dispersion
+  from `mv.prop.dispersion` beside it on a shared frequency axis when passed.
+- `mv.pl.pourbaix` — aqueous decomposition energy over pH and potential, the
+  water window and the evaluated point. `mv.thermo.pourbaix` now stores that
+  map per material in `uns['pourbaix']['maps']` (`ph_range=`,
+  `potential_range=`, `n_grid=`); it costs nothing beyond the diagram it
+  already fetched.
+- `mv.pl.neb` — the minimum-energy path from `mv.neb.barrier`, barrier
+  annotated, unconverged bands dashed.
+- `mv.pl.rdf_msd` — the trajectory RDF from `mv.md.rdf` with its running
+  coordination number, and the MSD with the diffusivity's slope on it.
+  `mv.md.run` now keeps the MSD trace it fitted D to, as
+  `obsm['md_msd_trace_<level>']` on the same grid as the temperature trace,
+  and claims both traces.
+- `mv.pl.wulff` — the equilibrium shape in three dimensions, one colour per
+  Miller family with its share of the surface. `mv.surf.wulff` now stores the
+  polyhedron (`vertices`, `face_index`, `face_miller`, `area_fractions`) in
+  `uns['wulff'][level][name]`, and the `bulk.uns['wulff']` claim the README's
+  deleted-claim table recorded as never written is back, because it is.
+- `mv.pl.chempot` — the domains from `mv.thermo.chempot_diagram` as segments
+  (binary) or polygons (ternary), with the artificial floor cut where the title
+  says; `kind='window'` draws the per-phase ranges from
+  `mv.thermo.chempot_limits`.
+
+All six are registered with `requires` contracts that the probe battery
+checks, and each is called in a tutorial.
+
+
 ## v0.1.72
 
 **First PyPI release since v0.1.14.** The fifty-seven development versions in

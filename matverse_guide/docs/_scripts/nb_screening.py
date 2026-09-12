@@ -336,6 +336,15 @@ mv.thermo.chempot_diagram(alni, level="demo")
 alni.obs[["formula", "energy_demo", "chempot_stable_demo",
           "chempot_window_demo"]].round(3)"""),
 
+    ("code", """\
+ax = mv.pl.chempot(alni)"""),
+
+    ("markdown", """\
+In a binary each domain is a line segment: the phase is stable only where its
+formation energy is exactly met, and the segment runs between the conditions
+where a neighbour takes over. The elemental references run off to an artificial
+floor, which is cut where the title says rather than drawn to −50 eV."""),
+
     ("markdown", """\
 `chempot_window` is the extent of the region in chemical potential space where
 each phase wins. **AlNi has three times the window of Al₃Ni**, and that is the
@@ -366,6 +375,7 @@ is the only way the question means anything."""),
 try:
     mv.thermo.pourbaix(md, ph=7.0, potential=0.0)
     print(md.obs[["formula", "pourbaix_decomposition"]].round(3))
+    ax = mv.pl.pourbaix(md)         # the map it stored, for the first row
 except (ValueError, ImportError) as exc:
     print(f"{type(exc).__name__}: {exc}")"""),
 

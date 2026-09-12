@@ -365,6 +365,12 @@ The first peak lands at 2.96 Å against a nearest-neighbour distance of 2.97, an
 the coordination number comes out at **11.7 against a true 12** — the shortfall
 being the Gaussian smearing spilling past the cutoff.
 
+`mv.pl.rdf_msd` puts the two halves of a diffusion claim side by side: the RDF,
+with the running coordination number dotted on the right axis, and the
+mean-squared displacement `mv.md.run` kept, with the diffusivity's slope drawn
+through the half of the run it was fitted on. The copper cell above has both
+once it is given a trajectory to average — here the same stand-in, jittered.
+
 ```{note}
 That integral is computed here from its definition,
 $n(r) = \\int 4\\pi r^2 \\rho\\, g(r)\\, dr$, rather than taken from pymatgen's
@@ -373,6 +379,23 @@ cell — twelve neighbours spread over three reference sites — pymatgen return
 4.0. Four is not a coordination number for that cell, and a column called
 `first_shell_coordination` had better be one.
 ```"""),
+
+    ("code", """\
+cu_cell = mv.structures(copper, "input")[0]
+cu_frames = np.tile(np.array(cu_cell.frac_coords), (40, 1, 1))
+cu_frames = cu_frames + np.random.default_rng(0).normal(0, 0.01, cu_frames.shape)
+
+try:
+    mv.md.rdf(copper, cu_frames, species="Cu", reference="Cu", r_max=6.0)
+    ax = mv.pl.rdf_msd(copper, level="emt")
+except ImportError as exc:
+    print(exc)                 # pymatgen-analysis-diffusion is an extra"""),
+
+    ("markdown", """\
+An MSD that is still curving at the end of the run has not reached the
+diffusive regime, and the D written in the legend is then a fit to vibration.
+For copper at 300 K that is the right reading: the slope is a few 10⁻⁷ cm²/s
+of thermal rattling, not transport."""),
 
     ("markdown", """\
 ## How much of the cell do they visit?
