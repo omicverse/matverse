@@ -385,7 +385,8 @@ def surface_energy_chempot(facets: AnnData, bulk: AnnData, refs: AnnData,
     requires={"obs": ["surface_energy_{level}", "parent", "miller"]},
     produces={"facets.obs": ["wulff_area_fraction_{level}"],
               "bulk.obs": ["wulff_effective_radius_{level}",
-                           "wulff_shape_factor_{level}"]},
+                           "wulff_shape_factor_{level}"],
+              "bulk.uns": ["wulff"]},
     prerequisites=["mv.surf.surface_energy"],
     examples=["mv.surf.wulff(facets, bulk=md, level='emt')"],
     related=["mv.surf.surface_energy", "mv.surf.slabs"],
@@ -394,7 +395,13 @@ def surface_energy_chempot(facets: AnnData, bulk: AnnData, refs: AnnData,
           "an answer rather than a failure — that plane is not expressed.\n\n"
           "Deposits the per-facet area fractions onto the facet rows and the "
           "shape summary onto the bulk object, because the shape belongs to the "
-          "material and the fractions belong to its facets.",
+          "material and the fractions belong to its facets.\n\n"
+          "uns['wulff'][level][name] also keeps the polyhedron itself — the "
+          "vertices of every face on the shape, which face each belongs to, "
+          "and which Miller family each face is — so mv.pl.wulff can draw it "
+          "without rebuilding the construction. The vertex coordinates are in "
+          "the units of the surface energies (distance from the centre is "
+          "proportional to gamma), which is why the plot has no length axis.",
 )
 def wulff(facets: AnnData, bulk: AnnData, level: str = "emt",
           symprec: float = 0.1) -> None:
@@ -445,6 +452,9 @@ def wulff(facets: AnnData, bulk: AnnData, level: str = "emt",
             "expressed": [_miller_label(k) for k, v in areas.items()
                           if v > 1e-6],
             "anisotropy": float(shape.anisotropy),
+            "area_fractions": {_miller_label(k): float(v)
+                               for k, v in areas.items()},
+            **_polyhedron(shape),
         }
 
     facets.obs[f"wulff_area_fraction_{level}"] = fractions
@@ -453,6 +463,34 @@ def wulff(facets: AnnData, bulk: AnnData, level: str = "emt",
     bulk.uns.setdefault("wulff", {})[level] = summary
     record(bulk, "surf.wulff", level=level, n_shapes=len(summary))
     record(facets, "surf.wulff", level=level)
+
+
+def _polyhedron(shape) -> dict:
+    """The faces of a Wulff shape as three h5ad-writable arrays.
+
+    Faces have different vertex counts, so a list of polygons would be ragged
+    and unwritable. Instead every vertex goes into one ``(n, 3)`` array in
+    face order, ``face_index`` says which face each vertex belongs to, and
+    ``face_miller`` names the Miller family of each face — enough to redraw
+    the polyhedron and colour it by family.
+    """
+    vertices, face_index, face_miller = [], [], []
+    # shape.facets holds every symmetry copy of every plane asked for;
+    # shape.on_wulff is per *family*. A copy that reached the surface has the
+    # vertices of the simplices lying on it, and one that did not has none.
+    for facet in shape.facets:
+        if not facet.points or not shape.on_wulff[facet.m_ind_orig]:
+            continue
+        ring = shape.get_line_in_facet(facet)
+        if len(ring) < 3:
+            continue
+        face_miller.append(_miller_label(shape.miller_list[facet.m_ind_orig]))
+        for point in ring:
+            vertices.append([float(c) for c in point])
+            face_index.append(len(face_miller) - 1)
+    return {"vertices": np.asarray(vertices, dtype=float).reshape(-1, 3),
+            "face_index": np.asarray(face_index, dtype=int),
+            "face_miller": face_miller}
 
 
 @register_function(

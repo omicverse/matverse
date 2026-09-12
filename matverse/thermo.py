@@ -566,17 +566,32 @@ def defect_formation(defective: AnnData, host: AnnData, level: str = "emt",
                 "whether it survives in water.",
     requires={"structures": ["input"]},
     produces={"obs": ["pourbaix_decomposition"], "uns": ["pourbaix"]},
-    examples=["mv.thermo.pourbaix(md, ph=7.0, potential=0.0)"],
-    related=["mv.thermo.hull"],
+    examples=["mv.thermo.pourbaix(md, ph=7.0, potential=0.0)",
+              "mv.thermo.pourbaix(md, ph=7.0, potential=0.0, "
+              "ph_range=(0, 14), n_grid=100)"],
+    related=["mv.thermo.hull", "mv.pl.pourbaix"],
     notes="Needs mp-api and an MP_API_KEY: aqueous stability is measured "
           "against the ion energies Materials Project fits, and there is no "
           "way to compute it from a candidate set alone. A material on the "
           "solid-state hull can still dissolve, which is why this is a "
-          "separate question rather than a column of the same one.",
+          "separate question rather than a column of the same one.\n\n"
+          "obs['pourbaix_decomposition'] is the number at the one (pH, E) "
+          "asked for. uns['pourbaix']['maps'][name] is the same quantity "
+          "over a grid of pH and potential — the Pourbaix diagram as a "
+          "decomposition-energy surface rather than as coloured regions, "
+          "since a screen wants to know how far from stable a candidate is, "
+          "not only which phase wins. The diagram is fetched once per "
+          "material either way, so the map costs nothing extra to keep, and "
+          "mv.pl.pourbaix draws it.",
 )
 def pourbaix(md: AnnData, ph: float = 7.0, potential: float = 0.0,
-             api_key: str | None = None) -> None:
-    """Distance from aqueous stability, in eV/atom, at one pH and potential."""
+             api_key: str | None = None, ph_range=(-2.0, 16.0),
+             potential_range=(-2.0, 3.0), n_grid: int = 60) -> None:
+    """Distance from aqueous stability, in eV/atom, at one pH and potential.
+
+    ``ph_range``, ``potential_range`` and ``n_grid`` set the map stored in
+    ``uns['pourbaix']['maps']``; the point value is unaffected by them.
+    """
     import os
 
     try:
@@ -593,9 +608,13 @@ def pourbaix(md: AnnData, ph: float = 7.0, potential: float = 0.0,
                          "energies and cannot be computed from candidates alone")
 
     S = structures(md, "input")
-    distances, failures = [], []
+    ph_grid = np.linspace(float(ph_range[0]), float(ph_range[1]), int(n_grid))
+    e_grid = np.linspace(float(potential_range[0]),
+                         float(potential_range[1]), int(n_grid))
+    ph_mesh, e_mesh = np.meshgrid(ph_grid, e_grid)
+    distances, maps, failures = [], {}, []
     with MPRester(key) as mpr:
-        for structure in S:
+        for name, structure in zip(map(str, md.obs_names), S):
             elements = sorted({str(el)
                                for el in structure.composition.elements})
             try:
@@ -610,6 +629,10 @@ def pourbaix(md: AnnData, ph: float = 7.0, potential: float = 0.0,
                     raise KeyError("no matching Pourbaix entry")
                 distances.append(float(diagram.get_decomposition_energy(
                     entry, pH=ph, V=potential)))
+                # pymatgen vectorises over pH and V, so the whole map is one
+                # call on the diagram already in hand.
+                maps[name] = np.asarray(diagram.get_decomposition_energy(
+                    entry, pH=ph_mesh, V=e_mesh), dtype=float)
             except Exception as exc:
                 distances.append(np.nan)
                 failures.append(f"{structure.composition.reduced_formula}: "
@@ -617,7 +640,9 @@ def pourbaix(md: AnnData, ph: float = 7.0, potential: float = 0.0,
 
     md.obs["pourbaix_decomposition"] = distances
     md.uns["pourbaix"] = {"ph": float(ph), "potential": float(potential),
-                          "n_failed": len(failures), "errors": failures[:10]}
+                          "n_failed": len(failures), "errors": failures[:10],
+                          "ph_grid": ph_grid, "potential_grid": e_grid,
+                          "maps": maps, "unit": "eV/atom"}
     record(md, "thermo.pourbaix", ph=ph, potential=potential)
 
 

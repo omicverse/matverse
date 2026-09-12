@@ -137,6 +137,8 @@ def batched_available() -> dict:
     produces={"obs": ["md_energy_{level}", "md_temperature_{level}",
                       "msd_{level}", "diffusivity_{level}",
                       "md_volume_{level}"],
+              "obsm": ["md_temperature_trace_{level}", "md_msd_trace_{level}"],
+              "uns": ["grids"],
               "layers": ["diffusivity_{level}"],
               "structures": ["md_{level}"], "levels": ["{level}"]},
     prerequisites=["mv.calc.relax"],
@@ -150,7 +152,13 @@ def batched_available() -> dict:
           "the number that matters is the mobile species' diffusivity, not the "
           "average over everything in the cell, and averaging a lithium "
           "diffusivity with a framework one produces a number describing "
-          "nothing.",
+          "nothing.\n\n"
+          "Two traces are kept on the sampling grid: the temperature, so a "
+          "run that never equilibrated is visible rather than averaged away, "
+          "and the mean-squared displacement, which is the curve the "
+          "diffusivity is the slope of. mv.pl.rdf_msd draws the second one "
+          "with that slope on it; a diffusivity quoted without its MSD is a "
+          "number nobody can check.",
 )
 def run(md: AnnData, level: str = "emt", source: str = "input",
         temperature: float = 300.0, steps: int = 1000,
@@ -182,7 +190,7 @@ def run(md: AnnData, level: str = "emt", source: str = "input",
 
     energies, temperatures, msds, diffusivities = [], [], [], []
     volumes, finals, per_element, failed = [], [], [], 0
-    traces, times = [], None
+    traces, msd_traces, times = [], [], None
     elements = list(map(str, md.var_names))
     n_samples = len(range(0, steps, sample_every))
 
@@ -198,6 +206,7 @@ def run(md: AnnData, level: str = "emt", source: str = "input",
             volumes.append(np.nan); finals.append(structure)
             per_element.append(np.full(len(elements), np.nan))
             traces.append(np.full(n_samples, np.nan))
+            msd_traces.append(np.full(n_samples, np.nan))
             continue
         energies.append(result["energy"])
         temperatures.append(result["temperature"])
@@ -207,6 +216,7 @@ def run(md: AnnData, level: str = "emt", source: str = "input",
         finals.append(result["structure"])
         per_element.append(result["per_element"])
         traces.append(result["trace"])
+        msd_traces.append(result["msd_trace"])
         times = result["times"]
 
     md.obs[f"md_energy_{tag}"] = energies
@@ -218,6 +228,8 @@ def run(md: AnnData, level: str = "emt", source: str = "input",
         md.layers[f"diffusivity_{tag}"] = np.vstack(per_element)
     if times is not None and traces:
         _replace_trace(md, tag, np.vstack(traces), times)
+        _replace_trace(md, tag, np.vstack(msd_traces), times,
+                       quantity="md_msd_trace", unit="ps")
     deposit_structures(md, f"md_{tag}", finals)
     set_level(md, tag, **meta, source=source, ensemble=ensemble,
               temperature=temperature, steps=steps, timestep=timestep,
@@ -228,9 +240,10 @@ def run(md: AnnData, level: str = "emt", source: str = "input",
 
 
 def _replace_trace(md: AnnData, tag: str, block: np.ndarray,
-                   times: np.ndarray) -> None:
-    """Deposit the temperature trace, discarding any earlier one of a
-    different length.
+                   times: np.ndarray, quantity: str = "md_temperature_trace",
+                   unit: str = "K") -> None:
+    """Deposit a trace — temperature by default, MSD when asked — discarding
+    any earlier one of a different length.
 
     Grids exist so two levels of the same quantity can be compared, and
     ``deposit_grid`` refuses when a new grid disagrees with the stored one.
@@ -241,14 +254,13 @@ def _replace_trace(md: AnnData, tag: str, block: np.ndarray,
     so the stale one goes.
     """
     grids = md.uns.setdefault("grids", {})
-    stored = grids.get("md_temperature_trace")
+    stored = grids.get(quantity)
     if stored is not None and not np.array_equal(
             np.asarray(stored.get("values"), dtype=float), times):
-        for key in [k for k in md.obsm
-                    if k.startswith("md_temperature_trace_")]:
+        for key in [k for k in md.obsm if k.startswith(f"{quantity}_")]:
             del md.obsm[key]
-        del grids["md_temperature_trace"]
-    deposit_grid(md, "md_temperature_trace", tag, block, times, unit="K")
+        del grids[quantity]
+    deposit_grid(md, quantity, tag, block, times, unit=unit)
 
 
 def _check_thermostat(md: AnnData, tag: str, target: float,
@@ -393,6 +405,7 @@ def _integrate(structure, adaptor, calculator, temperature, steps, timestep,
             "temperature": kinetic_t / max(n, 1),
             "volume": volume / max(n, 1),
             "msd": float(squared.mean(axis=1)[-1]),
+            "msd_trace": squared.mean(axis=1),
             "diffusivity": overall,
             "per_element": by_element,
             "trace": np.asarray(trace, dtype=float),

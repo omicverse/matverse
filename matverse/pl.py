@@ -1489,3 +1489,679 @@ def fermi_surface(md: AnnData, level: str = "dft", row=0,
         pass
     ax._matverse_n_sheets = len(sheets)
     return ax
+
+
+#: Okabe-Ito, the colour-blind-safe qualitative palette. Black is left out
+#: because reference lines - zero, the Fermi level, the water window - use it.
+OKABE_ITO = ("#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2",
+             "#D55E00", "#CC79A7")
+
+
+def _row_labels(md: AnnData) -> list[str]:
+    """obs['name'] where a dataset carries one, obs_names otherwise."""
+    return [str(x) for x in md.obs.get("name", md.obs_names)]
+
+
+def _row_indices(md: AnnData, rows, limit: int = 5) -> list[int]:
+    if rows is None:
+        return list(range(min(md.n_obs, limit)))
+    return [int(r) for r in rows]
+
+
+def _resolve_row(md: AnnData, row) -> tuple[int, str, str]:
+    """``(index, obs_name, label)`` for a row given by name, obs_name or
+    position - the lookup order mv.pl.elastic settled on, because a matverse
+    dataset carries the formula in obs['name'] and integers in obs_names."""
+    labels, names = _row_labels(md), [str(x) for x in md.obs_names]
+    key = str(row)
+    if key in labels:
+        index = labels.index(key)
+    elif key in names:
+        index = names.index(key)
+    else:
+        try:
+            index = int(row)
+        except (TypeError, ValueError):
+            raise ValueError(f"no row {row!r}; this object has names "
+                             f"{labels[:8]} and an index of {names[:8]}") \
+                from None
+    return index, names[index], labels[index]
+
+
+@register_function(
+    aliases=["phonon plot", "plot phonon dos", "phonon density of states "
+             "plot", "plot phonons", "phonon dispersion plot", "vibrational "
+             "spectrum plot", "dispersion and dos"],
+    category="pl",
+    description="Draw the phonon density of states mv.prop.phonon stored, and "
+                "beside it the dispersion from mv.prop.dispersion when one is "
+                "passed, the two sharing the frequency axis.",
+    requires={"obsm": ["phonon_dos_{level}"], "uns": ["grids"]},
+    prerequisites=["mv.prop.phonon"],
+    examples=["mv.pl.phonon(md, level='emt')",
+              "ph = mv.prop.dispersion(md, level='emt')\n"
+              "mv.pl.phonon(md, level='emt', rows=[0], dispersion=ph)"],
+    related=["mv.prop.phonon", "mv.prop.dispersion", "mv.pl.bands",
+             "mv.pl.spectra"],
+    notes="mv.pl.spectra can overlay the DOS block like any other grid "
+          "quantity, and it would label the axis 'phonon_dos axis'. This "
+          "knows what it is drawing: frequency in THz, the DOS normalised to "
+          "unit area, the method and supercell the grid records in the "
+          "title, and the imaginary-mode count next to each material - "
+          "which is the one number the spectrum itself cannot show, because "
+          "mv.prop.phonon smears only the real modes onto the grid.\n\n"
+          "dispersion= takes the bands-axis object mv.prop.dispersion "
+          "returns. The two panels share the frequency axis, so the DOS is "
+          "drawn sideways - the layout every phonon code prints. The "
+          "dispersion panel is mv.pl.bands, and its abscissa is a fraction "
+          "along each material's own path rather than a wavevector; the "
+          "high-symmetry ticks are drawn only when one material is shown, "
+          "since two paths do not share them.\n\n"
+          "Returns the DOS axis. With a dispersion, the other panel is on "
+          "ax._matverse_dispersion_ax; pass ax=(left, right) to lay both "
+          "out yourself.",
+)
+def phonon(md: AnnData, level: str = "emt", rows=None, dispersion=None,
+           ax=None):
+    """Phonon DOS, with the dispersion beside it when given. Returns the axis."""
+    key = f"phonon_dos_{level}"
+    if key not in md.obsm:
+        raise ValueError(f"obsm[{key!r}] absent; run mv.prop.phonon(md, "
+                         f"level={level!r}) first")
+    grid = grid_of(md, "phonon_dos")
+    dos = np.asarray(md.obsm[key], dtype=float)
+    meta = md.uns.get("grids", {}).get("phonon_dos", {})
+    labels = _row_labels(md)
+    indices = _row_indices(md, rows)
+    imaginary = md.obs.get(f"n_imaginary_modes_{level}")
+
+    if dispersion is not None:
+        if ax is None:
+            figure = _plt().figure(figsize=(8.4, 4.2))
+            spec = figure.add_gridspec(1, 2, width_ratios=(3, 1), wspace=0.06)
+            left = figure.add_subplot(spec[0])
+            ax = figure.add_subplot(spec[1], sharey=left)
+        else:
+            left, ax = ax
+        known = list(dict.fromkeys(map(str, dispersion.obs["material"])))
+        names = [str(x) for x in md.obs_names]
+        wanted = [next(k for k in (names[i], labels[i]) if k in known)
+                  for i in indices if names[i] in known or labels[i] in known]
+        wanted = wanted or None
+        ticks = dispersion.uns.get("path_labels", {})
+        one = wanted[0] if wanted is not None and len(wanted) == 1 else None
+        bands(dispersion, materials=wanted, ax=left,
+              labels=ticks.get(one) if one is not None else None)
+        left.set_title(f"phonon dispersion ({level})", fontsize=10)
+        ax._matverse_dispersion_ax = left
+    else:
+        ax = _axis(ax)
+
+    counts = {}
+    for k, i in enumerate(indices):
+        label = labels[i]
+        n_im = int(imaginary.iloc[i]) if imaginary is not None else 0
+        counts[label] = n_im
+        if n_im > 0:
+            label += f" ({n_im} imaginary)"
+        elif n_im < 0:
+            label += " (failed)"
+        colour = OKABE_ITO[k % len(OKABE_ITO)]
+        if dispersion is not None:
+            ax.plot(dos[i], grid, color=colour, linewidth=1.0, label=label)
+            ax.fill_betweenx(grid, 0.0, dos[i], color=colour, alpha=0.15)
+        else:
+            ax.plot(grid, dos[i], color=colour, linewidth=1.0, label=label)
+            ax.fill_between(grid, 0.0, dos[i], color=colour, alpha=0.15)
+
+    parts = [str(meta.get("method") or "")]
+    if meta.get("supercell") is not None:
+        parts.append("x".join(str(int(s)) for s in meta["supercell"]))
+    detail = ", ".join(p for p in parts if p)
+    if dispersion is not None:
+        ax.set_xlabel("phonon DOS (1/THz)")
+        ax.tick_params(labelleft=False)
+        ax.set_title(f"DOS ({detail})" if detail else "DOS", fontsize=10)
+    else:
+        ax.set_xlabel("frequency (THz)")
+        ax.set_ylabel("phonon DOS (1/THz)")
+        ax.set_title(f"phonon DOS ({level}" + (f"; {detail}" if detail else "")
+                     + ")", fontsize=10)
+    ax.legend(frameon=False, fontsize=8)
+    for spine in ("top", "right"):
+        ax.spines[spine].set_visible(False)
+    ax._matverse_n_imaginary = counts
+    return ax
+
+
+@register_function(
+    aliases=["pourbaix diagram", "plot pourbaix", "aqueous stability plot",
+             "ph potential map", "corrosion diagram", "water stability plot",
+             "pourbaix map"],
+    category="pl",
+    description="Draw one material's aqueous decomposition energy over pH and "
+                "applied potential - the Pourbaix diagram as a stability "
+                "surface - with the water window and the point "
+                "mv.thermo.pourbaix evaluated marked on it.",
+    requires={"uns": ["pourbaix"]},
+    prerequisites=["mv.thermo.pourbaix"],
+    examples=["mv.pl.pourbaix(md)",
+              "mv.pl.pourbaix(md, row='LiFePO4', threshold=0.5)"],
+    related=["mv.thermo.pourbaix", "mv.thermo.hull", "mv.pl.hull"],
+    notes="A textbook Pourbaix diagram colours regions by which species "
+          "wins, which answers 'what does it become'. A screen asks a "
+          "different question - 'how far from stable is my candidate here' - "
+          "and that is a continuous quantity, the decomposition energy in "
+          "eV/atom, so it is drawn as a surface rather than as regions. The "
+          "white contour is the threshold below which a solid is commonly "
+          "taken to persist in water; 0.5 eV/atom is the value in use since "
+          "Singh et al. (2017), and it is an argument because it is a "
+          "convention rather than a law.\n\n"
+          "The dashed lines are the water stability window at 298 K - "
+          "oxygen evolution above, hydrogen evolution below. A candidate for "
+          "an aqueous electrode has to sit under the threshold between "
+          "them.\n\n"
+          "The map is read from uns['pourbaix']['maps'], which "
+          "mv.thermo.pourbaix stores per material because the diagram it "
+          "fetched to answer one point answers the whole plane at no extra "
+          "cost. A material it could not place has no map and is named in "
+          "uns['pourbaix']['errors'].",
+)
+def pourbaix(md: AnnData, row=0, threshold: float = 0.5,
+             cmap: str = "viridis", ax=None):
+    """Decomposition energy over pH and potential. Returns the axis."""
+    stored = md.uns.get("pourbaix")
+    if stored is None:
+        raise ValueError("uns['pourbaix'] absent; run mv.thermo.pourbaix(md, "
+                         "ph=..., potential=...) first")
+    maps = stored.get("maps") or {}
+    index, name, label = _resolve_row(md, row)
+    if name not in maps:
+        raise ValueError(
+            f"no Pourbaix map stored for {label!r}; mv.thermo.pourbaix keeps "
+            f"one per material it could place (here {sorted(maps)}), and a "
+            f"material it could not place is listed in "
+            f"uns['pourbaix']['errors']")
+    ph = np.asarray(stored["ph_grid"], dtype=float)
+    potential = np.asarray(stored["potential_grid"], dtype=float)
+    surface = np.asarray(maps[name], dtype=float)
+
+    ax = _axis(ax, figsize=(6.2, 4.4))
+    filled = ax.contourf(ph, potential, surface, levels=20, cmap=cmap)
+    ax.contour(ph, potential, surface, levels=[float(threshold)],
+               colors="white", linewidths=1.3)
+    # The water window at 298 K, in V vs SHE.
+    ax.plot(ph, 1.229 - 0.0591 * ph, color="#333333", linestyle="--",
+            linewidth=0.9)
+    ax.plot(ph, -0.0591 * ph, color="#333333", linestyle="--", linewidth=0.9)
+
+    at_ph, at_e = float(stored["ph"]), float(stored["potential"])
+    ax.scatter([at_ph], [at_e], marker="x", s=70, color="#D55E00",
+               linewidths=1.6, zorder=5)
+    column = "pourbaix_decomposition"
+    if column in md.obs:
+        value = float(md.obs[column].iloc[index])
+        ax.annotate(f"{value:.2f} eV/atom", (at_ph, at_e), xytext=(6, 6),
+                    textcoords="offset points", fontsize=8, color="#D55E00")
+
+    bar = ax.figure.colorbar(filled, ax=ax, pad=0.02)
+    bar.set_label("decomposition energy (eV/atom)")
+    ax.set_xlabel("pH")
+    ax.set_ylabel("E (V vs SHE)")
+    ax.set_title(f"{label} - aqueous stability; white contour at "
+                 f"{threshold:g} eV/atom", fontsize=10)
+    ax.set_xlim(float(ph.min()), float(ph.max()))
+    ax.set_ylim(float(potential.min()), float(potential.max()))
+    ax._matverse_threshold = float(threshold)
+    return ax
+
+
+@register_function(
+    aliases=["neb plot", "migration barrier plot", "energy profile",
+             "minimum energy path plot", "plot barrier", "reaction path plot",
+             "band profile"],
+    category="pl",
+    description="Draw the minimum-energy path mv.neb.barrier recorded - the "
+                "energy of each image against the path coordinate - with the "
+                "barrier marked and unconverged bands drawn dashed.",
+    requires={"obsm": ["neb_profile_{level}"], "uns": ["grids"]},
+    prerequisites=["mv.neb.barrier"],
+    examples=["mv.pl.neb(md, level='emt')",
+              "mv.pl.neb(md, level='emt', rows=[0, 2])"],
+    related=["mv.neb.barrier", "mv.neb.hop_endpoints", "mv.pl.spectra"],
+    notes="Images are drawn as points joined by lines rather than as a "
+          "curve, because a band of five images is five energies and a "
+          "smooth line through them would claim a resolution the "
+          "calculation does not have.\n\n"
+          "A band that did not converge is dashed and says so in the "
+          "legend. mv.neb.barrier records the number either way, and a "
+          "profile that has not converged still peaks somewhere; the dash "
+          "is the difference between a barrier and an artefact.\n\n"
+          "The shape is the check the number cannot make: one hump is a "
+          "single-hop mechanism, two humps an intermediate minimum and a "
+          "mechanism that was not modelled, and a profile that ends well "
+          "above zero a pair of endpoints that were not equivalent.",
+)
+def neb(md: AnnData, level: str = "emt", rows=None, ax=None):
+    """Energy profile along the band, barrier annotated. Returns the axis."""
+    key = f"neb_profile_{level}"
+    if key not in md.obsm:
+        raise ValueError(f"obsm[{key!r}] absent; run mv.neb.barrier(md, "
+                         f"initial=..., final=..., level={level!r}) first")
+    coordinate = grid_of(md, "neb_profile")
+    profiles = np.asarray(md.obsm[key], dtype=float)
+    converged = md.obs.get(f"neb_converged_{level}")
+    labels = _row_labels(md)
+
+    ax = _axis(ax)
+    barriers = {}
+    for k, i in enumerate(_row_indices(md, rows)):
+        row = profiles[i]
+        if not np.isfinite(row).any():
+            continue                     # the band failed; nothing to draw
+        ok = bool(converged.iloc[i]) if converged is not None else True
+        colour = OKABE_ITO[k % len(OKABE_ITO)]
+        ax.plot(coordinate, row, color=colour, linewidth=1.2, marker="o",
+                markersize=4.5, markeredgecolor="white",
+                linestyle="-" if ok else "--",
+                label=labels[i] + ("" if ok else " (not converged)"))
+        top = int(np.nanargmax(row))
+        barriers[labels[i]] = float(row[top])
+        ax.annotate(f"{row[top]:.2f} eV", (coordinate[top], row[top]),
+                    xytext=(0, 7), textcoords="offset points", ha="center",
+                    fontsize=8, color=colour)
+
+    ax.axhline(0.0, color="#333333", linewidth=0.8)
+    ax.set_xlim(float(coordinate.min()), float(coordinate.max()))
+    ax.set_xlabel("fractional path coordinate")
+    ax.set_ylabel("energy relative to the initial image (eV)")
+    ax.set_title(f"migration barrier ({level})", fontsize=10)
+    if barriers:
+        ax.legend(frameon=False, fontsize=8)
+    for spine in ("top", "right"):
+        ax.spines[spine].set_visible(False)
+    ax._matverse_barriers = barriers
+    return ax
+
+
+@register_function(
+    aliases=["rdf and msd", "md plot", "plot diffusion", "mean squared "
+             "displacement plot", "msd plot", "radial distribution plot",
+             "trajectory rdf plot", "diffusivity plot", "molecular dynamics "
+             "plot"],
+    category="pl",
+    description="Draw what a molecular dynamics run left behind: the "
+                "trajectory-averaged radial distribution function with its "
+                "running coordination number, and the mean-squared "
+                "displacement with the diffusivity's slope on it.",
+    requires={"obsm": ["rdf_md_{rdf_level}", "md_msd_trace_{level}"],
+              "uns": ["grids"]},
+    prerequisites=["mv.md.run", "mv.md.rdf"],
+    examples=["mv.pl.rdf_msd(md, level='emt')",
+              "mv.pl.rdf_msd(md, level='emt', which='msd')",
+              "mv.pl.rdf_msd(md, rdf_level='md', which='rdf')"],
+    related=["mv.md.run", "mv.md.rdf", "mv.md.conductivity", "mv.pl.spectra"],
+    notes="Two panels because they are the two things a diffusion claim "
+          "rests on. The RDF says whether the mobile species has a "
+          "structure at all - sharp shells are a solid, a smeared first "
+          "peak and nothing beyond it a liquid - and the running "
+          "coordination number (dotted, right axis) reads the shell "
+          "occupancy off it. The MSD is the curve the diffusivity is the "
+          "slope of, and the dashed line is that slope, 6Dt through the "
+          "second half of the run where mv.md.run fitted it. An MSD that "
+          "is still curving upward at the end has not reached the "
+          "diffusive regime, and the D on it is a fit to vibration.\n\n"
+          "The two come from different calls with different defaults: the "
+          "MSD from mv.md.run at level=, the RDF from mv.md.rdf at "
+          "rdf_level=, which is 'md' unless it was named. which='rdf' or "
+          "'msd' draws one panel alone into a single axis; the default "
+          "needs both. With both, the RDF axis is returned and the MSD "
+          "axis is on ax._matverse_msd_ax.",
+)
+def rdf_msd(md: AnnData, level: str = "emt", rdf_level: str = "md",
+            rows=None, which: str = "both", ax=None):
+    """RDF and MSD side by side. Returns the RDF axis (or the only axis)."""
+    if which not in ("both", "rdf", "msd"):
+        raise ValueError(f"which must be 'both', 'rdf' or 'msd', got {which!r}")
+    rdf_key, msd_key = f"rdf_md_{rdf_level}", f"md_msd_trace_{level}"
+    if which != "msd" and rdf_key not in md.obsm:
+        raise ValueError(f"obsm[{rdf_key!r}] absent; run mv.md.rdf(md, "
+                         f"trajectories, species=..., level={rdf_level!r}) "
+                         f"first, or pass which='msd'")
+    if which != "rdf" and msd_key not in md.obsm:
+        raise ValueError(f"obsm[{msd_key!r}] absent; run mv.md.run(md, "
+                         f"level={level!r}) first, or pass which='rdf'")
+    indices = _row_indices(md, rows)
+    labels = _row_labels(md)
+
+    if which == "both":
+        if ax is None:
+            _, (left, right) = _plt().subplots(1, 2, figsize=(10.0, 3.8),
+                                               layout="constrained")
+        else:
+            left, right = ax
+    else:
+        left = right = _axis(ax)
+
+    if which != "msd":
+        r = grid_of(md, "rdf_md")
+        g = np.asarray(md.obsm[rdf_key], dtype=float)
+        coordination_key = f"coordination_md_{rdf_level}"
+        twin = None
+        for k, i in enumerate(indices):
+            colour = OKABE_ITO[k % len(OKABE_ITO)]
+            left.plot(r, g[i], color=colour, linewidth=1.1, label=labels[i])
+            if coordination_key in md.obsm:
+                twin = twin if twin is not None else left.twinx()
+                twin.plot(r, np.asarray(md.obsm[coordination_key],
+                                        dtype=float)[i],
+                          color=colour, linewidth=0.9, linestyle=":")
+        shell = md.obs.get(f"first_shell_{rdf_level}")
+        if shell is not None:
+            for i in indices:
+                if np.isfinite(shell.iloc[i]):
+                    left.axvline(float(shell.iloc[i]), color="#999999",
+                                 linewidth=0.7, zorder=0)
+        if twin is not None:
+            twin.set_ylabel("running coordination number (dotted)")
+            twin.spines["top"].set_visible(False)
+        species = md.uns["grids"]["rdf_md"].get("species", "")
+        left.set_xlabel("r (Å)")
+        left.set_ylabel("g(r)")
+        left.set_title(f"{species} RDF over the trajectory ({rdf_level})"
+                       .strip(), fontsize=10)
+        left.legend(frameon=False, fontsize=8, loc="upper right")
+
+    if which != "rdf":
+        from .md import _A2_PER_PS_TO_CM2_PER_S
+
+        t = grid_of(md, "md_msd_trace")
+        msd = np.asarray(md.obsm[msd_key], dtype=float)
+        diffusivity = md.obs.get(f"diffusivity_{level}")
+        half = len(t) // 2
+        for k, i in enumerate(indices):
+            colour = OKABE_ITO[k % len(OKABE_ITO)]
+            label = labels[i]
+            d = float(diffusivity.iloc[i]) if diffusivity is not None \
+                else np.nan
+            if np.isfinite(d) and len(t) > half:
+                label += f"  D = {d:.2e} cm²/s"
+                slope = 6.0 * d / _A2_PER_PS_TO_CM2_PER_S       # Å²/ps
+                t0, y0 = t[half:].mean(), np.nanmean(msd[i][half:])
+                right.plot(t, y0 + slope * (t - t0), color=colour,
+                           linestyle="--", linewidth=0.9)
+            right.plot(t, msd[i], color=colour, linewidth=1.1, label=label)
+        right.set_xlabel("time (ps)")
+        right.set_ylabel("mean-squared displacement (Å²)")
+        right.set_title(f"MSD ({level}); dashed is 6Dt", fontsize=10)
+        right.legend(frameon=False, fontsize=8, loc="upper left")
+
+    for axis in {left, right}:
+        for spine in ("top", "right"):
+            axis.spines[spine].set_visible(False)
+    if which == "both":
+        left._matverse_msd_ax = right
+    return left
+
+
+@register_function(
+    aliases=["wulff plot", "plot wulff shape", "draw crystal shape",
+             "equilibrium shape plot", "nanoparticle shape plot", "show the "
+             "wulff construction", "particle shape"],
+    category="pl",
+    description="Draw the equilibrium crystal shape mv.surf.wulff built, in "
+                "three dimensions, one colour per Miller family with its share "
+                "of the surface.",
+    requires={"uns": ["wulff"]},
+    prerequisites=["mv.surf.wulff"],
+    examples=["mv.pl.wulff(md, level='emt')",
+              "mv.pl.wulff(md, level='emt', row='Cu', azimuth=20)"],
+    related=["mv.surf.wulff", "mv.surf.surface_energy", "mv.pl.fermi_surface"],
+    notes="Draws the polyhedron mv.surf.wulff kept in uns['wulff'] rather "
+          "than rebuilding it, so the plot shows exactly the construction "
+          "whose area fractions are on the facet rows.\n\n"
+          "There is no length axis on purpose. A Wulff shape has a shape "
+          "and no size: each face sits at a distance from the centre "
+          "proportional to its surface energy, so the coordinates are in "
+          "units of gamma and the particle is the same at ten nanometres "
+          "and ten microns. What the legend carries instead is the fraction "
+          "of the surface each family takes, which is the prediction an "
+          "electron micrograph can check.\n\n"
+          "A face is coloured by the Miller family of the plane that was "
+          "asked for, not by its symmetry copy - the eight (111) faces of a "
+          "cubic metal are one colour - and a family that mv.surf.wulff "
+          "found with zero area is absent here, because it is absent from "
+          "the particle.",
+)
+def wulff(md: AnnData, level: str = "emt", row=0, azimuth: float = 30.0,
+          elevation: float = 20.0, ax=None):
+    """The Wulff polyhedron in three dimensions. Returns the axis."""
+    stored = (md.uns.get("wulff") or {}).get(level)
+    if stored is None:
+        raise ValueError(f"uns['wulff'][{level!r}] absent; run "
+                         f"mv.surf.wulff(facets, bulk=md, level={level!r}) "
+                         f"first")
+    _, name, label = _resolve_row(md, row)
+    shape = stored.get(name)
+    if shape is None:
+        raise ValueError(
+            f"no Wulff shape was built for {label!r}; shapes exist for "
+            f"{sorted(stored)} - a material none of whose facets has a "
+            f"finite surface energy gets none")
+    if "vertices" not in shape:
+        raise ValueError("no geometry was stored for this shape; it was "
+                         "built by an older mv.surf.wulff - run it again")
+
+    from matplotlib.patches import Patch
+    from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+
+    vertices = np.asarray(shape["vertices"], dtype=float)
+    face_index = np.asarray(shape["face_index"], dtype=int)
+    families = [str(f) for f in shape["face_miller"]]
+    kinds = list(dict.fromkeys(families))
+    colour = {k: OKABE_ITO[i % len(OKABE_ITO)] for i, k in enumerate(kinds)}
+
+    if ax is None:
+        ax = _plt().figure(figsize=(5.4, 5.0)).add_subplot(projection="3d")
+    polygons = [vertices[face_index == f] for f in range(len(families))]
+    _add_faces(ax, Poly3DCollection(
+        polygons, facecolors=[colour[f] for f in families],
+        edgecolors="#333333", linewidths=0.5, alpha=0.9))
+    extent = float(np.abs(vertices).max()) if vertices.size else 1.0
+    for setter in (ax.set_xlim, ax.set_ylim, ax.set_zlim):
+        setter(-extent, extent)
+
+    fractions = shape.get("area_fractions", {})
+    handles = [Patch(facecolor=colour[k], edgecolor="#333333",
+                     label=f"({' '.join(k.split('_'))})  "
+                           f"{100 * float(fractions.get(k, np.nan)):.0f}% "
+                           f"of the surface")
+               for k in kinds]
+    ax.legend(handles=handles, frameon=False, fontsize=8, loc="upper left")
+    ax.set_axis_off()
+    ax.set_title(f"{label} - Wulff shape ({level})\n"
+                 f"anisotropy {float(shape.get('anisotropy', np.nan)):.3f}",
+                 fontsize=10)
+    ax.view_init(elev=float(elevation), azim=float(azimuth))
+    try:
+        ax.set_box_aspect((1, 1, 1))
+    except Exception:                                      # pragma: no cover
+        pass
+    ax._matverse_n_faces = len(families)
+    return ax
+
+
+@register_function(
+    aliases=["chemical potential diagram plot", "plot chempot", "chempot "
+             "plot", "stability window plot", "phase stability region plot",
+             "growth conditions plot", "synthesis window plot"],
+    category="pl",
+    description="Draw the chemical potential diagram mv.thermo.chempot_diagram "
+                "stored - each phase's stability domain in the plane (binary) "
+                "or space (ternary) of elemental chemical potentials - or, with "
+                "kind='window', the per-phase ranges from "
+                "mv.thermo.chempot_limits.",
+    requires={"uns": ["chempot_diagram"]},
+    prerequisites=["mv.thermo.chempot_diagram"],
+    examples=["mv.pl.chempot(md)",
+              "mv.pl.chempot(md, limit=-3.0)",
+              "mv.pl.chempot(md, kind='window', element='O')"],
+    related=["mv.thermo.chempot_diagram", "mv.thermo.chempot_limits",
+             "mv.pl.hull"],
+    notes="In a system of n elements each phase's domain has dimension n-1: "
+          "a binary diagram is line segments in a plane, a ternary one is "
+          "polygons in a volume. Both are drawn from the vertices "
+          "mv.thermo.chempot_diagram stored; four or more elements have no "
+          "picture and the call says so rather than projecting one.\n\n"
+          "The elemental references have open domains that run to an "
+          "artificial floor - pymatgen's default_min_limit, -50 eV - which "
+          "is not a chemical potential anyone reaches. It is drawn at "
+          "limit=, one eV below the lowest physical vertex unless set, and "
+          "the title says where it was cut so a reader does not take the "
+          "edge of the picture for a boundary.\n\n"
+          "kind='window' is the other view of the same thing: for one "
+          "element, the range of its chemical potential over which each "
+          "phase stays on the hull, from mv.thermo.chempot_limits. On a hull "
+          "closed over one dataset the ranges are bounded by the dataset "
+          "rather than by chemistry, and the title carries that warning in "
+          "red.",
+)
+def chempot(md: AnnData, kind: str = "diagram", limit: float | None = None,
+            element: str | None = None, ax=None):
+    """Chemical potential domains (or windows). Returns the axis."""
+    if kind == "window":
+        return _chempot_window(md, element, ax)
+    if kind != "diagram":
+        raise ValueError(f"kind must be 'diagram' or 'window', got {kind!r}")
+    stored = md.uns.get("chempot_diagram")
+    if stored is None:
+        raise ValueError("uns['chempot_diagram'] absent; run "
+                         "mv.thermo.chempot_diagram(md, level=...) first")
+    elements = [str(e) for e in stored.get("elements", [])]
+    domains = {str(f): np.asarray(d["vertices"], dtype=float)
+               for f, d in stored["domains"].items() if len(d["vertices"])}
+    if len(elements) not in (2, 3) or not domains:
+        raise ValueError(
+            f"the diagram spans {len(elements)} elements ({elements}) with "
+            f"{len(domains)} domains; this draws a binary plane or a ternary "
+            f"volume - subset the object to a two- or three-element system")
+
+    every = np.vstack(list(domains.values()))
+    floor = float(every.min())                 # the artificial min limit
+    physical = every[every > floor + 1e-6]
+    display = float(limit) if limit is not None else \
+        (float(physical.min()) - 1.0 if physical.size else floor)
+    level = stored.get("level", "")
+
+    if len(elements) == 2:
+        ax = _axis(ax, figsize=(5.2, 5.0))
+        for k, (formula, points) in enumerate(domains.items()):
+            points = np.where(points <= floor + 1e-6, display, points)
+            order = np.lexsort((points[:, 1], points[:, 0]))
+            colour = OKABE_ITO[k % len(OKABE_ITO)]
+            ax.plot(points[order, 0], points[order, 1], color=colour,
+                    linewidth=3.0, solid_capstyle="round", label=formula)
+            ax.annotate(formula, points.mean(axis=0), fontsize=8,
+                        xytext=(4, 4), textcoords="offset points")
+        ax.set_xlim(display, 0.05 * abs(display))
+        ax.set_ylim(display, 0.05 * abs(display))
+        ax.set_xlabel(f"Δμ({elements[0]}) (eV)")
+        ax.set_ylabel(f"Δμ({elements[1]}) (eV)")
+        for spine in ("top", "right"):
+            ax.spines[spine].set_visible(False)
+    else:
+        from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+
+        if ax is None:
+            ax = _plt().figure(figsize=(5.8, 5.2)).add_subplot(projection="3d")
+        for k, (formula, points) in enumerate(domains.items()):
+            points = np.where(points <= floor + 1e-6, display, points)
+            if len(points) < 3:
+                continue
+            colour = OKABE_ITO[k % len(OKABE_ITO)]
+            _add_faces(ax, Poly3DCollection(
+                [_ring(points)], facecolor=colour, alpha=0.3,
+                edgecolor=colour, linewidths=0.8))
+            ax.text(*points.mean(axis=0), formula, fontsize=8)
+        for setter in (ax.set_xlim, ax.set_ylim, ax.set_zlim):
+            setter(display, 0.05 * abs(display))
+        ax.set_xlabel(f"Δμ({elements[0]}) (eV)")
+        ax.set_ylabel(f"Δμ({elements[1]}) (eV)")
+        ax.set_zlabel(f"Δμ({elements[2]}) (eV)")
+
+    ax.set_title(f"chemical potential diagram ({level}); open domains cut "
+                 f"at {display:.1f} eV", fontsize=9)
+    ax._matverse_n_domains = len(domains)
+    return ax
+
+
+def _add_faces(ax, collection) -> None:
+    """Add a 3D polygon collection with the axis limits left to the caller.
+
+    matplotlib >= 3.10 autoscales from the collection's vertex array, which
+    is NaN-padded when the faces have different vertex counts - as the faces
+    of a polyhedron do - and that path has produced infinite limits here.
+    Both callers set the limits themselves, so autoscaling is not needed;
+    older matplotlib has no such argument and never autoscaled.
+    """
+    try:
+        ax.add_collection3d(collection, autolim=False)
+    except TypeError:                                     # pragma: no cover
+        ax.add_collection3d(collection)
+
+
+def _ring(points: np.ndarray) -> np.ndarray:
+    """A planar polygon's vertices in perimeter order.
+
+    A domain is convex and flat, so ordering by angle about the centroid in
+    the plane's own basis gives the boundary; the basis comes from the two
+    leading singular vectors of the centred points.
+    """
+    centred = points - points.mean(axis=0)
+    _, _, basis = np.linalg.svd(centred, full_matrices=False)
+    flat = centred @ basis[:2].T
+    order = np.argsort(np.arctan2(flat[:, 1], flat[:, 0]))
+    return points[order]
+
+
+def _chempot_window(md: AnnData, element, ax):
+    """kind='window': per-phase chemical potential ranges for one element."""
+    stored = md.uns.get("chempot_limits")
+    if stored is None:
+        raise ValueError("uns['chempot_limits'] absent; run "
+                         "mv.thermo.chempot_limits(md, level=...) first")
+    limits = stored.get("limits", {})
+    seen = sorted({str(e) for ranges in limits.values() for e in ranges})
+    chosen = str(element) if element is not None else (seen[0] if seen else "")
+    rows = [(str(f), sorted(float(v) for v in r[chosen]))
+            for f, r in limits.items() if chosen in r]
+    if not rows:
+        raise ValueError(f"no window for element {chosen!r}; the limits "
+                         f"cover {seen}")
+    # Poorest in the element at the bottom, richest at the top, so the bars
+    # read as a ladder of growth conditions rather than in hull order.
+    rows.sort(key=lambda item: item[1])
+
+    ax = _axis(ax, figsize=(5.5, 0.4 * len(rows) + 1.2))
+    for k, (formula, (low, high)) in enumerate(rows):
+        ax.plot([low, high], [k, k], color=OKABE_ITO[k % len(OKABE_ITO)],
+                linewidth=6, solid_capstyle="butt")
+        ax.plot([low, high], [k, k], linestyle="none", marker="|",
+                color="#333333", markersize=11)
+    ax.set_yticks(range(len(rows)))
+    ax.set_yticklabels([f for f, _ in rows])
+    ax.set_xlabel(f"μ({chosen}) (eV)")
+    closed = bool(stored.get("closed_system", False))
+    ax.set_title(f"stability window ({stored.get('level', '')})"
+                 + (" - bounded by this dataset, not by chemistry"
+                    if closed else ""),
+                 fontsize=9, color="#c0392b" if closed else "black")
+    for spine in ("top", "right"):
+        ax.spines[spine].set_visible(False)
+    ax._matverse_n_windows = len(rows)
+    return ax
+
+
+__all__ += ["scatter", "bands", "distribution", "spacegroups", "elastic",
+            "fermi_surface", "phonon", "pourbaix", "neb", "rdf_msd", "wulff",
+            "chempot"]

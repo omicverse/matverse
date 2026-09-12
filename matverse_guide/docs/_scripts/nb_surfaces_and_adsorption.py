@@ -227,7 +227,20 @@ polyhedra rather than sharp plates. A layered material would give a number
 orders of magnitude larger, and flakes."""),
 
     ("code", """\
-bulk.uns["wulff"]["emt"]["0"]"""),
+{k: v for k, v in bulk.uns["wulff"]["emt"]["0"].items()
+ if k not in ("vertices", "face_index", "face_miller")}"""),
+
+    ("markdown", """\
+The summary leaves out three arrays: the vertices of every face on the
+particle, which face each belongs to, and each face's Miller family.
+`mv.surf.wulff` keeps them so the shape can be drawn without rebuilding the
+construction, and `mv.pl.wulff` is that drawing — one colour per family, with
+the share of the surface each takes in the legend. There is no length axis
+because a Wulff shape has none: faces sit at distances proportional to their
+surface energies, and the particle looks the same at any size."""),
+
+    ("code", """\
+ax = mv.pl.wulff(bulk, level="emt")"""),
 
     ("code", """\
 fig, ax = plt.subplots(figsize=(6, 3.6))

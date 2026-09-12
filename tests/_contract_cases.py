@@ -266,6 +266,49 @@ def vibrating():
     return md
 
 
+def aqueous():
+    """A dataset carrying the map mv.thermo.pourbaix deposits, for
+    mv.pl.pourbaix. The producer needs Materials Project, so the map is
+    written by hand in the producer's own shape."""
+    md = mv.data.from_compositions(["Fe2O3"])
+    ph, potential = np.linspace(-2, 16, 19), np.linspace(-2, 3, 11)
+    P, E = np.meshgrid(ph, potential)
+    md.obs["pourbaix_decomposition"] = [0.3]
+    md.uns["pourbaix"] = {
+        "ph": 7.0, "potential": 0.0, "n_failed": 0, "errors": [],
+        "ph_grid": ph, "potential_grid": potential, "unit": "eV/atom",
+        "maps": {"0": 0.6 * np.abs(E - (0.8 - 0.059 * P))}}
+    return md
+
+
+def barred():
+    """A band already run, for mv.pl.neb."""
+    md = hopped()
+    mv.neb.barrier(md, "hop_initial", "hop_final", level="emt", n_images=3,
+                   steps=5)
+    return md
+
+
+def diffusing():
+    """An MD run and a trajectory RDF on one cell, for mv.pl.rdf_msd. The RDF
+    needs pymatgen-analysis-diffusion; without it the probe is undecided."""
+    md = mv.datasets.metals(["Cu"], supercell=(2, 2, 2))
+    mv.pp.describe(md)
+    mv.md.run(md, level="emt", steps=30, equilibration=10, sample_every=5)
+    cell = mv.structures(md, "input")[0]
+    frames = np.tile(np.array(cell.frac_coords), (10, 1, 1))
+    frames = frames + np.random.default_rng(0).normal(0, 0.01, frames.shape)
+    mv.md.rdf(md, frames, species="Cu", reference="Cu", r_max=6.0)
+    return md
+
+
+def chempot_mapped():
+    """Domains already computed, for mv.pl.chempot."""
+    md = with_alni()
+    mv.thermo.chempot_diagram(md, level="emt")
+    return md
+
+
 def adsorbing():
     """Synthetic binding energies across a set of surfaces."""
     n = 6
@@ -653,6 +696,12 @@ def cases(tmp):
     def wulffable():
         out = facets.copy()
         mv.surf.surface_energy(out, bulk, level="emt")
+        return out
+
+    def wulffed():
+        """The bulk after mv.surf.wulff, for mv.pl.wulff."""
+        out = bulk.copy()
+        mv.surf.wulff(wulffable(), out, level="emt")
         return out
 
     # The off-stoichiometry route needs slabs that are actually off it, and an
@@ -1151,6 +1200,12 @@ def cases(tmp):
         (mv.pl.spectra, patterned, ("xrd",), {}),
         (mv.pl.provenance, described, (), {}),
         (mv.pl.rank_elements_groups, ranked, (), {}),
+        (mv.pl.phonon, vibrating, (), {"level": "emt"}),
+        (mv.pl.pourbaix, aqueous, (), {}),
+        (mv.pl.neb, barred, (), {"level": "emt"}),
+        (mv.pl.rdf_msd, diffusing, (), {"level": "emt"}),
+        (mv.pl.wulff, wulffed, (), {"level": "emt"}),
+        (mv.pl.chempot, chempot_mapped, (), {}),
     ]
 
 

@@ -99,7 +99,7 @@ not single compositions.
 | `mv.gen` | scoring generated candidates, and enumerating substitutions |
 | `mv.model` | property prediction, with splits that do not leak |
 | `mv.opt` | design campaigns — what to compute next, and what came back |
-| `mv.pl` | plotting, including the periodic-table heatmap |
+| `mv.pl` | plotting — the periodic-table heatmap, hull, bands, phonon DOS and dispersion, Pourbaix map, NEB profile, MD RDF and MSD, Wulff shape, chemical-potential diagram |
 | `mv.utils` | units, checkpointing, cluster submission, object summaries |
 
 `mv.struct` is the v0.1 name for the structure half of `mv.pp`, kept as
@@ -267,7 +267,7 @@ Claims are deleted rather than repaired when they fail. The ones that did:
 | `utils.job_status requires uns['submissions']` | having submitted nothing is an answer, not an error |
 | `dft.status requires obs['dft_directory']` | scans the root directory, not the object |
 | `exp.attach requires uns['grids']` | a measured curve may be the first grid |
-| `surf.wulff produces uns['wulff']` | never written |
+| `surf.wulff produces uns['wulff']` | never written at the time. It is now — the polyhedron `mv.pl.wulff` draws lives there — and the claim is back as `bulk.uns['wulff']` |
 | `iface.build produces obs['nsites']` | never written |
 
 Two are informative beyond their own function. `mv.tl.cluster`'s two routes

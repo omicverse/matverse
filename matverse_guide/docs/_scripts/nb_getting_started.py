@@ -305,6 +305,16 @@ metals.obs[["name", "bulk_modulus_emt", "debye_temperature_emt",
             "thermal_conductivity_emt", "dynamically_stable_emt"]].round(1)"""),
 
     ("markdown", """\
+`dynamically_stable_emt` is one bit per material. The spectrum it was read off
+is in `obsm["phonon_dos_emt"]`, and `mv.pl.phonon` draws it in THz with the
+method and supercell the grid recorded, so a stored spectrum says how coarse it
+is. Pass `dispersion=` the object `mv.prop.dispersion` returns and the two
+share the frequency axis."""),
+
+    ("code", """\
+ax = mv.pl.phonon(metals, level="emt")"""),
+
+    ("markdown", """\
 Worth comparing against measured values rather than accepting:
 
 | | EMT | experiment |

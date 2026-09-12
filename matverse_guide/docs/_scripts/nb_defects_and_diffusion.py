@@ -390,9 +390,7 @@ worth reading every time, because a NEB that has not converged still reports a
 number."""),
 
     ("code", """\
-ax = mv.pl.spectra(copper, "neb_profile", levels=("emt",), rows=[0])
-ax.set_title("the minimum energy path")
-ax.set_ylabel("energy relative to start (eV)")"""),
+ax = mv.pl.neb(copper, level="emt")"""),
 
     ("markdown", """\
 The path rises to a single saddle and comes back down, which is what a
