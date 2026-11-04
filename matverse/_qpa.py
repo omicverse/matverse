@@ -1100,24 +1100,40 @@ _JOBS: dict = {}
 
 
 def _run_job(i):
+    # Forked from a possibly multi-threaded host (an interactive kernel with
+    # output-forwarding threads): never touch the inherited stream objects,
+    # whose locks another thread may have held at fork time.
+    import os
+    import sys
+    import warnings
+    sys.stdout = sys.stderr = open(os.devnull, "w")
+    warnings.simplefilter("ignore")
     fn, args, kwargs, blas = _JOBS["items"][i]
     with _blas_limit(blas):
         return fn(*args, **kwargs)
 
 
-def run_fits(items, n_jobs=1, blas_threads=1):
+def run_fits(items, n_jobs=1, blas_threads=1, timeout=None):
     """Evaluate fit_sample(*args, **kwargs) for each item, in forked worker
-    processes when n_jobs > 1 (falls back to serial if that fails)."""
+    processes when n_jobs > 1. Falls back to a serial pass if the pool fails
+    or exceeds ``timeout`` seconds (default: one hour per item per worker)."""
     items = [(fit_sample, a, k, blas_threads) for a, k in items]
     if n_jobs and n_jobs > 1 and len(items) > 1:
+        n = min(n_jobs, len(items))
+        limit = timeout if timeout is not None else 3600.0 * len(items) / n
+        pool = None
         try:
             import multiprocessing as mp
             ctx = mp.get_context("fork")
             _JOBS["items"] = items
-            with ctx.Pool(min(n_jobs, len(items))) as pool:
-                return pool.map(_run_job, range(len(items)), chunksize=1)
+            pool = ctx.Pool(n)
+            out = pool.map_async(_run_job, range(len(items)), chunksize=1).get(limit)
+            pool.close()
+            pool.join()
+            return out
         except Exception:                               # pragma: no cover
-            pass
+            if pool is not None:
+                pool.terminate()
         finally:
             _JOBS.clear()
     with _blas_limit(blas_threads):
