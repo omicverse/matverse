@@ -564,12 +564,59 @@ def _varpro(sticks_list, grid, signal, rad, opts, per_phase, extra, disp0=0.0):
                     np.exp(p[6 + k:6 + 2 * k]))
         return p[0], p[1], (p[2], p[3], p[4]), p[5], np.zeros(k), np.ones(k)
 
-    def residual(p):
-        lib = _build(sticks_list, grid, rad, *unpack(p), extra)
+    def columns(p):
+        zero, disp, uvw, eta, strains, ratios = unpack(p)
+        return [render(s, grid, rad, zero, disp, strains[i], uvw, eta, ratios[i])
+                for i, s in enumerate(sticks_list)]
+
+    def resid_of(cols):
+        lib = np.column_stack(cols + [extra]) if cols else extra
         s, _ = nnls_scaled(lib, signal)
         return lib @ s - signal
 
-    sol = least_squares(residual, p0, bounds=(lo, hi), method="trf",
+    last = {}
+
+    def residual(p):
+        cols = columns(p)
+        r = resid_of(cols)
+        last.clear()
+        last[p.tobytes()] = (cols, r)
+        return r
+
+    def jacobian(p):
+        # Forward differences exactly as scipy's '2-point' scheme (same step and
+        # bound handling), but a per-phase parameter only re-renders its own
+        # column: the other columns are reused bit-for-bit.
+        hit = last.get(p.tobytes())
+        cols0, f0 = hit if hit is not None else (columns(p), None)
+        if f0 is None:
+            f0 = resid_of(cols0)
+        h = _compute_absolute_step(None, p, f0, "2-point")
+        h, _ = _adjust_scheme_to_bounds(p, h, 1, "1-sided", lo, hi)
+        J = np.empty((f0.size, p.size))
+        for i in range(p.size):
+            x = p.copy()
+            x[i] = p[i] + h[i]
+            dx = x[i] - p[i]
+            if i < 6:
+                cols = columns(x)
+            else:
+                j = (i - 6) % k
+                zero, disp, uvw, eta, strains, ratios = unpack(x)
+                cols = list(cols0)
+                cols[j] = render(sticks_list[j], grid, rad, zero, disp, strains[j],
+                                 uvw, eta, ratios[j])
+            J[:, i] = (resid_of(cols) - f0) / dx
+        return J
+
+    try:
+        from scipy.optimize._numdiff import (_adjust_scheme_to_bounds,
+                                             _compute_absolute_step)
+        jac = jacobian
+    except ImportError:                                  # pragma: no cover
+        jac = "2-point"
+
+    sol = least_squares(residual, p0, jac=jac, bounds=(lo, hi), method="trf",
                         max_nfev=opts.max_nfev_phase if per_phase else opts.max_nfev_global)
     params = unpack(sol.x)
     lib = _build(sticks_list, grid, rad, *params, extra)
