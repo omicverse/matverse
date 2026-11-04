@@ -609,3 +609,62 @@ def job_status(md: AnnData) -> dict:
 __all__ = ["set_units", "convert", "check_units", "resume", "checkpoint",
            "chunks", "map_chunks",
            "slurm_script", "summary", "TO_EV", "TO_ANGSTROM", "INTERNAL_UNITS"]
+
+
+#: Self-contained engines (stdlib + numpy + scipy only) that can be copied into
+#: a deliverable which has to run where matverse is not installed.
+VENDORABLE = {
+    "stacking": ("_stacking.py",
+                 "HK stacking-disorder statistics, powder design matrix, "
+                 "time-series inversion (mv.disorder.stacking_*)"),
+}
+
+
+@register_function(
+    aliases=["vendor", "standalone module", "copy engine", "no matverse at "
+             "runtime", "clean environment deliverable", "self-contained solver",
+             "ship without dependencies", "submission without matverse"],
+    category="utils",
+    description="Copy one of matverse's self-contained numerical engines "
+                "(stdlib + numpy + scipy only) into a directory, so a script "
+                "that must run in a clean environment without matverse can "
+                "import it.",
+    examples=["mv.utils.vendor('stacking', 'submission/')   # -> "
+              "submission/stacking_engine.py",
+              "mv.utils.vendor()   # list what can be vendored"],
+    related=["mv.disorder.fit_stacking_series"],
+    notes="The copy is byte-identical to the module matverse itself runs, "
+          "and its imports are checked to be stdlib / numpy / scipy before it "
+          "is written. Import it next to your script with "
+          "``sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))`` "
+          "then ``import <name>_engine``. Functions keep their names: for "
+          "'stacking', layer_correlations, design_matrix, expected_counts, "
+          "fit_series.",
+)
+def vendor(engine: str | None = None, dest=None, name: str | None = None):
+    """Write ``<dest>/<engine>_engine.py``; with no engine, list the choices."""
+    import ast
+    import sys
+    from pathlib import Path
+
+    if engine is None:
+        return {k: v[1] for k, v in VENDORABLE.items()}
+    if engine not in VENDORABLE:
+        raise KeyError(f"no vendorable engine {engine!r}; have {sorted(VENDORABLE)}")
+    src = Path(__file__).with_name(VENDORABLE[engine][0])
+    text = src.read_text()
+    allowed = {"numpy", "scipy", "__future__"} | set(getattr(sys, "stdlib_module_names", ()))
+    for node in ast.walk(ast.parse(text)):
+        mods = ([a.name for a in node.names] if isinstance(node, ast.Import)
+                else [node.module or ""] if isinstance(node, ast.ImportFrom) and node.level == 0
+                else ["."] if isinstance(node, ast.ImportFrom) else [])
+        for mod in mods:
+            if mod.split(".")[0] not in allowed:
+                raise RuntimeError(f"{src.name} imports {mod!r}; not vendorable")
+    if dest is None:
+        raise ValueError("pass dest, the directory to write into")
+    out = Path(dest)
+    out.mkdir(parents=True, exist_ok=True)
+    target = out / (name or f"{engine}_engine.py")
+    target.write_text(text)
+    return str(target)
