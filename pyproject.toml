@@ -37,6 +37,7 @@ analysis = ["scikit-learn", "igraph", "leidenalg"]   # mv.tl clustering routes
 descriptors = ["dscribe"]                            # mv.feat.soap
 multi = ["mudata"]                                   # mv.multi.to_mudata only
 plot = ["matplotlib"]                                # mv.pl
+qpa = ["xraydb"]                                     # mv.exp.qpa / fit_pattern mass attenuation
 ml = ["scikit-learn"]                                # mv.model estimators
 matminer = ["matminer"]
 cost = ["bibtexparser"]                               # mv.prop.cost price table

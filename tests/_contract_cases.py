@@ -683,6 +683,28 @@ def cases(tmp):
         mv.dft.write_inputs(md, str(tmp / "runs2"))
         return md
 
+    # A two-phase powder pattern for the quantitative-phase-analysis probes.
+    from pymatgen.core import Lattice, Structure
+
+    from matverse import _qpa
+    halite = Structure.from_spacegroup("Fm-3m", Lattice.cubic(5.64),
+                                       ["Na", "Cl"], [[0, 0, 0], [0.5] * 3])
+    corundum = Structure.from_spacegroup(
+        "R-3c", Lattice.hexagonal(4.759, 12.99), ["Al", "O"],
+        [[0, 0, 0.352], [0.306, 0, 0.25]])
+    qgrid = np.arange(20.0, 60.0, 0.02)
+    rad = _qpa.parse_radiation("CuKa")
+    qy = sum(w / (float(st.composition.weight) * float(st.volume))
+             * _qpa.render(_qpa.compute_sticks(st, rad.primary, (20.0, 60.0)),
+                           qgrid, rad, 0.0, 0.0, 0.0, (0.0035, -0.001, 0.006),
+                           0.4, 1.0)
+             for st, w in ((halite, 0.6), (corundum, 0.4)))
+    qy = 50000.0 * (qy / qy.max() + 0.03)
+    qpa_patterns = {"a": (qgrid, qy)}
+
+    def qpa_library():
+        return mv.data.from_structures([halite.copy(), corundum.copy()])
+
     # Derived objects built once and copied per probe, because building a slab
     # set or a band structure costs more than the probe does.
     olivine_md = olivine()
@@ -1166,6 +1188,13 @@ def cases(tmp):
         (mv.dft.presets, lambda: None, (), {}),
 
         # mv.exp
+        (mv.exp.qpa, qpa_library, (qpa_patterns,),
+         {"radiation": "CuKa", "names": ["halite", "corundum"],
+          "solid_solutions": False, "microabsorption": False,
+          "verbose": False}),
+        (mv.exp.fit_pattern, qpa_library, qpa_patterns["a"],
+         {"radiation": "CuKa", "names": ["halite", "corundum"],
+          "solid_solutions": False, "microabsorption": False}),
         (mv.exp.attach, patterned,
          ("xrd", np.zeros((3, 10)), np.linspace(10, 40, 10)), {}),
 
