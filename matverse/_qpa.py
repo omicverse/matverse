@@ -1069,3 +1069,56 @@ def campaign(fits: dict, standards: dict, chem: dict, chem_sigma: float, rad,
             + f"  [deficit={deficit:.3f} diffuse={i['diffuse']:.3f} "
               f"transfer={transfer:.3f} cov={covs}]")
     return rows, diag, templates
+
+
+# ----------------------------------------------------------------------------
+# Running many fits
+# ----------------------------------------------------------------------------
+
+def _blas_limit(n):
+    """Context limiting BLAS/OpenMP threads (no-op without threadpoolctl).
+    The least-squares problems here are small (n_points x tens): threaded BLAS
+    only adds synchronisation, and one thread keeps results reproducible."""
+    try:
+        from threadpoolctl import threadpool_limits
+        return threadpool_limits(limits=n)
+    except Exception:                                   # pragma: no cover
+        import contextlib
+        return contextlib.nullcontext()
+
+
+def available_cpus() -> int:
+    try:
+        import os
+        return max(1, len(os.sched_getaffinity(0)))
+    except Exception:                                   # pragma: no cover
+        import os
+        return max(1, os.cpu_count() or 1)
+
+
+_JOBS: dict = {}
+
+
+def _run_job(i):
+    fn, args, kwargs, blas = _JOBS["items"][i]
+    with _blas_limit(blas):
+        return fn(*args, **kwargs)
+
+
+def run_fits(items, n_jobs=1, blas_threads=1):
+    """Evaluate fit_sample(*args, **kwargs) for each item, in forked worker
+    processes when n_jobs > 1 (falls back to serial if that fails)."""
+    items = [(fit_sample, a, k, blas_threads) for a, k in items]
+    if n_jobs and n_jobs > 1 and len(items) > 1:
+        try:
+            import multiprocessing as mp
+            ctx = mp.get_context("fork")
+            _JOBS["items"] = items
+            with ctx.Pool(min(n_jobs, len(items))) as pool:
+                return pool.map(_run_job, range(len(items)), chunksize=1)
+        except Exception:                               # pragma: no cover
+            pass
+        finally:
+            _JOBS.clear()
+    with _blas_limit(blas_threads):
+        return [fn(*a, **k) for fn, a, k, _ in items]

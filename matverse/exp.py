@@ -410,7 +410,10 @@ def _chemistry_of(bulk_chemistry, chemistry_sigma):
           "solution is reported under its majority end-member; buckets are "
           "reported only at or above detection_limit. Mass attenuation comes "
           "from xraydb (pip install xraydb). Single-threaded runtime is roughly "
-          "10-60 s per sample for ~20 candidates; diagnostics (Rwp, deficit, "
+          "10-60 s per sample for ~20 candidates; samples are fitted in "
+          "parallel worker processes (n_jobs, default: the CPUs this process "
+          "may use) with single-threaded BLAS (blas_threads); diagnostics "
+          "(Rwp, deficit, "
           "diffuse metric, refined x, displacement, texture, Brindley tau, "
           "templates) are in uns[key_added] and are worth reading before "
           "reporting.",
@@ -421,6 +424,7 @@ def qpa(md: AnnData, patterns, radiation="CuKa", *, internal_standard=None,
         max_displacement_mm: float = 0.3, solid_solutions: bool = True,
         microabsorption: bool = True, preferred_orientation_axis=(0, 0, 1),
         names=None, key_added: str = "qpa", verbose: bool = True,
+        n_jobs: int | None = None, blas_threads: int = 1,
         fit_options: dict | None = None, campaign_options: dict | None = None):
     """Quantify every pattern; return the long table sample, phase, weight_fraction.
 
@@ -470,26 +474,35 @@ def qpa(md: AnnData, patterns, radiation="CuKa", *, internal_standard=None,
     log = print if verbose else (lambda *a: None)
 
     libs = {}
-    fits = {}
-    for s in samples:
-        tt, y = pats[s]
-        key = (len(tt), round(float(tt[0]), 6), round(float(tt[-1]), 6))
-        if key not in libs:
-            libs[key] = Q.Library(structs, rad, (float(tt[0]), float(tt[-1])), fo,
-                                  solid_solutions=solid_solutions,
-                                  microabsorption=microabsorption)
-            if libs[key].ss:
-                log("solid-solution tie lines: " + ", ".join(
-                    f"{c.name0}-{c.name1}" for c in libs[key].ss.values()))
-        d = sizes.get(s)
-        fits[s] = Q.fit_sample(s, tt, y, libs[key],
-                               particle_um=float(d) if d else None,
+    items = []
+    with Q._blas_limit(blas_threads):
+        for s in samples:
+            tt, y = pats[s]
+            key = (len(tt), round(float(tt[0]), 6), round(float(tt[-1]), 6))
+            if key not in libs:
+                libs[key] = Q.Library(structs, rad, (float(tt[0]), float(tt[-1])),
+                                      fo, solid_solutions=solid_solutions,
+                                      microabsorption=microabsorption)
+                if libs[key].ss:
+                    log("solid-solution tie lines: " + ", ".join(
+                        f"{c.name0}-{c.name1}" for c in libs[key].ss.values()))
+            d = sizes.get(s)
+            items.append(((s, tt, y, libs[key]),
+                          dict(particle_um=float(d) if d else None,
                                std_phase=stds[s][0], std_wt=stds[s][1],
-                               chem=chem.get(s), chem_sigma=sigma, opts=fo)
+                               chem=chem.get(s), chem_sigma=sigma, opts=fo)))
+    n_jobs = Q.available_cpus() if n_jobs is None else int(n_jobs)
+    log(f"fitting {len(samples)} patterns against {len(structs)} candidates "
+        f"({n_jobs} worker(s), {blas_threads} BLAS thread(s) each)")
+    fits = dict(zip(samples, Q.run_fits(items, n_jobs=n_jobs,
+                                        blas_threads=blas_threads)))
+    for s in samples:
         log(f"{s}: fitted {', '.join(fits[s].names)} (Rwp {fits[s].rwp:.3f})")
 
-    rows, diag, templates = Q.campaign(fits, stds, chem, sigma, rad, co,
-                                       microabsorption=microabsorption, log=log)
+    with Q._blas_limit(blas_threads):
+        rows, diag, templates = Q.campaign(fits, stds, chem, sigma, rad, co,
+                                           microabsorption=microabsorption,
+                                           log=log)
     table = pd.DataFrame(rows, columns=["sample", "phase", "weight_fraction"])
     dframe = pd.DataFrame(diag)
     for c in ("templates_applied", "masked_coverage", "solid_solution_x",
@@ -555,10 +568,12 @@ def fit_pattern(md: AnnData, two_theta, intensity, radiation="CuKa", *,
     for k, v in (fit_options or {}).items():
         setattr(fo, k, v)
     sp, sw = _standard_of(internal_standard)
-    lib = Q.Library(structs, rad, (float(tt[0]), float(tt[-1])), fo,
-                    solid_solutions=solid_solutions, microabsorption=microabsorption)
-    fit = Q.fit_sample("sample", tt, y, lib, particle_um=particle_size_um,
-                       std_phase=sp, std_wt=sw, opts=fo)
+    with Q._blas_limit(1):
+        lib = Q.Library(structs, rad, (float(tt[0]), float(tt[-1])), fo,
+                        solid_solutions=solid_solutions,
+                        microabsorption=microabsorption)
+        fit = Q.fit_sample("sample", tt, y, lib, particle_um=particle_size_um,
+                           std_phase=sp, std_wt=sw, opts=fo)
     if sp and fit.masses.get(sp, 0.0) > 0:
         w = Q.absolute_weights(fit.masses, sp, sw)
         w = {p: v / (1.0 - sw) for p, v in w.items()}
