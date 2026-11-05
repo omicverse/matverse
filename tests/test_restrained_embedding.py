@@ -191,6 +191,23 @@ class TestEmbedding:
         assert out.GetNumConformers() == 4
         assert engine._min_pair_rmsd(out) >= 0.5
 
+    def test_rigid_cage_ring_torsion(self):
+        """A ring torsion on a cage that ETKDG already satisfies must not be
+        refined out of its interval, and the cage must still close."""
+        from rdkit.Chem import AllChem
+        mol = _mol("C1C2CC3CC1CC(C2)C3")
+        ref = Chem.Mol(mol)
+        AllChem.EmbedMolecule(ref, randomSeed=1)
+        ring = list(mol.GetRingInfo().AtomRings()[0][:4])
+        t = rdMolTransforms.GetDihedralDeg(ref.GetConformer(), *ring)
+        out = mv.mol.embed_restrained(mol, {"torsions": [
+            {"atoms": ring, "lower": t - 5, "upper": t + 5}]}, num_confs=2, random_seed=42,
+            torsion_tol=2.0, distance_tol=0.03, clash_scale=0.55,
+            one_bond_slack=0.1, two_bond_slack=0.15)
+        for cid in (0, 1):
+            value = rdMolTransforms.GetDihedralDeg(out.GetConformer(cid), *ring)
+            assert t - 7 <= value <= t + 7
+
     def test_budget_exhaustion_is_a_search_error(self):
         mol = _mol("CCCC")
         # A 1-4 distance no butane can reach, with no proof hook supplied.
