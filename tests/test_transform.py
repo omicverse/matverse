@@ -140,9 +140,15 @@ class TestExpand:
         mv.pp.describe(out)
         assert set(out.obs["formula"]) == {"CuAu"}
 
-    def test_producing_nothing_names_the_usual_cause(self, oxides):
+    def test_producing_nothing_names_the_usual_cause(self, disordered):
+        """Needs a disordered input: since pymatgen-core 2026.10.31 an ordered
+        structure is returned unchanged without enumlib ever being called, so
+        an ordered input no longer exercises the missing-enumlib path."""
+        import shutil
+        if shutil.which("enum.x") or shutil.which("multienum.x"):
+            pytest.skip("enumlib is installed, so enumeration succeeds")
         with pytest.raises(ValueError, match="enumlib"):
-            mv.transform.expand(oxides, "EnumerateStructureTransformation",
+            mv.transform.expand(disordered, "EnumerateStructureTransformation",
                                 n=2, max_cell_size=1)
 
 
@@ -249,7 +255,32 @@ class TestSetting:
         mv.transform.setting(md, "a+b,a-b,c;0,0,0", key_added="bct")
         lattice = mv.structures(md, "bct")[0].lattice
         assert md.obs["bct_volume_ratio"].iloc[0] == pytest.approx(2.0)
-        assert lattice.abc[0] == pytest.approx(3.0 * 2 ** 0.5, abs=1e-3)
+        # a' = a + b and b' = a - b on a 3 x 4 x 5 cell: both are 5 long
+        # (sqrt(3^2 + 4^2)), and c is untouched.
+        assert lattice.abc == pytest.approx((5.0, 5.0, 5.0), abs=1e-6)
+        assert lattice.matrix[0] == pytest.approx([3.0, 4.0, 0.0], abs=1e-9)
+        assert lattice.matrix[1] == pytest.approx([3.0, -4.0, 0.0], abs=1e-9)
+
+    def test_a_permutation_swaps_the_lengths(self):
+        """'b,a,-c' makes the new a the old b, so the lengths swap with it.
+        pymatgen before pymatgen-core 2026.10.31 left them in place."""
+        md = mv.data.from_structures([self._orthorhombic()])
+        mv.pp.describe(md)
+        mv.transform.setting(md, "b,a,-c;0,0,0", key_added="swapped")
+        assert mv.structures(md, "swapped")[0].lattice.abc == \
+            pytest.approx((4.0, 3.0, 5.0))
+
+    def test_the_atoms_stay_where_they_were(self):
+        """The coordinates and the lattice must transform consistently: the
+        Cartesian positions are the physical content and cannot move."""
+        from pymatgen.core import Lattice, Structure
+        s = Structure(Lattice.orthorhombic(3.0, 4.0, 5.0), ["Cu", "Au"],
+                      [[0, 0, 0], [0.25, 0.5, 0.1]])
+        md = mv.data.from_structures([s])
+        mv.pp.describe(md)
+        mv.transform.setting(md, "a+b,a-b,c;0,0,0", key_added="bct")
+        moved = mv.structures(md, "bct")[0]
+        assert moved.cart_coords[1] == pytest.approx(s.cart_coords[1], abs=1e-9)
 
     def test_an_origin_shift_moves_the_coordinates_not_the_cell(self):
         md = mv.data.from_structures([self._orthorhombic()])
