@@ -273,8 +273,9 @@ for spec, key in [("2a,b,c;0,0,0", "doubled"),
 box.obs[[c for c in box.obs.columns if c.endswith("volume_ratio")]].round(3)"""),
 
     ("markdown", """\
-`a+b, a-b, c` is the one to look at: it doubles the volume and gives axes of
-3√2 and 4√2, and **no integer scaling of the axes reaches it**. That is the
+`a+b, a-b, c` is the one to look at: it doubles the volume and gives new axes
+that are the vector sum and difference of the old a and b — both 5 long on this
+3 × 4 cell — and **no integer scaling of the axes reaches it**. That is the
 transformation that turns a cubic cell into the body-centred tetragonal one.
 
 The other standing use is settings. The same space group has several, and
@@ -283,9 +284,9 @@ with the axes named differently, so a comparison across the two silently fails.
 
 ```{note}
 The convention is the International Tables one: the string names the **new basis
-in terms of the old**, and the lattice transforms as L′ = L·P. So `b,a,-c`
-permutes which Cartesian direction each axis points along and leaves the three
-lengths, as a set, unchanged — the cell is relabelled, not reshaped.
+in terms of the old**, (a′, b′, c′) = (a, b, c)·P — with the lattice vectors as
+rows, L′ = Pᵀ·L. So `b,a,-c` makes the new a the old b, lengths included: the
+cell is relabelled, not reshaped.
 
 `obs['<key>_volume_ratio']` is there because that distinction is easy to get
 backwards: a transformation meant to relabel that instead resized is visible

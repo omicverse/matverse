@@ -12,7 +12,7 @@ agent. Every entry names the state it reads and the state it writes, and each of
 those claims is verified by execution in `tests/test_contracts.py` rather than
 asserted.
 
-Public registry entries listed here: 234
+Public registry entries listed here: 266
 
 Look a function up by intent rather than by name:
 
@@ -530,6 +530,48 @@ Units, checkpointing, cluster submission and object summaries.
    iface.build
    iface.match
    iface.reactivity
+```
+
+
+## indent
+
+```{eval-rst}
+.. autosummary::
+   :toctree: reference/
+   :nosignatures:
+
+   indent.analyze_adhesive_sphere
+   indent.analyze_cycles
+   indent.analyze_sample
+   indent.analyze_temperature_series
+   indent.area_function
+   indent.calibrate_tip
+   indent.creep_law_fit
+   indent.drift_displacement
+   indent.feng_ngan
+   indent.film_hardness
+   indent.film_modulus_zero_depth
+   indent.fit_area_function
+   indent.fit_drift
+   indent.fracture_toughness
+   indent.hertz_fit
+   indent.hold_contact_depth
+   indent.hold_creep_rate
+   indent.hold_table
+   indent.imaged_area_factor
+   indent.jkr_fit
+   indent.jkr_work_of_adhesion
+   indent.nix_gao
+   indent.oliver_pharr
+   indent.pop_in_events
+   indent.pop_in_load
+   indent.properties_table
+   indent.rate_sensitivity_fit
+   indent.read_curve
+   indent.reduced_to_youngs
+   indent.segment
+   indent.unload_discontinuity
+   indent.zero_point
 ```
 
 
