@@ -12,7 +12,7 @@ agent. Every entry names the state it reads and the state it writes, and each of
 those claims is verified by execution in `tests/test_contracts.py` rather than
 asserted.
 
-Public registry entries listed here: 225
+Public registry entries listed here: 234
 
 Look a function up by intent rather than by name:
 
@@ -420,21 +420,27 @@ Publication defaults; every function draws onto an axis and returns it.
    :nosignatures:
 
    pl.bands
+   pl.chempot
    pl.distribution
    pl.elastic
    pl.embedding
    pl.fermi_surface
    pl.hull
+   pl.neb
    pl.pareto
    pl.parity
    pl.periodic_table
+   pl.phonon
+   pl.pourbaix
    pl.provenance
    pl.rank_elements_groups
+   pl.rdf_msd
    pl.scatter
    pl.set_style
    pl.spacegroups
    pl.spectra
    pl.structure
+   pl.wulff
 ```
 
 
@@ -538,12 +544,15 @@ Units, checkpointing, cluster submission and object summaries.
    mol.bonds
    mol.descriptors
    mol.dissociation
+   mol.embed_restrained
    mol.fragments
    mol.from_molecules
    mol.functional_groups
    mol.match
    mol.point_group
    mol.quasirrho
+   mol.restraint_bounds
+   mol.vendor_restraint_engine
 ```
 
 
@@ -647,7 +656,7 @@ arguments — `obs['energy_{level}']` becomes `obs['energy_emt']` when you pass
 | `mv.md.melt_quench` | `obsm['structures']['amorphous_{level}']`, `obs['amorphous_density_{level}']`, `obs['amorphous_density_ratio_{level}']`, `uns['levels']['{level}']` |
 | `mv.md.occupancy` | `obs['occupied_fraction_{level}']`, `obs['occupancy_entropy_{level}']`, `obs['occupancy_peak_{level}']` |
 | `mv.md.rdf` | `obsm['rdf_md_{level}']`, `obsm['coordination_md_{level}']`, `uns['grids']`, `obs['first_shell_{level}']`, `obs['first_shell_coordination_{level}']`, `uns['levels']['{level}']` |
-| `mv.md.run` | `obs['md_energy_{level}']`, `obs['md_temperature_{level}']`, `obs['msd_{level}']`, `obs['diffusivity_{level}']`, `obs['md_volume_{level}']`, `layers['diffusivity_{level}']`, `obsm['structures']['md_{level}']`, `uns['levels']['{level}']` |
+| `mv.md.run` | `obs['md_energy_{level}']`, `obs['md_temperature_{level}']`, `obs['msd_{level}']`, `obs['diffusivity_{level}']`, `obs['md_volume_{level}']`, `obsm['md_temperature_trace_{level}']`, `obsm['md_msd_trace_{level}']`, `uns['grids']`, `layers['diffusivity_{level}']`, `obsm['structures']['md_{level}']`, `uns['levels']['{level}']` |
 | `mv.md.sites` | `obs['md_sites_{species}_{level}']`, `obs['md_site_spread_{species}_{level}']`, `obs['md_site_visits_{species}_{level}']` |
 | `mv.md.sweep` | `obsm['md_volume_{level}']`, `obsm['md_energy_{level}']`, `obsm['md_diffusivity_{level}']`, `obs['thermal_expansion_{level}']`, `obs['activation_energy_{level}']`, `uns['grids']`, `uns['levels']['{level}']` |
 | `mv.md.van_hove` | `obsm['van_hove_self_{level}']`, `obsm['van_hove_distinct_{level}']`, `uns['grids']`, `obs['van_hove_rms_{level}']`, `obs['van_hove_peak_{level}']`, `obs['van_hove_jump_{level}']` |
@@ -664,7 +673,7 @@ arguments — `obs['energy_{level}']` becomes `obs['energy_emt']` when you pass
 | `mv.surf.surface_energy` | `obs['surface_energy_{level}']`, `obs['surface_energy_{level}_off_stoichiometry']` |
 | `mv.surf.surface_energy_chempot` | `facets.obs['surface_energy_{level}']` |
 | `mv.surf.volcano` | `obs['volcano_activity']`, `obs['distance_from_optimum']`, `uns['volcano']` |
-| `mv.surf.wulff` | `facets.obs['wulff_area_fraction_{level}']`, `bulk.obs['wulff_effective_radius_{level}']`, `bulk.obs['wulff_shape_factor_{level}']` |
+| `mv.surf.wulff` | `facets.obs['wulff_area_fraction_{level}']`, `bulk.obs['wulff_effective_radius_{level}']`, `bulk.obs['wulff_shape_factor_{level}']`, `bulk.uns['wulff']` |
 | `mv.thermo.calphad` | `obs['calphad_phases']`, `obs['calphad_n_phases']`, `obs['calphad_major_phase']`, `obs['calphad_major_fraction']`, `uns['calphad']` |
 | `mv.thermo.chempot_diagram` | `obs['chempot_stable_{level}']`, `obs['chempot_window_{level}']`, `uns['chempot_diagram']` |
 | `mv.thermo.chempot_limits` | `uns['chempot_limits']` |
