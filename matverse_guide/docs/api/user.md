@@ -12,7 +12,7 @@ agent. Every entry names the state it reads and the state it writes, and each of
 those claims is verified by execution in `tests/test_contracts.py` rather than
 asserted.
 
-Public registry entries listed here: 263
+Public registry entries listed here: 266
 
 Look a function up by intent rather than by name:
 
@@ -586,12 +586,15 @@ Units, checkpointing, cluster submission and object summaries.
    mol.bonds
    mol.descriptors
    mol.dissociation
+   mol.embed_restrained
    mol.fragments
    mol.from_molecules
    mol.functional_groups
    mol.match
    mol.point_group
    mol.quasirrho
+   mol.restraint_bounds
+   mol.vendor_restraint_engine
 ```
 
 

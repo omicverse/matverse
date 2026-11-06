@@ -74,6 +74,8 @@ alloys = ["pymatgen-analysis-alloys", "smol"]
 # through cairo, and without it the bindings fail to import with a
 # ValueError from the format table rather than a missing-library error.
 molecules = ["openbabel-wheel"]
+# mv.mol.restraint_bounds / embed_restrained / vendor_restraint_engine.
+conformers = ["rdkit"]
 # mv.prop.phonon(method='phonopy') and mv.prop.dispersion. seekpath is
 # separate from phonopy and is what supplies the high-symmetry path, so a
 # phonopy without it computes a density of states but no dispersion.
