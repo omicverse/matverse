@@ -506,4 +506,423 @@ is a saddle rather than a minimum, and a thermochemical correction to a
 structure that is not a minimum corrects nothing — better to see the count than
 to have it folded in silently.
 ```"""),
+
+    ("markdown", """\
+## Conformers under restraints
+
+Everything above takes the geometry as given. Often the geometry is what you
+need, and you already know something about it: an NMR experiment says two
+protons are within 3 Å (a NOE), a ³J coupling pins a torsion through the Karplus
+relation, a crystal structure or a pharmacophore fixes a distance. Free
+conformer generators do not know any of that, and filtering a free ensemble
+afterwards fails exactly when it matters — when the restrained region is a
+small corner of conformational space.
+
+Restrained **distance geometry** builds the knowledge in from the start.
+`mv.mol` has three functions for it, on RDKit molecules rather than a dataset,
+because a conformer search is a per-molecule computation whose result is
+coordinates, and RDKit is where stereochemistry, force fields and distance
+geometry live:
+
+| function | what it does |
+|---|---|
+| `mv.mol.restraint_bounds` | the lower/upper interatomic distance matrices the restraints imply |
+| `mv.mol.embed_restrained` | conformers that satisfy the restraints and keep the molecule's graph and stereochemistry |
+| `mv.mol.vendor_restraint_engine` | copy the engine (numpy + RDKit only) into a package that cannot import matverse |
+
+They need RDKit: `pip install "matverse[conformers]"`.
+
+### Distance geometry in one paragraph
+
+A conformation is fixed, up to its mirror image, by its interatomic distances
+(Crippen & Havel, 1988). The molecular graph already bounds most of them: a
+bond length (1-2 pairs), a bond angle (1-3), a torsion between cis and trans
+(1-4), van der Waals contact as a lower bound for everything further apart.
+Those bounds are made mutually consistent by **triangle smoothing** —
+`u_ij ≤ u_ik + u_kj` and `l_ij ≥ l_ik − u_kj` for every triple, iterated —
+then distances are drawn inside the bounds, turned into coordinates by an
+eigendecomposition of the metric matrix, and refined. RDKit's ETKDG adds
+experimental torsion preferences on top
+([Riniker & Landrum, 2015](https://doi.org/10.1021/acs.jcim.5b00654)).
+A restraint is simply a tighter entry in the bounds matrix *before* smoothing —
+and smoothing then propagates it to pairs you never mentioned."""),
+
+    ("code", """\
+import matplotlib.pyplot as plt
+from rdkit import Chem
+from rdkit.Chem import rdMolAlign, rdMolTransforms
+
+# Ac-Ala-NHMe, the alanine dipeptide: the standard test case of
+# conformational analysis. AddHs appends the hydrogens after the heavy atoms,
+# so the SMILES order of atoms 0-9 is kept.
+dipeptide = Chem.AddHs(Chem.MolFromSmiles("CC(=O)N[C@@H](C)C(=O)NC"))
+
+PHI = [1, 3, 4, 6]          # C(=O)-N-CA-C
+PSI = [3, 4, 6, 8]          # N-CA-C(=O)-N
+H_N1, H_N2 = 13, 18         # the two amide hydrogens
+H_METHYL = [15, 16, 17]     # the alanine side-chain methyl hydrogens
+
+pd.DataFrame([{"index": a.GetIdx(), "element": a.GetSymbol(),
+               "bonded to": [n.GetIdx() for n in a.GetNeighbors()]}
+              for a in dipeptide.GetAtoms() if a.GetIdx() in range(10) or a.GetIdx() in (13, 18)])"""),
+
+    ("markdown", """\
+Its backbone has two free torsions, φ and ψ, and the familiar Ramachandran
+regions are combinations of them:
+
+| region | φ | ψ |
+|---|---|---|
+| right-handed α helix (αR) | −63° | −43° |
+| β strand | −120° | +130° |
+| polyproline II (PPII) | −75° | +145° |
+| C7eq (γ-turn, intramolecular H-bond) | −83° | +73° |
+| left-handed helix (αL) | +60° | +45° |
+
+### What the graph alone allows
+
+With no restraints, `restraint_bounds` returns RDKit's smoothed topological
+bounds. A bond is pinned to a few hundredths of an ångström, an angle almost
+as tightly, a 1-4 pair spans its whole cis-to-trans range, and anything further
+is loose:"""),
+
+    ("code", """\
+def bounds_table(lower, upper, pairs):
+    return pd.DataFrame([{"pair": name, "atoms": (i, j), "lower Å": lower[i, j],
+                          "upper Å": upper[i, j]} for name, (i, j) in pairs.items()]).round(3)
+
+PAIRS = {"1-2  C1–N3 (bond)": (1, 3), "1-3  C1–CA4 (angle)": (1, 4),
+         "1-4  C1–C6 (φ)": (1, 6), "1-4  N3–N8 (ψ)": (3, 8),
+         "HN1–HN2 (sequential amide NOE)": (H_N1, H_N2)}
+lower0, upper0 = mv.mol.restraint_bounds(dipeptide)
+bounds_table(lower0, upper0, PAIRS)"""),
+
+    ("markdown", """\
+### A torsion restraint becomes a 1-4 interval — without its sign
+
+A bounds matrix holds distances, and a torsion enters only through the 1-4
+distance it implies:
+
+`d₁₄² = a² + b² + c² − 2ab cos α − 2bc cos β + 2ac (cos α cos β − sin α sin β cos φ)`
+
+That depends on **cos φ**. φ = +60° and φ = −60° are mirror images with the
+same 1-4 distance, so no bounds matrix can tell them apart. `restraint_bounds`
+evaluates this expression over the whole box of bond lengths and angles the
+matrix allows, by interval arithmetic with subdivision and outward rounding, so
+the interval is guaranteed to contain every 1-4 distance the restraint permits:"""),
+
+    ("code", """\
+rows = []
+for label, (lo, hi) in {"φ in [+55, +65]": (55, 65), "φ in [-65, -55]": (-65, -55),
+                        "φ in [-130, -110]": (-130, -110)}.items():
+    lower, upper = mv.mol.restraint_bounds(
+        dipeptide, {"torsions": [{"atoms": PHI, "lower": lo, "upper": hi}]})
+    rows.append({"restraint": label, "C1–C6 lower Å": lower[1, 6], "C1–C6 upper Å": upper[1, 6]})
+pd.DataFrame(rows).round(3)"""),
+
+    ("markdown", """\
+The first two rows are identical, as the formula says they must be. The sign is
+fixed later, in the embedding: after ETKDG has produced coordinates,
+`embed_restrained` chooses the torsion branch and orients the molecule onto it
+before refinement.
+
+### Smoothing propagates a restraint
+
+A NOE between the two amide hydrogens of 2.8 Å or less is characteristic of
+helical backbones. Restraining that one pair moves entries nobody restrained:"""),
+
+    ("code", """\
+noe = {"distances": [{"atoms": [H_N1, H_N2], "lower": 1.8, "upper": 2.8}]}
+lower1, upper1 = mv.mol.restraint_bounds(dipeptide, noe)
+
+changed = (np.abs(upper1 - upper0) > 1e-6) | (np.abs(lower1 - lower0) > 1e-6)
+print(f"one restraint changed {int(changed.sum() // 2)} of "
+      f"{dipeptide.GetNumAtoms() * (dipeptide.GetNumAtoms() - 1) // 2} pairs")
+bounds_table(lower1, upper1, PAIRS)"""),
+
+    ("markdown", """\
+The restraint itself is in (1.8–2.8 Å), and so are its consequences — but look
+at the 1-4 rows: their lower bounds fell below 1 Å. Once any restraint is
+present, every pair beyond 1-3 starts from a loose `[0, far]` rather than from
+RDKit's topological preferences, and is narrowed only by the restraints and by
+smoothing. The restrained matrix is a feasibility region for the search, not a
+description of plausible geometry; bond lengths, angles, clashes and
+stereochemistry are enforced afterwards, on the embedded conformer. The 1-2
+and 1-3 pairs keep their topological values; `one_bond_slack` and
+`two_bond_slack` widen them, which the force-field refinement below needs room
+for.
+
+## Embedding under restraints
+
+`embed_restrained` returns a **new** molecule — the input is never modified —
+whose conformers each pass an admissibility check: every requested coordinate
+within its tolerance, the input's CIP and E/Z labels reproduced from 3D, bond
+lengths and angles within the 1-2/1-3 bounds, and no severe clash. Under the
+hood: ETKDG on the restrained bounds matrix with a hashed per-attempt seed,
+the torsion sign fixed, then MMFF94s refinement with flat-bottom restraints.
+
+Torsions are **signed degrees on a circle**. An interval with `lower > upper`
+is the arc that wraps through 180°: `[150, -170]` is the 40° arc from +150°
+through ±180° to −170°. Only the literal `[-180, 180]` is the full circle."""),
+
+    ("code", """\
+SLACK = dict(one_bond_slack=0.1, two_bond_slack=0.15,
+             distance_tol=0.03, angle_tol=2.0, torsion_tol=2.0)
+
+REGIONS = {"αR":   ((-75, -55), (-55, -35)),
+           "β":    ((-140, -110), (115, 145)),
+           "PPII": ((-85, -65), (150, -170)),     # ψ wraps through 180
+           "αL":   ((50, 70), (30, 50))}
+
+
+def phi_psi(mol, conf_id=0):
+    conf = mol.GetConformer(conf_id)
+    return (rdMolTransforms.GetDihedralDeg(conf, *PHI),
+            rdMolTransforms.GetDihedralDeg(conf, *PSI))
+
+
+def cip(mol, conf_id=0):
+    probe = Chem.Mol(mol)
+    Chem.AssignStereochemistryFrom3D(probe, confId=conf_id)
+    return probe.GetAtomWithIdx(4).GetProp("_CIPCode")
+
+
+rows, folded = [], {}
+for name, (phi, psi) in REGIONS.items():
+    out = mv.mol.embed_restrained(dipeptide, {"torsions": [
+        {"atoms": PHI, "lower": phi[0], "upper": phi[1]},
+        {"atoms": PSI, "lower": psi[0], "upper": psi[1]}]}, random_seed=7, **SLACK)
+    folded[name] = out
+    f, s = phi_psi(out)
+    rows.append({"region": name, "φ requested": phi, "φ": f, "ψ requested": psi, "ψ": s,
+                 "CA label": cip(out)})
+pd.DataFrame(rows).round(1)"""),
+
+    ("markdown", """\
+Every conformer is in its box, and the alanine stays (S) — L-alanine — in all
+four, including αL, which mirror symmetry would otherwise reach most cheaply by
+inverting the stereocentre.
+
+The values sit at the edges of their intervals. That is the flat-bottom
+refinement doing what it is told: inside the interval there is no restraint
+force, so the force field relaxes toward its own preference until it meets the
+wall. A restraint is an interval, not a target; if you want the middle, ask
+for a narrow interval."""),
+
+    ("code", """\
+fig, ax = plt.subplots(figsize=(4.5, 4.5))
+for k, (name, (phi, psi)) in enumerate(REGIONS.items()):
+    colour = f"C{k}"
+    for lo, hi in ([psi] if psi[0] <= psi[1] else [(psi[0], 180), (-180, psi[1])]):
+        ax.add_patch(plt.Rectangle((phi[0], lo), phi[1] - phi[0], hi - lo,
+                                   alpha=0.25, color=colour))
+    f, s = phi_psi(folded[name])
+    ax.plot(f, s, "o", color=colour, label=name)
+ax.set_xlim(-180, 180)
+ax.set_ylim(-180, 180)
+ax.set_xlabel("φ (degrees)")
+ax.set_ylabel("ψ (degrees)")
+ax.set_title("requested boxes and embedded conformers")
+ax.legend(loc="lower left")"""),
+
+    ("markdown", """\
+### A hydrogen bond restraint, and what it does not decide
+
+The C7 conformers close a seven-membered ring with a hydrogen bond from the
+second amide N–H to the acetyl oxygen. A distance restraint O2···H18 of
+1.8–2.2 Å asks for it — and there are **two** C7 minima, C7eq and C7ax, at
+roughly opposite signs of φ and ψ. A distance cannot choose between them. Ask
+for three conformers and look:"""),
+
+    ("code", """\
+hbond = {"distances": [{"atoms": [2, H_N2], "lower": 1.8, "upper": 2.2}]}
+three = mv.mol.embed_restrained(dipeptide, hbond, num_confs=3, random_seed=7, **SLACK)
+pd.DataFrame([{"conformer": c, "φ": phi_psi(three, c)[0], "ψ": phi_psi(three, c)[1],
+               "O···H Å": np.linalg.norm(three.GetConformer(c).GetPositions()[2]
+                                          - three.GetConformer(c).GetPositions()[H_N2])}
+              for c in range(3)]).round(2)"""),
+
+    ("markdown", """\
+Both minima appear, and two of the three conformers are the same structure:
+without `min_rmsd`, nothing asks the ensemble to be diverse. To get C7eq
+specifically, add what the distance cannot say — the sign of φ:"""),
+
+    ("code", """\
+c7eq = mv.mol.embed_restrained(dipeptide, {
+    **hbond, "torsions": [{"atoms": PHI, "lower": -100, "upper": -60}]},
+    random_seed=7, **SLACK)
+print("C7eq: φ = {:.1f}, ψ = {:.1f}".format(*phi_psi(c7eq)))"""),
+
+    ("markdown", """\
+### Ambiguous restraints: an OR over pairs
+
+An NOE to a methyl group is the textbook ambiguity: the three methyl protons
+are equivalent on the NMR timescale, so a cross-peak says that *one of them*
+is close, not which (Nilges, 1995).
+`ambiguous_distances` takes the alternatives explicitly; each entry must be
+satisfied by at least one of its pairs, and separate entries must all hold.
+
+A pairwise bounds matrix cannot hold an OR, so a genuine OR group adds nothing
+to `restraint_bounds` — it would be wrong to tighten any single pair.
+`embed_restrained` instead branches over the alternatives in a fixed order:"""),
+
+    ("code", """\
+methyl_noe = {"ambiguous_distances": [
+    {"alternatives": [[H_N2, h] for h in H_METHYL], "lower": 1.8, "upper": 2.7}]}
+
+with_or = {**noe, **methyl_noe}               # the helical NOE plus the OR group
+same = all(np.array_equal(a, b) for a, b in
+           zip(mv.mol.restraint_bounds(dipeptide, noe), mv.mol.restraint_bounds(dipeptide, with_or)))
+print("bounds unchanged by adding the OR group:", same)
+
+out = mv.mol.embed_restrained(dipeptide, methyl_noe, random_seed=7, **SLACK)
+pos = out.GetConformer(0).GetPositions()
+{f"H{H_N2}–H{h}": round(float(np.linalg.norm(pos[H_N2] - pos[h])), 2) for h in H_METHYL}"""),
+
+    ("markdown", """\
+One methyl proton is at the limit, the other two are where the methyl's
+geometry puts them. That is the right answer to an ambiguous restraint.
+
+### When the restraints cannot be met
+
+There are three different reasons a restrained embedding can come back empty,
+and they call for different responses, so they are different exceptions — all
+subclasses of `mv.mol.RestraintError`:
+
+| exception | meaning | response |
+|---|---|---|
+| `RestraintValidationError` | the request is malformed: an index out of range, an angle whose atoms are not a bonded path, `lower > upper` on a distance | fix the input |
+| `RestraintSearchError` | nothing admissible was found within `max_attempts` — not a proof that nothing exists | widen tolerances, raise the budget, or look for a contradiction |
+| `RestraintInfeasibleError` | *your* `proof` hook certified that the restraints contradict | report it; searching longer will not help |
+
+The engine never claims a proof it does not have: an impossible restraint
+without a `proof` hook is a search error. The hook is how a caller who *can*
+prove infeasibility says so. Here, a 1-4 distance of at least 5 Å is
+impossible — three bonds of at most ~1.6 Å cannot span it — and a short proof
+says exactly that: no distance can exceed the summed bond lengths of the
+shortest bonded path between its atoms."""),
+
+    ("code", """\
+def chain_length_proof(mol, restraints):
+    # a certificate (truthy) if any distance exceeds the bonded path between its atoms
+    for entry in restraints.get("distances", []):
+        i, j = entry["atoms"]
+        path = Chem.GetShortestPath(mol, i, j)
+        if entry["lower"] > 1.6 * (len(path) - 1):
+            return {"pair": (i, j), "path_bonds": len(path) - 1, "lower": entry["lower"]}
+    return None
+
+
+attempts = {
+    "angle on a non-path": ({"angles": [{"atoms": [0, 3, 4], "lower": 100, "upper": 120}]}, {}),
+    "impossible 1-4 distance": ({"distances": [{"atoms": [1, 6], "lower": 5.0, "upper": 5.5}]}, {}),
+    "same, with a proof": ({"distances": [{"atoms": [1, 6], "lower": 5.0, "upper": 5.5}]},
+                           {"proof": chain_length_proof}),
+}
+for label, (restraints, extra) in attempts.items():
+    try:
+        mv.mol.embed_restrained(dipeptide, restraints, max_attempts=5, **SLACK, **extra)
+    except mv.mol.RestraintError as exc:
+        print(f"{label:25s} {type(exc).__name__}: {exc}")"""),
+
+    ("markdown", """\
+### Ensembles
+
+NMR structure determination, docking and conformer-averaged properties want an
+**ensemble**, not one structure. `num_confs` asks for several; `min_rmsd` makes
+them distinct — admissible conformers are diversified by rotating unrestrained
+acyclic rotors and selected greedily so that every pair is at least `min_rmsd`
+apart in symmetry-corrected heavy-atom RMSD. Under the helical NOE from above:"""),
+
+    ("code", """\
+ensemble = mv.mol.embed_restrained(dipeptide, noe, num_confs=5, random_seed=9,
+                                   min_rmsd=0.5, max_attempts=200, **SLACK)
+heavy = Chem.RemoveHs(ensemble)
+n = ensemble.GetNumConformers()
+rmsd = np.array([[0.0 if a == b else rdMolAlign.GetBestRMS(heavy, heavy, a, b)
+                  for b in range(n)] for a in range(n)])
+print("φ/ψ:", [tuple(round(x) for x in phi_psi(ensemble, c)) for c in range(n)])
+print("HN–HN Å:", [round(float(np.linalg.norm(ensemble.GetConformer(c).GetPositions()[H_N1]
+                                            - ensemble.GetConformer(c).GetPositions()[H_N2])), 2)
+                   for c in range(n)])
+print(f"smallest pairwise heavy-atom RMSD: {rmsd[~np.eye(n, dtype=bool)].min():.2f} Å")
+pd.DataFrame(rmsd).round(2)"""),
+
+    ("markdown", """\
+Every member satisfies the NOE, and they are pairwise at least 0.5 Å apart.
+Some share φ and ψ: RMSD counts every heavy atom, so conformers that differ only
+in the terminal acetyl and N-methyl groups count as distinct. If backbone
+diversity is what you need, restrain or compare the backbone.
+
+The search is **deterministic for a seed**: each attempt's RDKit seed is a hash
+of `random_seed` and the attempt number, so the same call gives the same
+conformers on any machine with the same RDKit, and changing an unrelated
+restraint does not reshuffle the attempts."""),
+
+    ("code", """\
+again = mv.mol.embed_restrained(dipeptide, noe, num_confs=5, random_seed=9,
+                                min_rmsd=0.5, max_attempts=200, **SLACK)
+print("same seed, same coordinates:",
+      all(np.allclose(ensemble.GetConformer(c).GetPositions(),
+                      again.GetConformer(c).GetPositions()) for c in range(n)))"""),
+
+    ("markdown", """\
+### Taking the engine with you
+
+Sometimes the code that needs restrained conformers has to run where matverse
+is not installed — a plugin for another program, a package checked in a clean
+environment. The engine imports nothing from matverse (numpy and RDKit only),
+and `vendor_restraint_engine` copies it into a directory for a relative import.
+Below, the copy is imported in a fresh interpreter in which `import matverse`
+is made to fail:"""),
+
+    ("code", """\
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+pkg = Path(tempfile.mkdtemp()) / "mypkg"
+path = mv.mol.vendor_restraint_engine(pkg)
+(pkg / "__init__.py").write_text("from ._restrained_embedding import embed_restrained, RestraintError\\n")
+
+probe = (
+    "import sys; sys.modules['matverse'] = None\\n"
+    "import mypkg\\n"
+    "from rdkit import Chem\\n"
+    "m = mypkg.embed_restrained(Chem.AddHs(Chem.MolFromSmiles('CCO')), num_confs=2,\\n"
+    "                           one_bond_slack=0.1, two_bond_slack=0.15)\\n"
+    "print('conformers:', m.GetNumConformers())\\n")
+run = subprocess.run([sys.executable, "-c", probe], cwd=pkg.parent,
+                     capture_output=True, text=True, check=True)
+print(Path(path).name, "->", run.stdout.strip())"""),
+
+    ("markdown", """\
+Wrap the copied functions in the target's own API: translate each `Restraint*`
+error into that contract's exception class, and pass its numeric rules as the
+keywords (`distance_envelope`, `torsion_tol`, `one_bond_slack`, …) rather than
+editing the file.
+
+```{admonition} Pitfalls
+:class: warning
+- **Atom indices refer to the molecule you pass.** Add hydrogens *before*
+  choosing indices for restraints on hydrogens; `Chem.AddHs` appends them, so
+  heavy-atom indices from the SMILES survive.
+- **Zero slack is strict.** With the defaults the admissibility check demands
+  RDKit's exact topological 1-2/1-3 bounds, which a force-field-refined
+  structure rarely meets; small slacks (0.1 Å, 0.15 Å here) are realistic.
+- **A torsion interval is an arc.** `[-170, 150]` is 320° wide; the 40° arc
+  through 180° is `[150, -170]`.
+- **Angles and torsions follow bonds.** An angle `i-j-k` needs bonds `i-j` and
+  `j-k`; anything else is a validation error, not a geometric request.
+- **A search error is not a proof.** Only your `proof` hook can turn "not
+  found" into "does not exist".
+```
+
+**References.** G. M. Crippen, T. F. Havel, *Distance Geometry and Molecular
+Conformation* (Research Studies Press, 1988) · J. M. Blaney, J. S. Dixon,
+*Rev. Comput. Chem.* **5**, 299 (1994) · S. Riniker, G. A. Landrum,
+*J. Chem. Inf. Model.* **55**, 2562 (2015) · T. A. Halgren,
+*J. Comput. Chem.* **20**, 720 (1999) — MMFF94s · M. Nilges,
+*J. Mol. Biol.* **245**, 645 (1995) — ambiguous distance restraints ·
+K. Wüthrich, *NMR of Proteins and Nucleic Acids* (Wiley, 1986) — NOE distances."""),
 ]

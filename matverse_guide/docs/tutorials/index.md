@@ -1,7 +1,7 @@
 # Tutorials
 
-Each tutorial is a working pipeline rather than a feature tour, and sixteen of
-the seventeen are **executed notebooks** — every number and figure on those pages is the
+Each tutorial is a working pipeline rather than a feature tour, and seventeen of
+the eighteen are **executed notebooks** — every number and figure on those pages is the
 real output of the code above it, produced when the documentation was built.
 They run on a small library and a calculator that ships with matverse, so you
 can execute them before deciding whether to install a machine-learned potential.
@@ -132,6 +132,14 @@ high-entropy alloy sit above the hull and form anyway.
 Point groups, covalent bonds and fragments — on the same axes as crystals,
 because the composition matrix never cared whether a formula unit repeats.
 :::
+
+:::{grid-item-card} Nanoindentation {octicon}`arrow-down;1em;`
+:link: indentation
+:link-type: doc
+
+Raw load–displacement records to modulus, hardness, creep, toughness and
+adhesion — every instrument artifact corrected as an explicit step.
+:::
 ::::
 
 ## Plumbing
@@ -209,6 +217,7 @@ structure_and_bands
 interfaces
 disorder
 molecules
+indentation
 from_pymatgen
 data_io
 infrastructure

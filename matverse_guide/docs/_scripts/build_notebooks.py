@@ -31,6 +31,7 @@ NOTEBOOKS = [
     "disorder",
     "from_pymatgen",
     "molecules",
+    "indentation",
     "data_io",
     "infrastructure",
 ]
