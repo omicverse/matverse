@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### `mv.transform.setting` had the convention backwards, and so did pymatgen
+
+The v0.1.41 note below decided that `b,a,-c` leaving the lengths in place was
+right. It was not: pymatgen's `JonesFaithfulTransformation.transform_lattice`
+returned `L·P` where the International Tables convention, with lattice vectors
+as rows, gives `Pᵀ·L`. pymatgen-core 2026.10.31 fixed it, which is how the
+tests noticed — they had been asserting the old answer (3√2 for `a+b` on a
+3 × 4 × 5 cell, which is |3·(1, 1, 0)|, not |a + b| = 5).
+
+The bug was worse than a relabelling: the fractional coordinates were already
+transformed correctly, so for a non-symmetric `P` the old lattice moved the
+atoms. `mv.transform.setting` now computes `Pᵀ·L` itself, so the cell is the
+same whichever pymatgen is installed, and the tests check that `b,a,-c` swaps
+the lengths and that Cartesian positions are unchanged.
+
+`mv.transform.expand`'s missing-enumlib test used an ordered input. pymatgen-core
+2026.10.31 returns an ordered structure unchanged without calling enumlib, so
+the test now enumerates a disordered one, and skips where enumlib is installed.
+
 ### Six plots the analysis namespaces produced data for and `mv.pl` could not draw
 
 - `mv.pl.phonon` — the DOS from `mv.prop.phonon`, in THz, with the dispersion
