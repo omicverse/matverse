@@ -596,4 +596,158 @@ def fit_pattern(md: AnnData, two_theta, intensity, radiation="CuKa", *,
     return table
 
 
-__all__ += ["qpa", "fit_pattern"]
+@register_function(
+    aliases=["amorphous content", "amorphous quantification",
+             "standard addition xrd", "spiked and unspiked patterns",
+             "neat and spiked specimens", "internal standard amorphous",
+             "glass content from xrd", "xrf mass balance phase analysis",
+             "replicate samples qpa", "absolute phase quantification"],
+    category="exp",
+    description="Absolute phase composition INCLUDING the amorphous fraction "
+                "for samples measured as neat and/or spiked specimens: joint "
+                "whole-pattern refinement of each sample's specimens (shared "
+                "per-phase Debye-Waller B, broadening, texture, strain), then "
+                "the amorphous fraction from standard addition (spike already "
+                "in the powder, neat pattern as reference), the classical "
+                "internal standard (gated by absorption contrast), and "
+                "single-carrier element balances from bulk chemistry, combined "
+                "by inverse variance and pooled over replicate groups.",
+    produces={"uns": ["{key_added}"]},
+    examples=["md = mv.data.from_cif('cifs/'); "
+              "res = mv.exp.qpa_amorphous(md, 'samples.json', "
+              "internal_standard='internal_standard.json', "
+              "bulk_chemistry='xrf.json', chemistry_sigma=1.5, "
+              "radiation=[(1.540598, 1.0), (1.544426, 0.5)], "
+              "goniometer_radius_mm=240)",
+              "md.uns['qpa_amorphous']['estimators']  # every G estimate, used or not"],
+    related=["mv.exp.qpa", "mv.exp.fit_pattern", "mv.exp.match_xrd"],
+    notes="Weights are fractions of each ORIGINAL (unspiked) powder, summing "
+          "to 1, rows below detection_limit dropped. An iso-phase spike needs "
+          "the neat pattern; a foreign spike that absorbs much more or less "
+          "than the matrix is microabsorption-biased (G too low) and is only "
+          "used with particle sizes (Brindley) or a small contrast. Element "
+          "balances assume the element is absent from the amorphous fraction; "
+          "they are lower bounds otherwise, so the largest per specimen is "
+          "kept unless amorphous_composition names the glass chemistry. "
+          "Samples of one group (same recipe and raw-material lots) share "
+          "the amorphous fraction; their crystalline ratios stay per sample. "
+          "Use mv.exp.qpa instead when crystalline phases may be missing from "
+          "the library (open-set 'unknown').",
+)
+def qpa_amorphous(md: AnnData, specimens, radiation="CuKa", *,
+                  internal_standard=None, bulk_chemistry=None,
+                  chemistry_sigma=None, groups=None, amorphous_composition=None,
+                  particle_size_um=None, phases=None,
+                  detection_limit: float = 0.03,
+                  goniometer_radius_mm: float | None = None,
+                  max_displacement_mm: float = 0.3, ratio_sigma: float = 0.015,
+                  max_absorption_contrast: float = 0.5, base_dir=None,
+                  names=None, key_added: str = "qpa_amorphous",
+                  verbose: bool = True, n_jobs: int | None = None,
+                  blas_threads: int = 1, fit_options: dict | None = None):
+    """Original-powder composition with amorphous content; long table out.
+
+    ``specimens``: ``{sample: {role: file or (2θ, I)}}`` — roles such as
+    ``neat`` / ``spiked`` — or ``{sample: {'specimens': {...}, 'batch': g}}``,
+    or a JSON file of either shape (relative paths resolve against its folder
+    or ``base_dir``). ``internal_standard``: ``{sample: {'phase', 'weight_fraction'
+    (of the SPIKED specimen's total mass), 'specimen'?} or None}`` (dict, JSON
+    file, or ``{'samples': ...}``). ``bulk_chemistry``: ``{sample: {component:
+    wt%}}`` or per sample ``{'specimen': role, '<values>': {...},
+    '<deviation>': {...}}``; ``chemistry_sigma`` is its absolute 1-sigma
+    accuracy in the same units (required with chemistry). ``groups``:
+    ``{sample: label}`` of replicate preparations (default: a 'batch' / 'group'
+    field of ``specimens``).
+    """
+    import json as _json
+    import math as _math
+
+    import pandas as pd
+
+    from . import _qpa as Q
+    from . import _qpa_amorphous as A
+    from ._core import structures as _structures
+
+    rad = Q.parse_radiation(radiation)
+    pats, grp = A.parse_specimens(specimens, base_dir)
+    samples = sorted(pats)
+    if groups is not None:
+        groups, _ = A._load_json(groups)
+        grp = {s: (None if groups.get(s) is None else str(groups.get(s)))
+               for s in samples}
+    structs = dict(zip(_qpa_names(md, names), _structures(md)))
+
+    std_raw, _ = A._load_json(internal_standard)
+    std_raw = A._unwrap(std_raw)
+    stds, std_entries = {}, {}
+    for s in samples:
+        e = std_raw.get(s) if isinstance(std_raw, dict) and set(std_raw) & set(samples) \
+            else std_raw
+        if e is None:
+            continue
+        p, w = _standard_of(e)
+        if p not in structs:
+            raise ValueError(f"{s}: internal standard {p!r} is not a candidate; "
+                             f"candidates are {sorted(structs)}")
+        stds[s] = (p, w)
+        std_entries[s] = e if isinstance(e, dict) else {}
+
+    chem_raw, _ = A._load_json(bulk_chemistry)
+    chem_raw = A._unwrap(chem_raw) if chem_raw else {}
+    chem = {s: A.parse_chemistry(chem_raw.get(s)) for s in samples} if chem_raw else {}
+    if chem and chemistry_sigma is None:
+        raise ValueError("bulk_chemistry given without its absolute 1-sigma "
+                         "accuracy; pass chemistry_sigma (same units as the "
+                         "values, e.g. wt%)")
+    excl = ()
+    if amorphous_composition:
+        from pymatgen.core import Composition
+        if isinstance(amorphous_composition, str):
+            excl = tuple(e.symbol for e in Composition(amorphous_composition).elements)
+        else:
+            excl = tuple(str(e) for e in amorphous_composition)
+    sizes = _per_sample(particle_size_um, samples, "particle_size_um")
+
+    fo = Q.FitOptions()
+    if goniometer_radius_mm:
+        fo.disp_bound = float(_math.degrees(2.0 * max_displacement_mm
+                                            / float(goniometer_radius_mm)))
+    for k, v in (fit_options or {}).items():
+        if not hasattr(fo, k):
+            raise ValueError(f"unknown fit option {k!r}")
+        setattr(fo, k, v)
+    log = print if verbose else (lambda *a: None)
+    n_jobs = Q.available_cpus() if n_jobs is None else int(n_jobs)
+
+    with Q._blas_limit(blas_threads):
+        rows, est, grows, srows = A.run(
+            structs, pats, grp, stds, chem, chemistry_sigma, rad, fo,
+            particle_um={s: v for s, v in sizes.items() if v},
+            amorphous_exclude=excl, phases=phases, ratio_sigma=ratio_sigma,
+            max_absorption_contrast=max_absorption_contrast,
+            detection_limit=detection_limit, n_jobs=n_jobs,
+            blas_threads=blas_threads, log=log, std_entries=std_entries)
+    table = pd.DataFrame(rows, columns=["sample", "phase", "weight_fraction"])
+    sdf = pd.DataFrame(srows)
+    for c in ("phases", "weights_rel", "brindley_tau", "b_iso", "width_factor",
+              "po_ratio"):
+        if c in sdf:
+            sdf[c] = [_json.dumps(v) for v in sdf[c]]
+    gdf = pd.DataFrame(grows)
+    if "samples" in gdf:
+        gdf["samples"] = [_json.dumps(v) for v in gdf["samples"]]
+    md.uns[key_added] = {
+        "weights": table,
+        "estimators": pd.DataFrame(est, columns=["sample", "group", "estimator",
+                                                 "detail", "G", "sigma", "used",
+                                                 "note"]),
+        "groups": gdf,
+        "specimens": sdf,
+        "basis": "fraction of each original (unspiked) powder's mass",
+        "detection_limit": float(detection_limit),
+    }
+    record(md, "exp.qpa_amorphous", n_samples=len(samples), key_added=key_added)
+    return table
+
+
+__all__ += ["qpa", "fit_pattern", "qpa_amorphous"]

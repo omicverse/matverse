@@ -1195,6 +1195,9 @@ def cases(tmp):
         (mv.exp.fit_pattern, qpa_library, qpa_patterns["a"],
          {"radiation": "CuKa", "names": ["halite", "corundum"],
           "solid_solutions": False, "microabsorption": False}),
+        (mv.exp.qpa_amorphous, qpa_library, ({"a": {"neat": qpa_patterns["a"]}},),
+         {"radiation": "CuKa", "names": ["halite", "corundum"],
+          "phases": ["halite", "corundum"], "verbose": False, "n_jobs": 1}),
         (mv.exp.attach, patterned,
          ("xrd", np.zeros((3, 10)), np.linspace(10, 40, 10)), {}),
 

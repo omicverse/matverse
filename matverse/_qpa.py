@@ -1113,11 +1113,13 @@ def _run_job(i):
         return fn(*args, **kwargs)
 
 
-def run_fits(items, n_jobs=1, blas_threads=1, timeout=None):
-    """Evaluate fit_sample(*args, **kwargs) for each item, in forked worker
-    processes when n_jobs > 1. Falls back to a serial pass if the pool fails
-    or exceeds ``timeout`` seconds (default: one hour per item per worker)."""
-    items = [(fit_sample, a, k, blas_threads) for a, k in items]
+def run_fits(items, n_jobs=1, blas_threads=1, timeout=None, fn=None):
+    """Evaluate fn(*args, **kwargs) (default fit_sample) for each item, in
+    forked worker processes when n_jobs > 1. Falls back to a serial pass if the
+    pool fails or exceeds ``timeout`` seconds (default: one hour per item per
+    worker)."""
+    fn = fn or fit_sample
+    items = [(fn, a, k, blas_threads) for a, k in items]
     if n_jobs and n_jobs > 1 and len(items) > 1:
         n = min(n_jobs, len(items))
         limit = timeout if timeout is not None else 3600.0 * len(items) / n
