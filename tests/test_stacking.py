@@ -252,6 +252,29 @@ class TestRodModel:
             assert Ic == pytest.approx(If.reshape(-1, 20).sum(1), rel=5e-3,
                                        abs=1e-4 * Ic.max())
 
+    @pytest.mark.parametrize("L", [30.0, 3000.0])
+    def test_fit_model_matches_exact_and_is_continuous(self, L):
+        """The fitting model (fixed phi grid, linear deposition) equals the
+        exact bin-integrated intensity after the profile, and moves smoothly
+        with the lattice constant even when rods are far sharper than a bin
+        (a fixed-bin histogram is a staircase there)."""
+        layer = S.make_layer([{"element": "O", "z": 0.0}, {"element": "O", "z": -0.75}])
+        tth = np.arange(15.0, 55.0, 0.015)
+        th = [0.3, 0.6, 0.5, 0.7]
+        args = (0.0, L, 0.1, 0.2, 0.5, 2.0)
+        m = S.RodPowderModel(tth, 1.5406, layer, mono_2theta=27.3, fine=0.01)
+        c = m(th, 4.5, 3.67, *args)
+        ref = S.RodPowderModel(tth, 1.5406, layer, mono_2theta=27.3, fine=0.002)
+        I = S.rod_powder_intensity(ref.edges, 1.5406, layer, th, 4.5, 3.67, L,
+                                   B=2.0, mono_2theta=27.3)
+        cr = ref.sample(ref.profile(I, 0.1, 0.2, 0.5), 0.0)
+        assert np.max(np.abs(c - cr)) < 5e-3 * cr.max()
+        da = 2e-5 * np.arange(-2, 3)
+        ys = np.array([m(th, 4.5 + x, 3.67, *args) for x in da])
+        second = ys[2:] - 2 * ys[1:-1] + ys[:-2]
+        first = ys[1:] - ys[:-1]
+        assert np.max(np.abs(second)) < 0.05 * np.max(np.abs(first))
+
     def test_layer_from_elements(self):
         lay = mv.disorder.stacking_layer([{"element": "O", "z": -0.75}])
         assert lay[0]["Z"] == 8 and lay[0]["z"] == -0.75
@@ -283,6 +306,7 @@ class TestRodModel:
         assert res["phi_hc"] == pytest.approx(hc, abs=0.05)
         assert res["phi_cc"] == pytest.approx(cc, abs=0.05)
         assert res["params"]["a"] == pytest.approx(4.51, abs=0.01)
+        assert res["params"]["zero"] == pytest.approx(0.07, abs=0.03)
 
     def test_vendored_engine_runs_rod_fit(self, tmp_path):
         path = mv.utils.vendor("stacking", tmp_path)

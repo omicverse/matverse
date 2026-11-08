@@ -1229,7 +1229,7 @@ def stacking_rod_pattern(tth, wavelength, layer, theta, a, d, zero=0.0, L=100.0,
           "a0, d0 come from the inputs (structure, task text); lattice_tol "
           "bounds them. n_par = 4 is the second-order (reichweite 4) chain; "
           "use n_par = 2 or 1 only when memory is known to be absent, and "
-          "compare costs. Seconds to a minute per pattern per core. "
+          "compare costs. About 5-15 s per pattern per core. "
           + _ROD_NOTE,
 )
 def fit_stacking_powder(tth, y=None, layer=None, wavelength=None, a0=None,
