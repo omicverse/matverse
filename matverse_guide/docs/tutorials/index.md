@@ -125,6 +125,14 @@ Fractional occupancy, ordered approximants, and the entropy term that lets a
 high-entropy alloy sit above the hull and form anyway.
 :::
 
+:::{grid-item-card} Stacking disorder {octicon}`stack;1em;`
+:link: stacking_disorder
+:link-type: doc
+
+Faulted close-packed stackings from powder patterns — h/c Markov chains of any
+reichweite, exact rod model for measured data, and a solver you can ship.
+:::
+
 :::{grid-item-card} Molecules {octicon}`beaker;1em;`
 :link: molecules
 :link-type: doc
@@ -216,6 +224,7 @@ magnetic_ordering
 structure_and_bands
 interfaces
 disorder
+stacking_disorder
 molecules
 indentation
 from_pymatgen
