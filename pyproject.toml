@@ -105,6 +105,10 @@ Issues = "https://github.com/omicverse/matverse/issues"
 [tool.setuptools.packages.find]
 include = ["matverse*"]
 
+[tool.setuptools.package-data]
+# bundled reference tables (X-ray form factors, neutron lengths) read at run time
+matverse = ["_data/*.json"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 filterwarnings = [
