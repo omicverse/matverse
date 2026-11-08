@@ -52,6 +52,16 @@ Three layers, each usable on its own
    strengths, and branch and strength are chosen together by AIC with the
    effective degrees of freedom of the penalised fit.  Independent fits run
    in a fork pool.
+
+4. **Measured patterns** (:func:`rod_powder_intensity`, :class:`RodPowderModel`,
+   :func:`fit_rod_pattern`, :func:`fit_rod_patterns`).  Laterally infinite
+   layers of any content (sites with X-ray form factor / neutron length,
+   in-plane offset, height), intensity on the rods of the 2-D reciprocal net,
+   exponential stacking coherence, exact rod-to-shell powder integration,
+   Lorentz-polarisation, Debye-Waller, pseudo-Voigt profile, zero shift;
+   multi-start variable-projection refinement of the chain and every
+   nuisance.  Layers are plain lists of dicts (:func:`make_layer`), so a
+   vendored copy needs only the JSON of the layer, no table.
 """
 
 from __future__ import annotations
@@ -822,3 +832,515 @@ def fit_series(counts, Phi, n_par=4, lams=None, rho=3.0, grid=15, n_workers=4,
             "lam": float(lams[j]), "aic": [(float(lams[jj]), int(bb), float(s))
                                           for (jj, bb), s in zip(cand, aic)],
             "n_branches": len(tracks)}
+
+
+# ===========================================================================
+# 4. Measured powder patterns: layer rods, any layer content, real nuisances
+# ===========================================================================
+# Sections 2-3 model a *finite* N_a x N_b x N_c crystallite of single-site
+# layers; that is exact for simulated counts but cannot reach the coherence
+# lengths of real crystallites (hundreds of angstrom laterally), so a measured
+# laboratory pattern needs a different forward model:
+#
+#   * laterally infinite layers -> intensity only on the rods (h, k) of the 2-D
+#     hexagonal reciprocal net, q_hk = (4 pi / (sqrt3 a)) sqrt(h^2 + h k + k^2);
+#   * any layer content: sites j with scattering factor f_j(Q) (X-ray form
+#     factor, neutron length or a constant), in-plane fractional offset
+#     (u_j, v_j) and height z_j (units of the layer spacing d) relative to the
+#     layer's close-packed label position s_X (A/B/C as in section 2).  All
+#     layers are translates of one another, so I_hk(q_z) = |F_hk(q_z)|^2 S_r(q_z)
+#     with F_hk = sum_j f_j exp(2 pi i (h u_j + k v_j)) exp(i q_z z_j d) and the
+#     stacking factor S_r of rod class r = (2h + k) mod 3 (r = 0: insensitive);
+#   * stacking coherence damped exponentially, z^|D| with z = exp(-1/L)
+#     (L in layers): S_0 = sum_D z^|D| e^{i phi D}, S_1 = 1 + 2 Re sum_{D>=1}
+#     z^D e^{i phi D} c_D, c_D = E[w^(X_{n+D}-X_n)] from the transfer matrix of
+#     section 1 (any chain order), S_2(phi) = S_1(-phi), phi = q_z d;
+#   * exact powder average: the integral of S over each q_z interval cut by a
+#     2theta bin is analytic (antiderivative phi + 2 Re[i sum_k alpha_k
+#     log(1 - z lambda_k e^{i phi})] from the eigen-decomposition of the
+#     transfer matrix), so arbitrarily sharp rods and the q_z -> 0 Jacobian
+#     singularity are integrated without sampling error;
+#   * shell density / (4 pi Q^2) per unit Q carries the powder Lorentz factor
+#     1/(sin^2 theta cos theta); polarisation for an unpolarised tube with an
+#     optional primary/secondary monochromator; isotropic Debye-Waller
+#     exp(-2 B s^2); pseudo-Voigt profile with FWHM^2 = W^2 + U tan^2 theta;
+#     2theta zero shift; scale and a polynomial background by variable
+#     projection.
+
+_SF_CACHE: dict = {}
+
+
+def scattering_table():
+    """Bundled X-ray form-factor fits and neutron lengths (see _source)."""
+    if "t" not in _SF_CACHE:
+        import json
+        p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_data",
+                         "scattering_factors.json")
+        with open(p) as fh:
+            _SF_CACHE["t"] = json.load(fh)
+    return _SF_CACHE["t"]
+
+
+def _eval_ff(spec, Q):
+    """Scattering factor of one site at Q (1/angstrom)."""
+    Q = np.asarray(Q, float)
+    if "f" in spec:                              # constant: neutron b or unit
+        return np.full(Q.shape, float(spec["f"]))
+    s2 = (Q / (4.0 * math.pi)) ** 2
+    if "ab" in spec:                             # Z - 41.78214 s^2 sum a e^{-b s^2}
+        acc = np.zeros_like(Q)
+        for a_, b_ in spec["ab"]:
+            acc = acc + a_ * np.exp(-b_ * s2)
+        return float(spec["Z"]) - 41.78214 * s2 * acc
+    if "gauss" in spec:                          # c + sum a e^{-b s^2} (Cromer-Mann/WK)
+        g = spec["gauss"]
+        acc = np.full(Q.shape, float(g.get("c", 0.0)))
+        for a_, b_ in zip(g["a"], g["b"]):
+            acc = acc + a_ * np.exp(-b_ * s2)
+        return acc
+    raise ValueError(f"site needs 'f', 'ab' + 'Z' or 'gauss': {spec}")
+
+
+def make_layer(sites, radiation: str = "xray"):
+    """Normalise a layer description into a JSON-serialisable list of sites.
+
+    ``sites``: iterable of dicts with ``element`` (looked up in the bundled
+    table for ``radiation`` 'xray' or 'neutron') or an explicit ``f``
+    (constant) / ``ab`` + ``Z`` / ``gauss`` scattering factor, ``uv`` the
+    in-plane fractional offset from the layer's label position (default
+    (0, 0)), ``z`` the height in units of the layer spacing d (default 0) and
+    ``occ`` (default 1).
+    """
+    out = []
+    for s in sites:
+        s = dict(s)
+        site = {"uv": [float(x) for x in s.get("uv", (0.0, 0.0))],
+                "z": float(s.get("z", 0.0)), "occ": float(s.get("occ", 1.0))}
+        for k in ("f", "ab", "Z", "gauss"):
+            if k in s:
+                site[k] = s[k]
+        if not any(k in site for k in ("f", "ab", "gauss")):
+            el = s.get("element")
+            if el is None:
+                raise ValueError(f"site needs an element or a scattering factor: {s}")
+            tab = scattering_table()
+            if radiation == "neutron":
+                site["f"] = float(tab["neutron_b_fm"][el])
+            else:
+                rec = tab["xray"][el]
+                site["Z"], site["ab"] = int(rec["Z"]), rec["ab"]
+        if "element" in s:
+            site["element"] = s["element"]
+        out.append(site)
+    if not out:
+        raise ValueError("a layer needs at least one site")
+    return out
+
+
+def stacking_first_order(theta):
+    """Stationary first-order view of an order-m HK chain.
+
+    Returns (P(K | previous H), P(K | previous K), P(K)) -- in ice
+    nomenclature (phi_hc, phi_cc, cubicity) with K = cubic, H = hexagonal.
+    The newest symbol of a history word is its least significant bit.
+    """
+    th = np.clip(np.asarray(theta, float), _EPS, 1 - _EPS)
+    M = th.shape[-1]
+    if M == 1:
+        p = float(th[..., 0])
+        return p, p, p
+    pi = hk_stationary(th)
+    last = np.arange(M) & 1
+    wH, wK = pi[..., last == 0].sum(-1), pi[..., last == 1].sum(-1)
+    phc = (pi[..., last == 0] * th[..., last == 0]).sum(-1) / np.maximum(wH, 1e-300)
+    pcc = (pi[..., last == 1] * th[..., last == 1]).sum(-1) / np.maximum(wK, 1e-300)
+    return phc, pcc, (pi * th).sum(-1)
+
+
+def _rod_groups(a, q_max, layer):
+    """Rods of the 2-D reciprocal net with q_hk < q_max, merged when their
+    radius, class and per-site in-plane phases coincide.  Returns a list of
+    (q, r, multiplicity, phases[site])."""
+    k1 = 4.0 * math.pi / (math.sqrt(3.0) * a)
+    nmax = int(q_max / k1 * 2.0 / math.sqrt(3.0)) + 2
+    uv = np.array([s["uv"] for s in layer], float)
+    groups: dict = {}
+    for h in range(-nmax, nmax + 1):
+        for k in range(-nmax, nmax + 1):
+            q = k1 * math.sqrt(h * h + h * k + k * k)
+            if q >= q_max:
+                continue
+            r = (2 * h + k) % 3
+            ph = np.exp(2j * math.pi * (h * uv[:, 0] + k * uv[:, 1]))
+            key = (round(q, 9), r) + tuple(np.round(ph, 9).view(float))
+            if key in groups:
+                groups[key][2] += 1
+            else:
+                groups[key] = [q, r, 1, ph]
+    return [tuple(g) for g in groups.values()]
+
+
+def _modes(theta, z):
+    """(alpha_k, z lambda_k): c_D z^D = sum_k alpha_k (z lambda_k)^D for D >= 1."""
+    th = np.clip(np.asarray(theta, float), _EPS, 1 - _EPS)
+    T = _transfer(th)
+    pi = hk_stationary(th)
+    v = 0.5 * np.concatenate([pi, pi]).astype(complex)
+    lam, V = np.linalg.eig(T)
+    if not np.all(np.isfinite(lam)) or np.linalg.cond(V) > 1e10:
+        th = np.clip(th + 1e-7 * np.arange(1, th.size + 1), _EPS, 1 - _EPS)
+        T = _transfer(th)
+        lam, V = np.linalg.eig(T)
+    alpha = (v @ V) * np.linalg.solve(V, np.ones(V.shape[0], complex))
+    return alpha, z * lam
+
+
+def _S_antiderivative(phi, r, modes, z):
+    """C_r(phi) with dC/dphi = S_r(phi) (continuous, principal logs)."""
+    if r == 0:
+        alpha, zl = np.ones(1, complex), np.array([z], complex)
+        sgn = 1.0
+    else:
+        alpha, zl = modes
+        sgn = 1.0 if r == 1 else -1.0
+    p = sgn * np.asarray(phi, float)
+    e = np.exp(1j * p)[..., None]
+    acc = (alpha * np.log(1.0 - zl * e)).sum(-1)
+    return sgn * (p + 2.0 * np.real(1j * acc))
+
+
+def _polarisation(tth_deg, mono_2theta=None):
+    c2 = np.cos(np.radians(tth_deg)) ** 2
+    if mono_2theta is None:
+        return 0.5 * (1.0 + c2)
+    cm = math.cos(math.radians(float(mono_2theta))) ** 2
+    return (1.0 + cm * c2) / (1.0 + cm)
+
+
+def rod_powder_intensity(tth_edges, wavelength, layer, theta, a, d, L,
+                         B=0.0, mono_2theta=None):
+    """Bin-averaged intrinsic powder intensity of a stacking-disordered layer
+    crystal on the 2theta bins ``tth_edges`` (degrees): exact rod/shell
+    integration, Lorentz and polarisation factors and Debye-Waller included,
+    no instrumental profile.  Arbitrary units (common to all bins)."""
+    te = np.asarray(tth_edges, float)
+    Qe = 4.0 * math.pi * np.sin(np.radians(te / 2.0)) / wavelength
+    Qc = 0.5 * (Qe[1:] + Qe[:-1])
+    dQ = np.diff(Qe)
+    tc = 0.5 * (te[1:] + te[:-1])
+    zfac = math.exp(-1.0 / max(float(L), 1e-6))
+    modes = _modes(theta, zfac)
+    ff = np.stack([_eval_ff(s, Qc) * s["occ"] for s in layer])     # (sites, bins)
+    zj = np.array([s["z"] for s in layer], float)
+    out = np.zeros(Qc.size)
+    cache: dict = {}
+    for q, r, mult, ph in _rod_groups(a, Qe[-1], layer):
+        qz = np.sqrt(np.maximum(Qe * Qe - q * q, 0.0))
+        i0 = int(np.searchsorted(qz, 0.0, side="right"))   # first edge with q_z > 0
+        i0 = max(i0 - 1, 0)
+        if i0 >= qz.size - 1:
+            continue
+        key = (round(q, 9), 0 if r == 0 else 1)
+        if key not in cache:
+            phi = qz[i0:] * d
+            # C_1(phi) and C_1(-phi); class 2 is C_2(phi) = -C_1(-phi)
+            cache[key] = (_S_antiderivative(phi, key[1], modes, zfac),
+                          _S_antiderivative(-phi, key[1], modes, zfac))
+        Cp, Cm = cache[key]
+        if r == 2:
+            Cp, Cm = -Cm, -Cp
+        sl = slice(i0, None)
+        qm = 0.5 * (qz[i0 + 1:] + qz[i0:-1])
+        intg_p = (Cp[1:] - Cp[:-1]) / d               # int S over +q_z slice
+        intg_n = (Cm[:-1] - Cm[1:]) / d               # int S over -q_z slice
+        A = ff[:, i0:] * ph[:, None]
+        if np.all(zj == 0.0):
+            F2p = F2n = np.abs(A.sum(0)) ** 2
+        else:
+            E_ = np.exp(1j * np.outer(zj, qm) * d)
+            F2p = np.abs((A * E_).sum(0)) ** 2
+            F2n = np.abs((A * np.conj(E_)).sum(0)) ** 2
+        out[sl] += mult * (F2p * intg_p + F2n * intg_n)
+    out /= 4.0 * math.pi * Qc * Qc * dQ
+    out *= _polarisation(tc, mono_2theta)
+    out *= np.exp(-2.0 * float(B) * (Qc / (4.0 * math.pi)) ** 2)
+    return out
+
+
+class RodPowderModel:
+    """Forward model of a measured 2theta pattern (callable, see __call__).
+
+    Holds the fine 2theta bin grid (step ``fine`` degrees, ``margin`` beyond
+    the data on each side), the FFT plan and the blocks over which the
+    angle-dependent profile width is interpolated.
+    """
+
+    def __init__(self, tth, wavelength, layer, mono_2theta=None, fine=0.005,
+                 margin=1.5, block=3.0):
+        self.tth = np.asarray(tth, float)
+        self.lam = float(wavelength)
+        self.layer = layer
+        self.mono = mono_2theta
+        lo = max(self.tth.min() - margin, 0.5)
+        hi = min(self.tth.max() + margin, 179.0)
+        self.edges = np.arange(lo, hi + fine, fine)
+        self.Qe = 4.0 * math.pi * np.sin(np.radians(self.edges / 2.0)) / self.lam
+        self.gc = 0.5 * (self.edges[1:] + self.edges[:-1])
+        self.fine = float(fine)
+        n = self.gc.size
+        self.nfft = 1 << int(math.ceil(math.log2(2 * n)))
+        self.freq = np.fft.rfftfreq(self.nfft, d=self.fine)
+        nb = max(2, int(math.ceil((self.gc[-1] - self.gc[0]) / block)) + 1)
+        self.nodes = np.linspace(self.gc[0], self.gc[-1], nb)
+
+    def intrinsic(self, theta, a, d, L, B):
+        return rod_powder_intensity(self.edges, self.lam, self.layer, theta,
+                                    a, d, L, B=B, mono_2theta=self.mono)
+
+    def profile(self, I, W, U, eta):
+        """Pseudo-Voigt (unit area, FWHM^2 = W^2 + U tan^2 theta, Lorentz
+        fraction eta) convolution; the width is exact at the block nodes and
+        the convolved curves are interpolated linearly between nodes."""
+        F = np.fft.rfft(I, self.nfft)
+        f = self.freq
+        outs = []
+        for t0 in self.nodes:
+            H = math.sqrt(max(W * W + U * math.tan(math.radians(t0 / 2.0)) ** 2, 1e-10))
+            sg = H / (2.0 * math.sqrt(2.0 * math.log(2.0)))
+            K = eta * np.exp(-math.pi * H * np.abs(f)) + \
+                (1.0 - eta) * np.exp(-2.0 * (math.pi * sg * f) ** 2)
+            outs.append(np.fft.irfft(F * K, self.nfft)[: I.size])
+        if len(outs) == 1:
+            return outs[0]
+        x = np.clip((self.gc - self.nodes[0]) / (self.nodes[1] - self.nodes[0]),
+                    0, len(self.nodes) - 1 - 1e-12)
+        i = x.astype(int)
+        w = x - i
+        Y = np.stack(outs)
+        cols = np.arange(I.size)
+        return (1 - w) * Y[i, cols] + w * Y[i + 1, cols]
+
+    def curve(self, theta, a, d, L, W, U, eta, B):
+        """Profile-convolved model on the fine grid (abscissae ``self.gc``)."""
+        return self.profile(self.intrinsic(theta, a, d, L, B), W, U, eta)
+
+    def __call__(self, theta, a, d, zero, L, W, U, eta, B):
+        return np.interp(self.tth - zero, self.gc,
+                         self.curve(theta, a, d, L, W, U, eta, B))
+
+
+def _decimate(tth, y, step, tth_range):
+    m = np.isfinite(tth) & np.isfinite(y)
+    if tth_range is not None:
+        m &= (tth >= tth_range[0]) & (tth <= tth_range[1])
+    tth, y = tth[m], y[m]
+    o = np.argsort(tth)
+    tth, y = tth[o], y[o]
+    if step:
+        k = max(1, int(round(step / max(float(np.median(np.diff(tth))), 1e-9))))
+        tth, y = tth[::k], y[::k]
+    return tth, y
+
+
+def _poly(tth, deg):
+    t = (tth - 0.5 * (tth.min() + tth.max())) / max(0.5 * np.ptp(tth), 1e-9)
+    return np.stack([t ** p for p in range(deg + 1)], 1)
+
+
+def _project(m, y, Bg, w=None):
+    """Least-squares scale + background for model column m; residual."""
+    A = np.column_stack([m, Bg])
+    if w is not None:
+        A, yy = A * w[:, None], y * w
+    else:
+        yy = y
+    coef, *_ = np.linalg.lstsq(A, yy, rcond=None)
+    return A @ coef - yy, coef
+
+
+_NL_NAMES = ("a", "d", "zero", "logL", "W", "U", "eta", "B")
+
+
+def fit_rod_pattern(tth, y, layer, wavelength, a0, d0, mono_2theta=None,
+                    n_par=4, tth_range=None, bg_degree=2, starts=None,
+                    n_starts=6, n_refine=2, coarse_step=0.05, fine_step=0.025,
+                    coarse_nfev=100, fine_nfev=150, lattice_tol=0.03,
+                    zero_max=0.5, L_bounds=(3.0, 5000.0), init=None,
+                    bounds=None, weights=None, scan=True, seed=0,
+                    bin_frac=0.4, block=5.0):
+    """Refine an HK stacking chain (2**m parameters) and the nuisances of a
+    measured powder pattern; returns a dict (see the registered wrapper)."""
+    from scipy.optimize import least_squares
+
+    tth = np.asarray(tth, float)
+    y = np.asarray(y, float)
+    M = int(n_par)
+    _order(M)
+    nl = {"a": float(a0), "d": float(d0), "zero": 0.0, "logL": math.log(100.0),
+          "W": 0.1, "U": 0.1, "eta": 0.5, "B": 1.0}
+    if init:
+        for k, v in init.items():
+            nl["logL" if k == "L" else k] = math.log(v) if k == "L" else float(v)
+    lb = {"a": a0 * (1 - lattice_tol), "d": d0 * (1 - lattice_tol),
+          "zero": -zero_max, "logL": math.log(L_bounds[0]), "W": 0.005,
+          "U": 0.0, "eta": 0.0, "B": 0.0}
+    ub = {"a": a0 * (1 + lattice_tol), "d": d0 * (1 + lattice_tol),
+          "zero": zero_max, "logL": math.log(L_bounds[1]), "W": 1.5,
+          "U": 4.0, "eta": 1.0, "B": 15.0}
+    if bounds:
+        for k, (lo_, hi_) in bounds.items():
+            kk = "logL" if k == "L" else k
+            lb[kk] = math.log(lo_) if k == "L" else float(lo_)
+            ub[kk] = math.log(hi_) if k == "L" else float(hi_)
+    LB = np.array([1e-3] * M + [lb[k] for k in _NL_NAMES])
+    UB = np.array([1 - 1e-3] * M + [ub[k] for k in _NL_NAMES])
+
+    def stage(step, fine):
+        x, yy = _decimate(tth, y, step, tth_range)
+        yy = yy / max(float(np.max(np.abs(yy))), 1e-300)
+        mod = RodPowderModel(x, wavelength, layer, mono_2theta=mono_2theta,
+                             fine=fine, block=block)
+        Bg = _poly(x, bg_degree)
+        w = None
+        if weights is not None:
+            w = np.interp(x, tth, np.asarray(weights, float))
+        s2 = (0.5 * (mod.Qe[1:] + mod.Qe[:-1]) / (4.0 * math.pi)) ** 2
+        cache = {}
+
+        def pieces(p):
+            key = p.tobytes()
+            if cache.get("key") != key:
+                th, q = p[:M], dict(zip(_NL_NAMES, p[M:]))
+                I0 = mod.intrinsic(th, q["a"], q["d"], math.exp(q["logL"]), q["B"])
+                C0 = mod.profile(I0, q["W"], q["U"], q["eta"])
+                r0 = _project(np.interp(x - q["zero"], mod.gc, C0), yy, Bg, w)[0]
+                cache.update(key=key, I0=I0, C0=C0, r0=r0)
+            return cache["I0"], cache["C0"], cache["r0"]
+
+        def resid(p):
+            return pieces(np.asarray(p, float))[2].copy()
+
+        def jac(p):
+            # forward differences, but each column recomputes only the part
+            # of the model its parameter enters: stacking/lattice/coherence
+            # -> intrinsic + profile; B -> a factor on the intrinsic curve;
+            # W, U, eta -> profile; zero -> interpolation only.
+            p = np.asarray(p, float)
+            I0, C0, r0 = pieces(p)
+            th, q = p[:M], dict(zip(_NL_NAMES, p[M:]))
+            J = np.empty((r0.size, p.size))
+            for k in range(p.size):
+                h = 1.49e-8 * max(1.0, abs(p[k])) * 10.0
+                if p[k] + h > UB[k]:
+                    h = -h
+                pk = p.copy()
+                pk[k] += h
+                qk = dict(zip(_NL_NAMES, pk[M:]))
+                name = _NL_NAMES[k - M] if k >= M else "theta"
+                if name == "zero":
+                    Ck = C0
+                elif name in ("W", "U", "eta"):
+                    Ck = mod.profile(I0, qk["W"], qk["U"], qk["eta"])
+                elif name == "B":
+                    Ck = mod.profile(I0 * np.exp(-2.0 * h * s2), q["W"], q["U"], q["eta"])
+                else:
+                    Ik = mod.intrinsic(pk[:M], qk["a"], qk["d"], math.exp(qk["logL"]), qk["B"])
+                    Ck = mod.profile(Ik, qk["W"], qk["U"], qk["eta"])
+                rk = _project(np.interp(x - qk["zero"], mod.gc, Ck), yy, Bg, w)[0]
+                J[:, k] = (rk - r0) / h
+            return J
+        return x, yy, mod, Bg, w, resid, jac
+
+    # -- stage 0: lattice + zero scan (one model curve per (a, d), every zero)
+    xc, yc, modc, Bgc, wc, resc, jacc = stage(coarse_step, coarse_step * bin_frac)
+    base = np.array([nl[k] for k in _NL_NAMES])
+    if scan:
+        best = (np.inf, nl["a"], nl["d"], nl["zero"])
+        zs = np.linspace(-zero_max, zero_max, int(round(2 * zero_max / 0.01)) + 1)
+        rel = np.linspace(-min(lattice_tol, 0.012), min(lattice_tol, 0.012), 7)
+        th_mid = np.full(M, 0.5)
+        for ra in rel:
+            for rd in rel:
+                aa, dd = nl["a"] * (1 + ra), nl["d"] * (1 + rd)
+                g = modc.curve(th_mid, aa, dd, math.exp(nl["logL"]), nl["W"],
+                               nl["U"], nl["eta"], nl["B"])
+                for z0 in zs:
+                    r_, _ = _project(np.interp(xc - z0, modc.gc, g), yc, Bgc, wc)
+                    c = float(r_ @ r_)
+                    if c < best[0]:
+                        best = (c, aa, dd, z0)
+        base[0], base[1], base[2] = best[1], best[2], best[3]
+    base = np.clip(base, LB[M:], UB[M:])
+
+    if starts is None:
+        st = [np.full(M, 0.5)]
+        if M > 1:
+            st += [np.full(M, 0.2), np.full(M, 0.8)]
+        k_extra = max(0, int(n_starts) - len(st))
+        if k_extra:
+            if M > 1:
+                from scipy.stats import qmc
+                pts = qmc.Sobol(M, scramble=True, seed=seed).random(
+                    1 << int(math.ceil(math.log2(max(k_extra, 1)))))[:k_extra]
+            else:
+                pts = np.linspace(0.1, 0.9, k_extra + 2)[1:-1, None]
+            st += [0.05 + 0.9 * p for p in pts]
+        starts = st
+    runs = []
+    for s in starts:
+        p0 = np.clip(np.concatenate([np.asarray(s, float), base]), LB + 1e-9, UB - 1e-9)
+        try:
+            runs.append(least_squares(resc, p0, jac=jacc, bounds=(LB, UB),
+                                      x_scale="jac", max_nfev=coarse_nfev,
+                                      ftol=1e-6, xtol=1e-6))
+        except Exception:
+            continue
+    runs.sort(key=lambda r: r.cost)
+    xf, yf, modf, Bgf, wf, resf, jacf = stage(fine_step, fine_step * bin_frac)
+    fins = []
+    for r in runs[: max(1, int(n_refine))]:
+        p0 = np.clip(r.x, LB + 1e-9, UB - 1e-9)
+        fins.append(least_squares(resf, p0, jac=jacf, bounds=(LB, UB),
+                                  x_scale="jac", max_nfev=fine_nfev))
+    best = min(fins, key=lambda r: r.cost)
+    th = best.x[:M]
+    q = dict(zip(_NL_NAMES, best.x[M:]))
+    phc, pcc, cub = stacking_first_order(th)
+    m = modf(th, q["a"], q["d"], q["zero"], math.exp(q["logL"]), q["W"], q["U"],
+             q["eta"], q["B"])
+    res, coef = _project(m, yf, Bgf, wf)
+    calc = res + (yf * wf if wf is not None else yf)
+    if wf is not None:
+        calc = calc / wf
+    nuis = {k: float(v) for k, v in q.items() if k != "logL"}
+    nuis["L"] = float(math.exp(q["logL"]))
+    yy = yf * wf if wf is not None else yf
+    rwp = float(np.sqrt((res @ res) / max(yy @ yy, 1e-300)))
+    return {"theta": th.copy(), "phi_hc": float(phc), "phi_cc": float(pcc),
+            "cubicity": float(cub), "params": nuis, "scale": float(coef[0]),
+            "background": coef[1:].copy(), "cost": float(best.cost), "rwp": rwp,
+            "tth": xf, "y": yf, "calc": calc,
+            "branches": [(float(r.cost), r.x[:M].copy()) for r in fins],
+            "coarse": [(float(r.cost), r.x[:M].copy()) for r in runs]}
+
+
+def _job_rod(args):
+    kw = args[2]
+    return fit_rod_pattern(args[0], args[1], **kw)
+
+
+def fit_rod_patterns(patterns, n_workers=4, **kwargs):
+    """fit_rod_pattern over a mapping id -> (tth, y), patterns in a fork pool."""
+    ids = list(patterns)
+    jobs = [(np.asarray(patterns[i][0], float), np.asarray(patterns[i][1], float),
+             kwargs) for i in ids]
+    n = max(1, min(int(n_workers), len(jobs), os.cpu_count() or 1))
+    if n > 1:
+        try:
+            import multiprocessing as mp
+            with mp.get_context("fork").Pool(n) as pool:
+                res = pool.map(_job_rod, jobs, chunksize=1)
+            return dict(zip(ids, res))
+        except Exception:
+            pass
+    return {i: _job_rod(j) for i, j in zip(ids, jobs)}

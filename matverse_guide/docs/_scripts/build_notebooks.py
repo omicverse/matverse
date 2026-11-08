@@ -29,6 +29,7 @@ NOTEBOOKS = [
     "structure_and_bands",
     "interfaces",
     "disorder",
+    "stacking_disorder",
     "from_pymatgen",
     "molecules",
     "indentation",

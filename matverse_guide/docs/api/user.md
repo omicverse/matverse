@@ -12,7 +12,7 @@ agent. Every entry names the state it reads and the state it writes, and each of
 those claims is verified by execution in `tests/test_contracts.py` rather than
 asserted.
 
-Public registry entries listed here: 266
+Public registry entries listed here: 275
 
 Look a function up by intent rather than by name:
 
@@ -464,6 +464,7 @@ Units, checkpointing, cluster submission and object summaries.
    utils.slurm_script
    utils.submit
    utils.summary
+   utils.vendor
 ```
 
 
@@ -477,10 +478,18 @@ Units, checkpointing, cluster submission and object summaries.
    disorder.cluster_expansion
    disorder.describe
    disorder.dope
+   disorder.fit_stacking_powder
+   disorder.fit_stacking_series
    disorder.monte_carlo
    disorder.orderings
    disorder.sqs
    disorder.sro
+   disorder.stacking_correlations
+   disorder.stacking_design
+   disorder.stacking_first_order
+   disorder.stacking_layer
+   disorder.stacking_pattern
+   disorder.stacking_rod_pattern
 ```
 
 

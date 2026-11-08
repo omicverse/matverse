@@ -1086,3 +1086,161 @@ def fit_stacking_series(counts, q_edges=None, params=None, design=None,
         design = design_matrix(dict(params), q_edges)
     return fit_series(counts, design, n_par=int(n_par),
                       n_workers=int(n_workers), **kwargs)
+
+
+# ---------------------------------------------------------------------------
+# Measured powder patterns: laterally infinite layers on rods, any layer content
+# ---------------------------------------------------------------------------
+
+_ROD_NOTE = (
+    "Rod model (engine section 4 of matverse/_stacking.py): laterally "
+    "infinite layers, so intensity lives on the rods (h, k) of the 2-D "
+    "hexagonal reciprocal net; every layer is a translate of one layer "
+    "content (sites with scattering factor, in-plane offset uv from the "
+    "layer's A/B/C label position, height z in units of the layer spacing "
+    "d); stacking coherence damped as exp(-|D|/L) (L in layers); exact "
+    "rod-to-shell powder integration (analytic antiderivative of the "
+    "stacking factor, so sharp rods and the q_z -> 0 singularity cost "
+    "nothing); powder Lorentz factor, polarisation (optional monochromator "
+    "2theta), Debye-Waller exp(-2 B s^2), pseudo-Voigt FWHM^2 = W^2 + "
+    "U tan^2 theta, 2theta zero shift; scale and a polynomial background "
+    "are projected out. Use this, not stacking_design (a small finite "
+    "crystallite, for simulated counts), for laboratory or synchrotron "
+    "patterns. HK parameters theta as in stacking_correlations; "
+    "K = 'cubic' (X_{n-1} != X_{n+1}), H = 'hexagonal'.")
+
+
+@register_function(
+    aliases=["stacking layer", "layer content", "bilayer", "layer sites",
+             "x-ray form factor", "atomic scattering factor",
+             "neutron scattering length", "layer structure factor"],
+    category="disorder",
+    description="Describe the content of one stacking layer — sites with an "
+                "element (X-ray form factor or neutron length from the "
+                "bundled tables) or an explicit scattering factor, an "
+                "in-plane offset from the layer's A/B/C position and a "
+                "height in units of the layer spacing — as a JSON-"
+                "serialisable list for the rod powder model.",
+    examples=["layer = mv.disorder.stacking_layer([{'element': 'Zn', 'z': 0},"
+              " {'element': 'S', 'z': 0.75}])",
+              "json.dump(layer, open('layer.json', 'w'))  # ship with a "
+              "vendored solver"],
+    related=["mv.disorder.stacking_rod_pattern",
+             "mv.disorder.fit_stacking_powder"],
+    notes="Take the sites from the structure you are given (a CIF, a text "
+          "description), never from memory. The X-ray table is pymatgen's "
+          "atomic_scattering_params (f = Z - 41.78214 s^2 sum a_i exp(-b_i "
+          "s^2), s = sin(theta)/lambda), neutron lengths are pymatgen's "
+          "bound coherent lengths (fm); both are bundled in "
+          "matverse/_data/scattering_factors.json so the result can be "
+          "saved and read by a vendored engine without matverse. "
+          + _ROD_NOTE,
+)
+def stacking_layer(sites, radiation: str = "xray"):
+    """List of normalised site dicts (see make_layer in the engine)."""
+    from ._stacking import make_layer
+    return make_layer(sites, radiation=radiation)
+
+
+@register_function(
+    aliases=["first order stacking probabilities", "phi_cc phi_hc",
+             "cubicity", "stationary stacking probabilities",
+             "reichweite reduction", "hexagonality"],
+    category="disorder",
+    description="Stationary first-order view of an HK chain of any order: "
+                "P(K | previous H), P(K | previous K) and P(K) — in ice "
+                "nomenclature (phi_hc, phi_cc, cubicity).",
+    examples=["phi_hc, phi_cc, cub = mv.disorder.stacking_first_order("
+              "res['theta'])"],
+    related=["mv.disorder.fit_stacking_powder",
+             "mv.disorder.stacking_correlations"],
+    notes="For order m >= 2 this is NOT a parameter of the chain: it averages "
+          "theta over the stationary law of the histories ending in H (or K). "
+          "Report these when a task asks for first-order probabilities of a "
+          "chain fitted with memory. theta (..., 2**m) broadcasts.",
+)
+def stacking_first_order(theta):
+    """(P(K|H), P(K|K), P(K))."""
+    from ._stacking import stacking_first_order as _fo
+    return _fo(theta)
+
+
+@register_function(
+    aliases=["simulate measured stacking pattern", "rod powder pattern",
+             "ice isd xrd forward model", "stacking disordered powder xrd",
+             "faulted polytype powder pattern", "x-ray powder stacking faults",
+             "diffaX like", "stacking fault powder simulation"],
+    category="disorder",
+    description="Profile-convolved powder pattern on a 2theta grid of a "
+                "stacking-disordered layer crystal of given layer content, "
+                "HK chain and nuisance parameters — the forward model of "
+                "fit_stacking_powder, for synthetic validation.",
+    examples=["y = mv.disorder.stacking_rod_pattern(tth, 1.5406, layer, "
+              "[0.6, 0.6, 0.6, 0.6], a=4.5, d=3.67, L=80, W=0.1, "
+              "mono_2theta=27.3)"],
+    related=["mv.disorder.stacking_layer", "mv.disorder.fit_stacking_powder"],
+    notes="Arbitrary scale (normalise or fit a scale). Parameters: a "
+          "(in-plane lattice constant), d (layer spacing), zero (2theta "
+          "offset, degrees: the model is evaluated at tth - zero), L "
+          "(stacking coherence, layers), W, U, eta (profile), B (Debye-Waller, "
+          "angstrom^2), mono_2theta (monochromator 2theta, None = "
+          "unpolarised tube). " + _ROD_NOTE,
+)
+def stacking_rod_pattern(tth, wavelength, layer, theta, a, d, zero=0.0, L=100.0,
+                         W=0.1, U=0.0, eta=0.5, B=0.0, mono_2theta=None,
+                         fine=0.005):
+    """Model intensity at ``tth`` (degrees)."""
+    from ._stacking import RodPowderModel
+    m = RodPowderModel(np.asarray(tth, float), float(wavelength), list(layer),
+                       mono_2theta=mono_2theta, fine=fine)
+    return m(np.asarray(theta, float), a, d, zero, L, W, U, eta, B)
+
+
+@register_function(
+    aliases=["fit stacking powder", "refine stacking probabilities",
+             "stacking disorder refinement", "ice isd stacking probabilities",
+             "cubicity from xrd", "mcdiffax like refinement",
+             "stackogram", "recover phi_cc phi_hc", "reichweite 4 fit",
+             "stacking faults from measured pattern",
+             "invert powder pattern stacking measured"],
+    category="disorder",
+    description="Refine an HK stacking chain (any order) and the nuisances of "
+                "real measured powder patterns — lattice constants, zero "
+                "shift, coherence length, profile, Debye-Waller, scale and "
+                "background — by multi-start variable-projection least "
+                "squares; one pattern or a mapping of patterns in parallel.",
+    examples=["res = mv.disorder.fit_stacking_powder(tth, y, layer, 1.540598,"
+              " a0=4.5, d0=3.67, mono_2theta=27.3)",
+              "out = mv.disorder.fit_stacking_powder({'s1': (tth1, y1), ...}, "
+              "layer=layer, wavelength=lam, a0=a, d0=d, n_workers=4)",
+              "res['phi_hc'], res['phi_cc'], res['cubicity']"],
+    related=["mv.disorder.stacking_layer", "mv.disorder.stacking_rod_pattern",
+             "mv.disorder.stacking_first_order", "mv.utils.vendor"],
+    notes="Stages: (0) grid scan of a, d (+-1.2 %) and the zero shift with "
+          "one model curve per (a, d); (1) n_starts bounded trust-region fits "
+          "on data decimated to coarse_step; (2) the n_refine best re-fitted "
+          "at fine_step; the lowest cost wins. Returns theta, phi_hc, phi_cc, "
+          "cubicity (stationary first order, report these for 'first-order' "
+          "questions even when n_par = 4), params (a, d, zero, L, W, U, eta, "
+          "B), rwp, the fitted curve and every branch's cost (look at them: "
+          "near-equal costs at different theta mean the pattern does not "
+          "decide). Unweighted residuals by default — background-subtracted "
+          "data close to zero make 1/sqrt(y) weights overweight noise. "
+          "a0, d0 come from the inputs (structure, task text); lattice_tol "
+          "bounds them. n_par = 4 is the second-order (reichweite 4) chain; "
+          "use n_par = 2 or 1 only when memory is known to be absent, and "
+          "compare costs. Seconds to a minute per pattern per core. "
+          + _ROD_NOTE,
+)
+def fit_stacking_powder(tth, y=None, layer=None, wavelength=None, a0=None,
+                        d0=None, mono_2theta=None, n_par: int = 4,
+                        n_workers: int = 4, **kwargs):
+    """dict of results, or {id: dict} when ``tth`` is a mapping id -> (tth, y)."""
+    from ._stacking import fit_rod_pattern, fit_rod_patterns
+    if layer is None or wavelength is None or a0 is None or d0 is None:
+        raise ValueError("pass layer, wavelength, a0 and d0")
+    kw = dict(layer=list(layer), wavelength=float(wavelength), a0=float(a0),
+              d0=float(d0), mono_2theta=mono_2theta, n_par=int(n_par), **kwargs)
+    if isinstance(tth, dict):
+        return fit_rod_patterns(tth, n_workers=int(n_workers), **kw)
+    return fit_rod_pattern(np.asarray(tth, float), np.asarray(y, float), **kw)
