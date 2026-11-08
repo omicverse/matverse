@@ -33,6 +33,7 @@ NOTEBOOKS = [
     "from_pymatgen",
     "molecules",
     "indentation",
+    "phase_quantification",
     "data_io",
     "infrastructure",
 ]

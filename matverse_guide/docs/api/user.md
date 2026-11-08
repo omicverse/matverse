@@ -12,7 +12,7 @@ agent. Every entry names the state it reads and the state it writes, and each of
 those claims is verified by execution in `tests/test_contracts.py` rather than
 asserted.
 
-Public registry entries listed here: 275
+Public registry entries listed here: 278
 
 Look a function up by intent rather than by name:
 
@@ -336,9 +336,12 @@ Measured data, carried as a level of theory like any other.
    :nosignatures:
 
    exp.attach
+   exp.fit_pattern
    exp.formation_hull
    exp.match_xrd
    exp.measure
+   exp.qpa
+   exp.qpa_amorphous
 ```
 
 
@@ -741,9 +744,12 @@ arguments — `obs['energy_{level}']` becomes `obs['energy_emt']` when you pass
 | `mv.dft.write_inputs` | `obs['dft_directory']`, `written to disk`, `uns['dft']` |
 | `mv.multi.aggregate` | `md.obs['{key_added}']` |
 | `mv.exp.attach` | `obsm['{quantity}_{level}']`, `uns['levels']['{level}']` |
+| `mv.exp.fit_pattern` | `uns['{key_added}']` |
 | `mv.exp.formation_hull` | `obs['e_above_hull_{level}']`, `obs['is_stable_{level}']`, `obs['formation_energy_{level}']` |
 | `mv.exp.match_xrd` | `obs['xrd_match']`, `obs['xrd_match_rank']`, `uns['xrd_match']` |
 | `mv.exp.measure` | `obs['{quantity}_{level}']`, `uns['levels']['{level}']` |
+| `mv.exp.qpa` | `uns['{key_added}']` |
+| `mv.exp.qpa_amorphous` | `uns['{key_added}']` |
 | `mv.screen.filter` | `obs['{name}']`, `uns['screens']` |
 | `mv.screen.pareto` | `obs['{name}']`, `obs['{name}_rank']`, `uns['pareto']` |
 | `mv.screen.rank` | `obs['{name}']` |

@@ -148,6 +148,14 @@ because the composition matrix never cared whether a formula unit repeats.
 Raw load–displacement records to modulus, hardness, creep, toughness and
 adhesion — every instrument artifact corrected as an explicit step.
 :::
+
+:::{grid-item-card} Phase quantification {octicon}`graph;1em;`
+:link: phase_quantification
+:link-type: doc
+
+Weight fractions from powder diffraction — internal standards, standard
+addition, bulk chemistry, and the amorphous fraction none of them sees alone.
+:::
 ::::
 
 ## Plumbing
@@ -227,6 +235,7 @@ disorder
 stacking_disorder
 molecules
 indentation
+phase_quantification
 from_pymatgen
 data_io
 infrastructure
