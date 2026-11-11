@@ -1,7 +1,7 @@
 # Tutorials
 
-Each tutorial is a working pipeline rather than a feature tour, and seventeen of
-the eighteen are **executed notebooks** — every number and figure on those pages is the
+Each tutorial is a working pipeline rather than a feature tour, and twenty of
+the twenty-one are **executed notebooks** — every number and figure on those pages is the
 real output of the code above it, produced when the documentation was built.
 They run on a small library and a calculator that ships with matverse, so you
 can execute them before deciding whether to install a machine-learned potential.
@@ -149,6 +149,14 @@ Raw load–displacement records to modulus, hardness, creep, toughness and
 adhesion — every instrument artifact corrected as an explicit step.
 :::
 
+:::{grid-item-card} Brittle fracture {octicon}`zap;1em;`
+:link: fracture
+:link-type: doc
+
+Relaxed-ion elastic constants, the cleavage termination a crack selects, the
+Griffith load, audited derivatives, and bracketing a lattice-trapping fold.
+:::
+
 :::{grid-item-card} Phase quantification {octicon}`graph;1em;`
 :link: phase_quantification
 :link-type: doc
@@ -235,6 +243,7 @@ disorder
 stacking_disorder
 molecules
 indentation
+fracture
 phase_quantification
 from_pymatgen
 data_io

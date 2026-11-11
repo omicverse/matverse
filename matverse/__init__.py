@@ -24,6 +24,8 @@ Namespaces
                and which elements distinguish one group of materials from another
 ``mv.calc``    energies and relaxation, tagged by level of theory
 ``mv.prop``    derived properties — elastic moduli, phonons, and curves
+``mv.mech``    atomistic mechanics of one structure — relaxed-ion stiffness,
+               cleavage energies, derivative checks, load continuation
 ``mv.thermo``  stability: convex hull, reactions, chemical potentials
 ``mv.dft``     first-principles inputs out, results back in
 ``mv.multi``   the sites axis — one row per atom
@@ -62,7 +64,8 @@ creates::
 from __future__ import annotations
 
 from . import (calc, data, datasets, dft, disorder, elec,  # noqa: F401
-               elements, env, exp, feat, gen, iface, indent, mag, md, mol, model, multi,
+               elements, env, exp, feat, gen, iface, indent, mag, md, mech,
+               mol, model, multi,
                neb, opt, pl, pp, prop, screen, struct, surf, thermo, tl,
                transform, utils)
 from ._core import (check_commercial_use, compare_levels, grid_of,  # noqa: F401
