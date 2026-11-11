@@ -441,10 +441,10 @@ __all__ = ["MODULES", "available", "apply", "expand", "chain",
           "comparison across the two silently fails. This converts between "
           "them.\\n\\n"
           "The convention is the International Tables one: the string names "
-          "the **new basis in terms of the old**, and the lattice transforms "
-          "as L' = L P. 'b,a,-c' therefore permutes which Cartesian direction "
-          "each axis points along while leaving the three lengths as a set "
-          "unchanged — the cell is relabelled, not reshaped. "
+          "the **new basis in terms of the old**, (a', b', c') = (a, b, c) P, "
+          "so with the lattice vectors as rows L' = P^T L. 'a+b' is literally "
+          "the vector sum of the old a and b, and 'b,a,-c' swaps the first two "
+          "axes (lengths included) — the cell is relabelled, not reshaped. "
           "obs['{key_added}_volume_ratio'] is the volume change, so a "
           "transformation that was meant to relabel and instead resized is "
           "visible rather than assumed.",
@@ -452,7 +452,7 @@ __all__ = ["MODULES", "available", "apply", "expand", "chain",
 def setting(md: AnnData, transformation: str, source: str = "input",
             key_added: str = "resettled") -> None:
     """Apply a cell setting transformation. Deposits; returns ``None``."""
-    from pymatgen.core import Structure
+    from pymatgen.core import Lattice, Structure
     from pymatgen.symmetry.settings import JonesFaithfulTransformation
 
     from ._core import deposit_structures
@@ -474,7 +474,14 @@ def setting(md: AnnData, transformation: str, source: str = "input",
     for i, (row, structure) in enumerate(
             zip(md.obs_names, structures(md, source))):
         try:
-            lattice = jft.transform_lattice(structure.lattice)
+            # (a', b', c') = (a, b, c) P with basis vectors as columns, and
+            # Lattice.matrix stores them as rows, so L' = P^T L. Computed here
+            # rather than by jft.transform_lattice: pymatgen before
+            # pymatgen-core 2026.10.31 returned L P, which is the transpose of
+            # the right answer for any non-symmetric P and, with the
+            # coordinates transformed correctly, moved the atoms. Doing it
+            # here gives the same cell whichever pymatgen is installed.
+            lattice = Lattice(np.transpose(jft.P) @ structure.lattice.matrix)
             coords = jft.transform_coords(
                 [site.frac_coords for site in structure])
             moved = Structure(lattice, [site.species for site in structure],
@@ -492,8 +499,8 @@ def setting(md: AnnData, transformation: str, source: str = "input",
         "key_added": key_added, "n_failed": len(failures),
         "failures": failures[:10],
         "convention": "International Tables: the string names the new basis "
-                      "in terms of the old, and the lattice transforms as "
-                      "L' = L P",
+                      "in terms of the old, (a', b', c') = (a, b, c) P; with "
+                      "lattice vectors as rows, L' = P^T L",
     }
     record(md, "transform.setting", transformation=str(transformation),
            source=source, key_added=key_added)

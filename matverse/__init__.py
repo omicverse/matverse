@@ -30,6 +30,8 @@ Namespaces
 ``mv.dft``     first-principles inputs out, results back in
 ``mv.multi``   the sites axis — one row per atom
 ``mv.exp``     measured data, on the same footing as computed data
+``mv.indent``  instrumented nanoindentation: load-displacement curves to E, H,
+               toughness, creep law, pop-in and adhesion, artifacts corrected
 ``mv.gen``     scoring generated candidates
 ``mv.model``   property prediction with splits that do not leak
 ``mv.opt``     design campaigns
@@ -62,8 +64,8 @@ creates::
 from __future__ import annotations
 
 from . import (calc, data, datasets, dft, disorder, elec,  # noqa: F401
-               elements, env, exp, feat, gen, iface, mag, md, mech, mol, model,
-               multi,
+               elements, env, exp, feat, gen, iface, indent, mag, md, mech,
+               mol, model, multi,
                neb, opt, pl, pp, prop, screen, struct, surf, thermo, tl,
                transform, utils)
 from ._core import (check_commercial_use, compare_levels, grid_of,  # noqa: F401

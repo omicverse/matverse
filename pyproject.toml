@@ -37,6 +37,7 @@ analysis = ["scikit-learn", "igraph", "leidenalg"]   # mv.tl clustering routes
 descriptors = ["dscribe"]                            # mv.feat.soap
 multi = ["mudata"]                                   # mv.multi.to_mudata only
 plot = ["matplotlib"]                                # mv.pl
+qpa = ["xraydb"]                                     # mv.exp.qpa / fit_pattern mass attenuation
 ml = ["scikit-learn"]                                # mv.model estimators
 matminer = ["matminer"]
 cost = ["bibtexparser"]                               # mv.prop.cost price table
@@ -74,6 +75,8 @@ alloys = ["pymatgen-analysis-alloys", "smol"]
 # through cairo, and without it the bindings fail to import with a
 # ValueError from the format table rather than a missing-library error.
 molecules = ["openbabel-wheel"]
+# mv.mol.restraint_bounds / embed_restrained / vendor_restraint_engine.
+conformers = ["rdkit"]
 # mv.prop.phonon(method='phonopy') and mv.prop.dispersion. seekpath is
 # separate from phonopy and is what supplies the high-symmetry path, so a
 # phonopy without it computes a density of states but no dispersion.
@@ -101,6 +104,10 @@ Issues = "https://github.com/omicverse/matverse/issues"
 
 [tool.setuptools.packages.find]
 include = ["matverse*"]
+
+[tool.setuptools.package-data]
+# bundled reference tables (X-ray form factors, neutron lengths) read at run time
+matverse = ["_data/*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

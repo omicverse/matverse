@@ -42,8 +42,11 @@ jobs:
           # pymatgen coverage meter measures a smaller pymatgen than the one
           # matverse is claiming to cover — it read 100 modules against a floor
           # of 111 purely because half the add-ons were absent.
+          #
+          # conformers is RDKit, for mv.mol's restrained embedding; without it
+          # tests/test_restrained_embedding.py skips as a whole.
           sudo apt-get update -qq && sudo apt-get install -y -qq libxrender1
-          pip install -e ".[dev,analysis,plot,multi,diffusion,defects,alloys,molecules,phonons,screening,generation]"
+          pip install -e ".[dev,analysis,plot,multi,diffusion,defects,alloys,molecules,conformers,qpa,phonons,screening,generation]"
 
       - name: Show the environment the results belong to
         run: |
@@ -155,7 +158,7 @@ jobs:
           # docs build that silently skipped those cells would document a
           # matverse nobody runs.
           sudo apt-get update -qq && sudo apt-get install -y -qq libxrender1
-          pip install -e ".[diffusion,defects,alloys,molecules,phonons,screening,generation]"
+          pip install -e ".[diffusion,defects,alloys,molecules,conformers,qpa,phonons,screening,generation]"
           pip install -r matverse_guide/requirements.txt
 
       - name: Execute the tutorial notebooks

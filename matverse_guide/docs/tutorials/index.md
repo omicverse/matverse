@@ -1,7 +1,7 @@
 # Tutorials
 
-Each tutorial is a working pipeline rather than a feature tour, and sixteen of
-the seventeen are **executed notebooks** — every number and figure on those pages is the
+Each tutorial is a working pipeline rather than a feature tour, and seventeen of
+the eighteen are **executed notebooks** — every number and figure on those pages is the
 real output of the code above it, produced when the documentation was built.
 They run on a small library and a calculator that ships with matverse, so you
 can execute them before deciding whether to install a machine-learned potential.
@@ -125,12 +125,36 @@ Fractional occupancy, ordered approximants, and the entropy term that lets a
 high-entropy alloy sit above the hull and form anyway.
 :::
 
+:::{grid-item-card} Stacking disorder {octicon}`stack;1em;`
+:link: stacking_disorder
+:link-type: doc
+
+Faulted close-packed stackings from powder patterns — h/c Markov chains of any
+reichweite, exact rod model for measured data, and a solver you can ship.
+:::
+
 :::{grid-item-card} Molecules {octicon}`beaker;1em;`
 :link: molecules
 :link-type: doc
 
 Point groups, covalent bonds and fragments — on the same axes as crystals,
 because the composition matrix never cared whether a formula unit repeats.
+:::
+
+:::{grid-item-card} Nanoindentation {octicon}`arrow-down;1em;`
+:link: indentation
+:link-type: doc
+
+Raw load–displacement records to modulus, hardness, creep, toughness and
+adhesion — every instrument artifact corrected as an explicit step.
+:::
+
+:::{grid-item-card} Phase quantification {octicon}`graph;1em;`
+:link: phase_quantification
+:link-type: doc
+
+Weight fractions from powder diffraction — internal standards, standard
+addition, bulk chemistry, and the amorphous fraction none of them sees alone.
 :::
 ::::
 
@@ -208,7 +232,10 @@ magnetic_ordering
 structure_and_bands
 interfaces
 disorder
+stacking_disorder
 molecules
+indentation
+phase_quantification
 from_pymatgen
 data_io
 infrastructure
